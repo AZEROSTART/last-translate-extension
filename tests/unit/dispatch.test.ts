@@ -1,5 +1,5 @@
 import { it, expect, vi } from "vitest";
-import { handleTranslate, handleChat, createDeps } from "../../src/background/dispatch";
+import { handleTranslate, handleChat, createDeps, createSingleSegmentPrefixStripper } from "../../src/background/dispatch";
 import type { Deps } from "../../src/background/dispatch";
 import type { CompletionRequest, CompletionResult, ProviderAdapter } from "../../src/providers";
 import { ProviderError } from "../../src/shared/errors";
@@ -54,14 +54,53 @@ it("returns cached results without calling the provider", async () => {
   expect(sent).toContainEqual({ type: "result", requestId: "r1", items: [{ id: "p_1", text: "缓存的译文" }] });
 });
 
-it("streams a single-segment group and emits delta, result, finish", async () => {
+it("streams a single-segment group and emits stripped delta, result, finish", async () => {
   const { d, sent, send } = deps();
   await handleTranslate(d, { type: "translate", requestId: "r2", tabId: 1, items: items(1) }, send);
   expect(sent).toEqual([
-    { type: "delta", requestId: "r2", id: "p_1", text: "[1] 你好" },
-    { type: "result", requestId: "r2", items: [{ id: "p_1", text: "[1] 你好" }] },
+    { type: "delta", requestId: "r2", id: "p_1", text: "你好" },
+    { type: "result", requestId: "r2", items: [{ id: "p_1", text: "你好" }] },
     { type: "finish", requestId: "r2" },
   ]);
+});
+
+it("strips the [1] prefix from a single chunk", () => {
+  const s = createSingleSegmentPrefixStripper();
+  expect(s.push("[1] 你好")).toBe("你好");
+  expect(s.finish()).toBe("");
+});
+
+it("strips a [1] prefix split across chunks", () => {
+  const s = createSingleSegmentPrefixStripper();
+  expect(s.push("[")).toBe("");
+  expect(s.push("1] ")).toBe("");
+  expect(s.push("你好")).toBe("你好");
+  expect(s.finish()).toBe("");
+});
+
+it("leaves text that does not start with [1] untouched", () => {
+  const s = createSingleSegmentPrefixStripper();
+  expect(s.push("你好")).toBe("你好");
+  expect(s.finish()).toBe("");
+});
+
+it("flushes a diverging partial prefix instead of swallowing text", () => {
+  const s = createSingleSegmentPrefixStripper();
+  expect(s.push("[2] 你好")).toBe("[2] 你好");
+  expect(s.finish()).toBe("");
+});
+
+it("strips a prefix split across stream chunks in delta and result", async () => {
+  const streamCompletion = vi.fn(async function* () {
+    yield "[";
+    yield "1] ";
+    yield "你";
+    yield "好";
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+  await handleTranslate(d, { type: "translate", requestId: "rs", tabId: 1, items: items(1) }, send);
+  expect(sent.map((m) => m.type)).toEqual(["delta", "delta", "result", "finish"]);
+  expect(sent.find((m) => m.type === "result").items).toEqual([{ id: "p_1", text: "你好" }]);
 });
 
 it("emits error with the affected ids when the model returns a bad shape", async () => {

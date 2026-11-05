@@ -33,7 +33,9 @@ chrome.runtime.onConnect.addListener((port) => {
         // fallback, so the queue task and the abort mapping share one id.
         const tabId = port.sender?.tab?.id ?? raw.tabId;
         tabByRequest.set(raw.requestId, tabId);
-        void handleTranslate(deps, { ...raw, tabId }, (m: BackgroundToClient) => port.postMessage(m));
+        void handleTranslate(deps, { ...raw, tabId }, (m: BackgroundToClient) => port.postMessage(m)).catch(
+          logUnexpected,
+        );
       } else if (raw.type === "abort") {
         const tabId = tabByRequest.get(raw.requestId);
         if (tabId !== undefined) deps.queue.cancelTab(tabId);
@@ -50,7 +52,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (raw.type === "chat") {
         const tabId = port.sender?.tab?.id ?? 0;
         tabByRequest.set(raw.requestId, tabId);
-        void handleChat(deps, raw, (m: ChatBackgroundToClient) => port.postMessage(m), tabId);
+        void handleChat(deps, raw, (m: ChatBackgroundToClient) => port.postMessage(m), tabId).catch(logUnexpected);
       } else if (raw.type === "abort") {
         const tabId = tabByRequest.get(raw.requestId);
         if (tabId !== undefined) deps.queue.cancelTab(tabId);
@@ -73,3 +75,12 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   deps.queue.cancelTab(tabId);
 });
+
+/**
+ * Contain an unexpected top-level dispatch failure so it cannot surface as an
+ * unhandled service-worker rejection. Log the message only — never headers or
+ * keys, which the dispatch layer already redacts.
+ */
+function logUnexpected(err: unknown): void {
+  console.error("ilmt dispatch failed:", err instanceof Error ? err.message : String(err));
+}

@@ -67,6 +67,70 @@ export function createDeps(overrides: Partial<Deps> = {}): Deps {
   };
 }
 
+/** The numbering prefix a model emits for a one-item group (spec §8.5). */
+const SEGMENT_PREFIX = "[1]";
+
+export interface SingleSegmentPrefixStripper {
+  /** Feed one raw chunk; returns the stripped text to emit (possibly ""). */
+  push(chunk: string): string;
+  /** Flush any held characters once the stream has ended. */
+  finish(): string;
+}
+
+/**
+ * Strip the `[1] ` numbering prefix a model emits for a one-item group, so the
+ * user never sees the prompt's index. Stateful: the prefix may arrive split
+ * across stream chunks. Anything that does not match `^\[1\]\s*` passes through
+ * untouched, and a partial prefix that diverges is flushed immediately rather
+ * than swallowed.
+ */
+export function createSingleSegmentPrefixStripper(): SingleSegmentPrefixStripper {
+  let matched = 0; // characters of SEGMENT_PREFIX confirmed so far
+  let skippingWhitespace = false; // full prefix matched; eating trailing whitespace
+  let pending = ""; // held characters that may still be the prefix
+  let done = false; // prefix resolved; pass everything through
+
+  function push(chunk: string): string {
+    let out = "";
+    for (let i = 0; i < chunk.length; i++) {
+      const char = chunk[i];
+      if (done) {
+        out += chunk.slice(i);
+        break;
+      }
+      if (skippingWhitespace) {
+        if (/\s/.test(char)) continue;
+        skippingWhitespace = false;
+        done = true;
+        out += char;
+        continue;
+      }
+      if (char === SEGMENT_PREFIX[matched]) {
+        matched += 1;
+        pending += char;
+        if (matched === SEGMENT_PREFIX.length) {
+          pending = "";
+          skippingWhitespace = true;
+        }
+        continue;
+      }
+      // Diverged before the full prefix matched: flush what we held plus this.
+      out += pending + char;
+      pending = "";
+      done = true;
+    }
+    return out;
+  }
+
+  function finish(): string {
+    const rest = pending;
+    pending = "";
+    return rest;
+  }
+
+  return { push, finish };
+}
+
 /**
  * Route one translate request: look up the cache, group the misses, run each
  * group through the shared queue (with the global retry policy), and report
@@ -232,11 +296,16 @@ async function runGroup(
     if (attempt > 0) await deps.sleep(RETRY_BACKOFF_MS[attempt - 1]);
     try {
       if (single !== undefined) {
+        const strip = createSingleSegmentPrefixStripper();
         let joined = "";
         for await (const chunk of deps.adapter.streamCompletion(provider, { messages, temperature, signal })) {
-          joined += chunk;
-          send({ type: "delta", requestId, id: single, text: chunk });
+          const text = strip.push(chunk);
+          if (text !== "") {
+            joined += text;
+            send({ type: "delta", requestId, id: single, text });
+          }
         }
+        joined += strip.finish();
         if (joined.trim() === "") {
           throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
         }
