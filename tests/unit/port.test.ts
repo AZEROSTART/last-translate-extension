@@ -19,7 +19,10 @@ function capturePort() {
     postMessage: vi.fn(),
     onMessage: { addListener: vi.fn((cb) => messageListeners.push(cb)) },
     onDisconnect: { addListener: vi.fn((cb) => disconnectListeners.push(cb)) },
-    disconnect: vi.fn(),
+    // Mimic Chrome: disconnect() fires the registered onDisconnect listeners.
+    disconnect: vi.fn(() => {
+      for (const cb of disconnectListeners) cb();
+    }),
   };
   return { port, messageListeners, disconnectListeners };
 }
@@ -118,5 +121,78 @@ describe("createTranslatePort", () => {
     expect(cb.onResult).toHaveBeenCalledTimes(1);
     expect(cb.onError).toHaveBeenCalledTimes(1);
     expect(cb.onFinish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createTranslatePort disconnect signaling", () => {
+  it("fires onDisconnect exactly once per server disconnect and enters reconnecting", () => {
+    const { port, disconnectListeners } = capturePort();
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect: () => port, onDisconnect, ...callbacks() });
+    p.send({ type: "ping" });
+    expect(p.state).toBe("healthy");
+
+    disconnectListeners[0]();
+
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("reconnecting");
+  });
+
+  it("reconnects via backoff after a server disconnect without re-firing onDisconnect", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValue(second.port);
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect, onDisconnect, ...callbacks() });
+    p.send({ type: "ping" });
+
+    first.disconnectListeners[0]();
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("reconnecting");
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(second.disconnectListeners).toHaveLength(1);
+    expect(p.state).toBe("healthy");
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onDisconnect for a caller-initiated close()", () => {
+    const { port } = capturePort();
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect: () => port, onDisconnect, ...callbacks() });
+    p.send({ type: "ping" });
+
+    p.close();
+
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+    expect(onDisconnect).not.toHaveBeenCalled();
+  });
+
+  it("fires onError once and degrades when retries are exhausted after a disconnect", async () => {
+    const first = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockImplementation(() => {
+        throw new Error("Extension context invalidated");
+      });
+    const cb = { ...callbacks(), onDisconnect: vi.fn() };
+    const p = createTranslatePort({ connect, ...cb });
+    p.send({ type: "ping" });
+
+    first.disconnectListeners[0]();
+    expect(p.state).toBe("reconnecting");
+    expect(cb.onDisconnect).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000 + 4000 + 5000);
+
+    expect(p.state).toBe("degraded");
+    expect(cb.onError).toHaveBeenCalledTimes(1);
+    expect(cb.onError).toHaveBeenCalledWith(expect.objectContaining({ type: "connection-error" }));
+    // The disconnect is signaled once, not once per backoff step.
+    expect(cb.onDisconnect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(6);
   });
 });

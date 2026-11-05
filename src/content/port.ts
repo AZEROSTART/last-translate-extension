@@ -3,8 +3,10 @@
  *
  * Owns the `ilmt-translate` connection lifecycle and the reconnect policy from
  * spec §8.11. It is deliberately free of DOM and registry coupling: it exposes
- * the connection state and fires `onError` on a transport failure so the caller
- * (which owns the paragraph registry) can requeue inflight paragraphs.
+ * the connection state, fires `onDisconnect` once per server-initiated
+ * disconnect (so the caller, which owns the paragraph registry, can requeue
+ * inflight paragraphs per spec §8.4), and fires `onError` on the terminal
+ * `degraded` state.
  *
  * Reconnect policy: a `send` that fails (port missing / "Extension context
  * invalidated") moves the client into `reconnecting`, retries `connect` on the
@@ -47,6 +49,12 @@ export interface TranslatePortCallbacks {
 export interface CreateTranslatePortOptions extends TranslatePortCallbacks {
   /** Test seam: overrides `chrome.runtime.connect`. */
   connect?: (name: string) => TranslatePort;
+  /**
+   * Fired synchronously exactly once per server-initiated disconnect, before
+   * the reconnect backoff starts. The caller should requeue inflight
+   * paragraphs here (spec §8.4). Not fired for a caller-initiated `close()`.
+   */
+  onDisconnect?: () => void;
 }
 
 export interface TranslatePortClient {
@@ -172,10 +180,13 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
   }
 
   function handleDisconnect(): void {
+    // `closed` is set before `port.disconnect()` in close(), so a
+    // caller-initiated close never reaches onDisconnect.
     if (closed) return;
     port = null;
     if (state === "degraded") return;
     state = "reconnecting";
+    options.onDisconnect?.();
     scheduleReconnect();
   }
 
