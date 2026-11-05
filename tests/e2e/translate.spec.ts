@@ -3,8 +3,8 @@
  * English article, the command/activate path, and the zero-request language
  * skip on an already-Chinese page.
  *
- * Each test owns its Chromium profile, fixture/mock server and page, and
- * `afterEach` closes both so a failure cannot leak a browser.
+ * Each test owns its Chromium profile, fixture/mock server and page. Every test
+ * cleans both up in a `finally`, so a failed assertion cannot leak a browser.
  */
 
 import {
@@ -171,67 +171,95 @@ test.describe("loaded extension", () => {
   let server: MockServer | undefined;
   let extension: Extension | undefined;
 
-  test.afterEach(async () => {
-    await extension?.context.close();
-    await server?.close();
-    if (extension) await rm(extension.userDataDir, { recursive: true, force: true });
+  async function cleanup(): Promise<void> {
+    const currentExtension = extension;
+    const currentServer = server;
     extension = undefined;
     server = undefined;
-  });
+
+    if (currentExtension) {
+      await currentExtension.context.close().catch(() => {});
+      await rm(currentExtension.userDataDir, { recursive: true, force: true }).catch(() => {});
+    }
+    await currentServer?.close().catch(() => {});
+  }
+
+  /**
+   * Watch for a provider request for a bounded settle window instead of
+   * sampling once. A delayed request anywhere in the window fails.
+   */
+  async function expectNoProviderRequests(page: Page, mockServer: MockServer): Promise<void> {
+    const deadline = Date.now() + 500;
+    do {
+      expect(mockServer.requests).toHaveLength(0);
+      await page.waitForTimeout(50);
+    } while (Date.now() < deadline);
+    expect(mockServer.requests).toHaveLength(0);
+  }
 
   test("translates an English article and restores it", async () => {
-    server = await startMockServer();
-    extension = await launchExtension();
-    await seedSettings(extension.worker, server.origin);
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
 
-    const page = await extension.context.newPage();
-    await page.goto(`${server.origin}/${ARTICLES.english}`);
-    await activate(extension.worker, await activeTabId(extension.worker, page.url()));
-    const content = await findContentMainContext(page);
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
 
-    await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
-    await expect(page.locator(".ilmt-tr")).toHaveCount(10);
-    await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
-    expect(server.requests.some((request) => request.method === "POST")).toBe(true);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
+      expect(server.requests.some((request) => request.method === "POST")).toBe(true);
 
-    await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
-    await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
   });
 
   test("translates when the command/activate message is delivered again", async () => {
-    server = await startMockServer();
-    extension = await launchExtension();
-    await seedSettings(extension.worker, server.origin);
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
 
-    const page = await extension.context.newPage();
-    await page.goto(`${server.origin}/${ARTICLES.english}`);
-    const tabId = await activeTabId(extension.worker, page.url());
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      const tabId = await activeTabId(extension.worker, page.url());
 
-    // First activate is consumed by the guard and loads content_main.
-    await activate(extension.worker, tabId);
-    await findContentMainContext(page);
+      // First activate is consumed by the guard and loads content_main.
+      await activate(extension.worker, tabId);
+      await findContentMainContext(page);
 
-    // The shortcut's next press reaches the main listener. Do not call the
-    // exposed test hook: this must translate from the message alone.
-    await activate(extension.worker, tabId);
-    await expect(page.locator(".ilmt-tr")).toHaveCount(10);
-    await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
+      // The shortcut's next press reaches the main listener. Do not call the
+      // exposed test hook: this must translate from the message alone.
+      await activate(extension.worker, tabId);
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
+    } finally {
+      await cleanup();
+    }
   });
 
   test("sends no provider requests on an already-Chinese page", async () => {
-    server = await startMockServer();
-    extension = await launchExtension();
-    await seedSettings(extension.worker, server.origin);
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
 
-    const page = await extension.context.newPage();
-    await page.goto(`${server.origin}/${ARTICLES.chinese}`);
-    await activate(extension.worker, await activeTabId(extension.worker, page.url()));
-    const content = await findContentMainContext(page);
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.chinese}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
 
-    await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
-    await page.waitForTimeout(500);
-
-    expect(server.requests).toHaveLength(0);
-    await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expectNoProviderRequests(page, server);
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
   });
 });

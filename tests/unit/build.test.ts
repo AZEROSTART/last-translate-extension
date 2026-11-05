@@ -36,6 +36,12 @@ describe("build output", () => {
     }
   });
 
+  it("ships the injected stylesheet with translation and bubble classes", () => {
+    const css = readFileSync("dist/inject.css", "utf8");
+    expect(css).toContain(".ilmt-tr");
+    expect(css).toContain(".ilmt-bubble");
+  });
+
   it("does not inject a data-ilmt stylesheet from content_main.js", () => {
     const code = readFileSync("dist/content_main.js", "utf8");
     expect(code).not.toContain('"data-ilmt"');

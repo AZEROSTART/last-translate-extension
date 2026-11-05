@@ -11,6 +11,7 @@ import type {
   ChatBackgroundToClient,
   ChatClientToBackground,
   ClientToBackground,
+  ContentRuntimeMessage,
   OpenChatMessage,
 } from "../shared/types";
 
@@ -51,20 +52,57 @@ async function activeTabId(): Promise<number | undefined> {
 }
 
 /**
- * Deliver a runtime message to the active tab's content script. There may be no
- * receiver (chrome:// pages, the guard failed to load), which Chrome reports as
- * a rejected promise; that is expected and must stay silent.
+ * Deliver a runtime message to a tab's content script. There may be no receiver
+ * (chrome:// pages, the guard failed to load), which Chrome reports as a
+ * rejected promise; that is expected and must stay silent.
  */
-function sendToActiveTab(message: { type: "activate" | "ask-selection" }): void {
+function sendToTab(tabId: number, message: ContentRuntimeMessage): void {
+  try {
+    void chrome.tabs.sendMessage(tabId, message).catch(() => {
+      // No content script in this tab.
+    });
+  } catch {
+    // Synchronous sendMessage failure; same expected no-receiver case.
+  }
+}
+
+/**
+ * Prefer the tab Chrome hands to the command listener: it needs no async
+ * lookup, so the command reacts immediately. The query fallback only covers
+ * hosts/versions that omit the second argument.
+ */
+function sendToCommandTab(tab: chrome.tabs.Tab | undefined, message: ContentRuntimeMessage): void {
+  if (tab?.id !== undefined) {
+    sendToTab(tab.id, message);
+    return;
+  }
   void activeTabId().then((tabId) => {
-    if (tabId === undefined) return;
-    try {
-      void chrome.tabs.sendMessage(tabId, message).catch(() => {
-        // No content script in this tab.
-      });
-    } catch {
-      // Synchronous sendMessage failure; same expected no-receiver case.
-    }
+    if (tabId !== undefined) sendToTab(tabId, message);
+  });
+}
+
+/**
+ * Open the side panel for a tab. This must run synchronously inside the
+ * command listener: `sidePanel.open` requires the command's user gesture, and
+ * an `await`/promise hop loses it.
+ */
+function openSidePanelForTab(tabId: number): void {
+  try {
+    void chrome.sidePanel.open({ tabId }).catch(() => {
+      // The gesture expired or the panel is unavailable.
+    });
+  } catch {
+    // Synchronous failure outside a user gesture.
+  }
+}
+
+function openSidePanelForCommandTab(tab: chrome.tabs.Tab | undefined): void {
+  if (tab?.id !== undefined) {
+    openSidePanelForTab(tab.id);
+    return;
+  }
+  void activeTabId().then((tabId) => {
+    if (tabId !== undefined) openSidePanelForTab(tabId);
   });
 }
 
@@ -74,22 +112,13 @@ function sendToActiveTab(message: { type: "activate" | "ask-selection" }): void 
  * `toggle-side-panel` opens the panel (the command event carries a user
  * gesture, which `sidePanel.open` requires).
  */
-chrome.commands.onCommand.addListener((command) => {
+chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "translate-page") {
-    sendToActiveTab({ type: "activate" });
+    sendToCommandTab(tab, { type: "activate" });
   } else if (command === "ask-selection") {
-    sendToActiveTab({ type: "ask-selection" });
+    sendToCommandTab(tab, { type: "ask-selection" });
   } else if (command === "toggle-side-panel") {
-    void activeTabId().then((tabId) => {
-      if (tabId === undefined) return;
-      try {
-        void chrome.sidePanel.open({ tabId }).catch(() => {
-          // The gesture expired or the panel is unavailable.
-        });
-      } catch {
-        // Synchronous failure outside a user gesture.
-      }
-    });
+    openSidePanelForCommandTab(tab);
   }
 });
 

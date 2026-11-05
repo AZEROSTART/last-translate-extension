@@ -147,28 +147,50 @@ it("opens the side panel on toolbar action click at startup", async () => {
   expect(setPanelBehavior).toHaveBeenCalledWith({ openPanelOnActionClick: true });
 });
 
-it("sends activate to the active tab on the translate-page command", async () => {
+it("sends activate to the command's tab without an async active-tab lookup", async () => {
   const { onCommand, tabsQuery, tabsSendMessage } = installChrome();
   await importIndexAndSpyOnQueue();
 
-  onCommand[0]("translate-page", { id: 1, tab: { id: 1 } });
+  onCommand[0]("translate-page", { id: 7, tab: { id: 7 } });
+
+  // The command event supplies the tab; no promise may precede sendMessage.
+  expect(tabsQuery).not.toHaveBeenCalled();
+  expect(tabsSendMessage).toHaveBeenCalledWith(7, { type: "activate" });
+});
+
+it("sends ask-selection to the command's tab", async () => {
+  const { onCommand, tabsQuery, tabsSendMessage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onCommand[0]("ask-selection", { id: 7, tab: { id: 7 } });
+
+  expect(tabsQuery).not.toHaveBeenCalled();
+  expect(tabsSendMessage).toHaveBeenCalledWith(7, { type: "ask-selection" });
+});
+
+it("opens the side panel synchronously from the command's tab (gesture preserved)", async () => {
+  const { onCommand, tabsQuery, sidePanelOpen } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onCommand[0]("toggle-side-panel", { id: 7, tab: { id: 7 } });
+
+  // Assert before any timer tick: an await before open() would lose the gesture.
+  expect(tabsQuery).not.toHaveBeenCalled();
+  expect(sidePanelOpen).toHaveBeenCalledWith({ tabId: 7 });
+});
+
+it("falls back to tabs.query when the command event has no tab", async () => {
+  const { onCommand, tabsQuery, tabsSendMessage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onCommand[0]("translate-page");
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   expect(tabsQuery).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
   expect(tabsSendMessage).toHaveBeenCalledWith(42, { type: "activate" });
 });
 
-it("sends ask-selection to the active tab on the ask-selection command", async () => {
-  const { onCommand, tabsSendMessage } = installChrome();
-  await importIndexAndSpyOnQueue();
-
-  onCommand[0]("ask-selection");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  expect(tabsSendMessage).toHaveBeenCalledWith(42, { type: "ask-selection" });
-});
-
-it("opens the side panel for the active tab on the toggle-side-panel command", async () => {
+it("falls back to tabs.query for the side panel when the command has no tab", async () => {
   const { onCommand, sidePanelOpen } = installChrome();
   await importIndexAndSpyOnQueue();
 
@@ -178,11 +200,22 @@ it("opens the side panel for the active tab on the toggle-side-panel command", a
   expect(sidePanelOpen).toHaveBeenCalledWith({ tabId: 42 });
 });
 
+it("swallows a rejected active-tab query", async () => {
+  const { onCommand, tabsQuery, tabsSendMessage } = installChrome();
+  tabsQuery.mockRejectedValueOnce(new Error("no focused window"));
+  await importIndexAndSpyOnQueue();
+
+  expect(() => onCommand[0]("translate-page")).not.toThrow();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(tabsSendMessage).not.toHaveBeenCalled();
+});
+
 it("swallows sendMessage rejections when no content script is listening", async () => {
   const { onCommand, tabsSendMessage } = installChrome();
   tabsSendMessage.mockRejectedValueOnce(new Error("Could not establish connection"));
   await importIndexAndSpyOnQueue();
 
-  expect(() => onCommand[0]("translate-page")).not.toThrow();
+  expect(() => onCommand[0]("translate-page", { id: 7, tab: { id: 7 } })).not.toThrow();
   await new Promise((resolve) => setTimeout(resolve, 0));
 });

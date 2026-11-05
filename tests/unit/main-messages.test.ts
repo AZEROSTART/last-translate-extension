@@ -70,6 +70,19 @@ it("ignores an ask-selection request with a one-character selection", async () =
   expect((globalThis as any).chrome.runtime.sendMessage).not.toHaveBeenCalled();
 });
 
+it("exposes askSelection for the guard's post-load dispatch", async () => {
+  await startMain();
+  selectText("  Hello world  ");
+
+  (globalThis as any).__ilmtMain.askSelection();
+
+  expect((globalThis as any).chrome.runtime.sendMessage).toHaveBeenCalledWith({
+    type: "open-chat",
+    text: "Hello world",
+    mode: "explain",
+  });
+});
+
 it("ignores ask-selection from another extension", async () => {
   const listener = await startMain();
   selectText("Hello world");

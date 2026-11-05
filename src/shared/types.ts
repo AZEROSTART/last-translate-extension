@@ -111,6 +111,17 @@ export type BackgroundToClient =
   | { type: "pong" }
   | { type: "page-navigated" };
 
+/** Trusted runtime messages that ask the content script to start work. */
+export interface ActivateMessage {
+  type: "activate";
+}
+
+export interface AskSelectionMessage {
+  type: "ask-selection";
+}
+
+export type ContentRuntimeMessage = ActivateMessage | AskSelectionMessage;
+
 /** Messages sent from the side panel to the background chat port. */
 export type ChatClientToBackground =
   | { type: "chat"; requestId: string; sessionId: string; messages: ChatMessage[]; context: ChatContext }

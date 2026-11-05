@@ -38,6 +38,7 @@ interface IlmtMain {
   translatePage(): Promise<void>;
   restore(): void;
   isActive(): boolean;
+  askSelection(): void;
 }
 
 type TestPort = { send(message: ClientToBackground): void };
@@ -75,7 +76,7 @@ export function runContentMain(): void {
   chrome.runtime.onMessage.addListener(handleRuntimeMessage);
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
-  scope.__ilmtMain = { translatePage, restore, isActive };
+  scope.__ilmtMain = { translatePage, restore, isActive, askSelection };
 
   initSelectionBubble({
     onExplain: (text) => sendOpenChat(text, "explain"),
@@ -320,6 +321,15 @@ function handleRuntimeMessage(message: unknown, sender: chrome.runtime.MessageSe
   }
 
   // Alt+Q: explain the current selection in the side panel (spec §8.9).
+  askSelection();
+}
+
+/**
+ * Explain the current selection in the side panel. Exposed on `__ilmtMain` so
+ * the guard can dispatch an ask-selection that arrived before this bundle
+ * loaded.
+ */
+function askSelection(): void {
   const text = window.getSelection()?.toString().trim() ?? "";
   if (text.length >= 2) sendOpenChat(text, "explain");
 }

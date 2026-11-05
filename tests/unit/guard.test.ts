@@ -22,6 +22,8 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   delete (globalThis as { __ilmtGuard?: unknown }).__ilmtGuard;
+  delete (globalThis as { __ilmtPendingAskSelection?: unknown }).__ilmtPendingAskSelection;
+  delete (globalThis as { __ilmtMain?: unknown }).__ilmtMain;
   (globalThis as { __ilmtImport?: unknown }).__ilmtImport = loadMain;
 });
 
@@ -53,6 +55,53 @@ describe("content script guard", () => {
     await settle();
 
     expect(runContentMain).not.toHaveBeenCalled();
+    expect(loadMain).not.toHaveBeenCalled();
+  });
+
+  it("loads the main bundle and dispatches ask-selection before any activate", async () => {
+    const askSelection = vi.fn();
+    loadMain.mockImplementationOnce(async () => {
+      (globalThis as { __ilmtMain?: unknown }).__ilmtMain = { askSelection };
+      return { runContentMain };
+    });
+
+    await import("../../src/content/guard");
+    const listener = lastListener();
+
+    listener({ type: "ask-selection" }, { id: chrome.runtime.id, tab: { id: 1 } }, () => {});
+    await settle();
+
+    expect(loadMain).toHaveBeenCalledTimes(1);
+    expect(runContentMain).toHaveBeenCalledTimes(1);
+    expect(askSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-import when ask-selection arrives after the main bundle loaded", async () => {
+    const askSelection = vi.fn();
+    loadMain.mockImplementationOnce(async () => {
+      (globalThis as { __ilmtMain?: unknown }).__ilmtMain = { askSelection };
+      return { runContentMain };
+    });
+
+    await import("../../src/content/guard");
+    const listener = lastListener();
+
+    listener({ type: "ask-selection" }, { id: chrome.runtime.id, tab: { id: 1 } }, () => {});
+    await settle();
+    listener({ type: "ask-selection" }, { id: chrome.runtime.id, tab: { id: 1 } }, () => {});
+    await settle();
+
+    expect(loadMain).toHaveBeenCalledTimes(1);
+    expect(askSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores ask-selection from another extension", async () => {
+    await import("../../src/content/guard");
+    const listener = lastListener();
+
+    listener({ type: "ask-selection" }, { id: "other" }, () => {});
+    await settle();
+
     expect(loadMain).not.toHaveBeenCalled();
   });
 });
