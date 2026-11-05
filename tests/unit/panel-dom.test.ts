@@ -253,6 +253,76 @@ it("starts a fresh session pinned to the new page from the stale banner", async 
   expect(chat.context.recentParagraphs).toEqual([]);
 });
 
+it("does not switch sessions from the stale banner while a response is streaming", async () => {
+  const { chrome, sent, messageListeners, updatedListeners } = installChrome();
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  const oldSessionId = (globalThis as any).__ilmtPanel.session.id as string;
+  messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "部分" });
+
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 1, url: "https://a.test/y", title: "B", windowId: 1 },
+  ]);
+  updatedListeners[0](
+    1,
+    { url: "https://a.test/y" },
+    { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  (document.querySelector(".banner-action") as HTMLButtonElement).click();
+
+  // The in-flight stream keeps its session; the answer is not dropped.
+  expect((globalThis as any).__ilmtPanel.session.id).toBe(oldSessionId);
+  messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "继续" });
+  messageListeners[0]({ type: "finish", requestId: chat.requestId });
+
+  const assistant = document.querySelector(".msg--assistant .msg-body") as HTMLElement;
+  expect(assistant.textContent).toBe("部分继续");
+});
+
+it("does not re-attach a stale session after a tab round-trip", async () => {
+  const { chrome, sent, messageListeners, activatedListeners } = installChrome();
+  await boot();
+
+  // Persist the session pinned to https://a.test/x.
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "旧问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  const oldChat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  messageListeners[0]({ type: "delta", requestId: oldChat.requestId, text: "旧答案" });
+  messageListeners[0]({ type: "finish", requestId: oldChat.requestId });
+  const oldSessionId = (globalThis as any).__ilmtPanel.session.id as string;
+
+  // Same tab navigates to /y, then the user starts a fresh session there.
+  const tabY = { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 };
+  (chrome.tabs.query as any).mockResolvedValue([tabY]);
+  activatedListeners[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  (document.querySelector(".banner-action") as HTMLButtonElement).click();
+  expect((globalThis as any).__ilmtPanel.session.pageUrl).toBe("https://a.test/y");
+
+  // Switch to another tab and back: the panel must not re-attach /x's session.
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 2, url: "https://b.test/z", title: "C", active: true, windowId: 1 },
+  ]);
+  activatedListeners[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  (document.querySelector(".banner-action") as HTMLButtonElement).click();
+
+  (chrome.tabs.query as any).mockResolvedValue([tabY]);
+  activatedListeners[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  (document.querySelector(".banner-action") as HTMLButtonElement).click();
+
+  const session = (globalThis as any).__ilmtPanel.session as { id: string; pageUrl: string };
+  expect(session.id).not.toBe(oldSessionId);
+  expect(session.pageUrl).toBe("https://a.test/y");
+});
+
 it("shows the interrupted copy and persists the partial answer when the port disconnects", async () => {
   const { storage, sent, messageListeners, disconnectListeners } = installChrome();
   await boot();

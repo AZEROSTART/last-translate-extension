@@ -112,7 +112,7 @@ async function start(): Promise<void> {
   await consumePendingQuote();
   await refreshActiveTab();
   const tab = activeTab;
-  session = findSession(sessions, tab?.id) ?? (tab ? createSession(tab.url, tab.title, tab.id) : createSession("", "", 0));
+  session = findSession(sessions, tab?.id, tab?.url ?? "") ?? (tab ? createSession(tab.url, tab.title, tab.id) : createSession("", "", 0));
   renderAll();
   updateBanner();
   connectPort();
@@ -301,6 +301,7 @@ function wireTabs(): void {
 function isContextStale(): boolean {
   return (
     !!activeTab &&
+    !!activeTab.url &&
     !!session &&
     session.pageUrl !== "" &&
     activeTab.id === session.tabId &&
@@ -322,12 +323,14 @@ function updateBanner(): void {
 
 function handleNewSession(): void {
   const tab = activeTab;
-  if (!tab) return;
+  // Never swap sessions under an in-flight response: the new (empty) session
+  // would swallow the remaining deltas and lose the partial answer.
+  if (!tab || streaming) return;
   persistHistory();
   // In the stale state the tab still holds the old session id. Reusing it would
   // keep the panel pinned to a page the user has already left, so start a fresh
   // session against the page that is active now.
-  const existing = isContextStale() ? null : findSession(sessions, tab.id);
+  const existing = isContextStale() ? null : findSession(sessions, tab.id, tab.url);
   session = existing ?? createSession(tab.url, tab.title, tab.id);
   renderAll();
   updateBanner();
@@ -529,9 +532,9 @@ function upsertSession(s: Session): void {
 
 // --- small helpers ---
 
-function findSession(list: Session[], tabId: number | undefined): Session | null {
+function findSession(list: Session[], tabId: number | undefined, pageUrl: string): Session | null {
   if (tabId === undefined) return null;
-  return list.find((s) => s.tabId === tabId) ?? null;
+  return list.find((s) => s.tabId === tabId && s.pageUrl === pageUrl) ?? null;
 }
 
 function isSession(value: unknown): value is Session {
