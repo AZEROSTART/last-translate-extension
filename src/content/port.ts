@@ -118,6 +118,14 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     next.onMessage.addListener(route);
     next.onDisconnect.addListener(handleDisconnect);
     state = "healthy";
+    // A successful connection (notably one established by send() while a
+    // backoff timer is armed) supersedes any pending reconnect: cancel it so
+    // the timer cannot later open a second, orphaned connection.
+    backoffIndex = 0;
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     return true;
   }
 

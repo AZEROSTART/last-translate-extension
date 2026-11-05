@@ -196,3 +196,63 @@ describe("createTranslatePort disconnect signaling", () => {
     expect(connect).toHaveBeenCalledTimes(6);
   });
 });
+
+describe("createTranslatePort send during reconnecting", () => {
+  it("cancels the armed reconnect timer so a successful send leaves one connection", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValue(second.port);
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect, onDisconnect, ...callbacks() });
+    p.send({ type: "ping" });
+
+    first.disconnectListeners[0]();
+    expect(p.state).toBe("reconnecting");
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+
+    // A new paragraph arrives during the backoff window; the connection succeeds.
+    p.send({ type: "ping" });
+    expect(p.state).toBe("healthy");
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(second.port.postMessage).toHaveBeenCalledTimes(1);
+
+    // The armed timer must not run reconnect() and open an orphaned connection.
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(second.port.postMessage).toHaveBeenCalledTimes(1);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("still signals and recovers from a genuine disconnect after a send-recovery", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const third = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValueOnce(second.port)
+      .mockReturnValue(third.port);
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect, onDisconnect, ...callbacks() });
+    p.send({ type: "ping" });
+
+    // Recover from the first server disconnect via a send during the backoff.
+    first.disconnectListeners[0]();
+    p.send({ type: "ping" });
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("healthy");
+
+    // A later, genuine server disconnect is still signaled exactly once…
+    second.disconnectListeners[0]();
+    expect(onDisconnect).toHaveBeenCalledTimes(2);
+    expect(p.state).toBe("reconnecting");
+
+    // …and the normal backoff reconnect still works.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(p.state).toBe("healthy");
+  });
+});
