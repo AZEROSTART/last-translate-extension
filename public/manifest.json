@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "双语网页翻译与 LLM 问答",
+  "version": "0.1.0",
+  "description": "把网页翻译成中文并插在原文下方，支持自定义 OpenAI 兼容模型与侧栏问答。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "contextMenus",
+    "webNavigation",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_guard.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content_main.js", "chunks/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "translate-page": { "suggested_key": { "default": "Alt+A" } },
+    "ask-selection": { "suggested_key": { "default": "Alt+Q" } },
+    "toggle-side-panel": { "suggested_key": { "default": "Alt+S" } }
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "options_page": "options.html",
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "local-model-origin",
+        "enabled": true,
+        "path": "rules/dnr.json"
+      }
+    ]
+  }
+}
