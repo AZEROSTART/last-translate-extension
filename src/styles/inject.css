@@ -22,3 +22,37 @@
 .ilmt-tr[data-loading="1"] {
   opacity: 0.4;
 }
+
+/* Selection bubble (划词气泡): floats above the selection when there is room. */
+.ilmt-bubble {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2328;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ilmt-bubble button {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ilmt-bubble button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.ilmt-bubble-explain {
+  font-weight: 600;
+}

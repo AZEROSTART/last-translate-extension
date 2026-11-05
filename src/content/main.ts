@@ -14,6 +14,7 @@ import { collectParagraphs, type ParagraphNode } from "./paragraphs";
 import { renderTranslation, restoreAll } from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
+import { initSelectionBubble } from "./selection";
 import type { BackgroundToClient, ClientToBackground } from "../shared/types";
 import cssText from "../styles/inject.css?inline";
 
@@ -74,6 +75,11 @@ export function runContentMain(): void {
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
   scope.__ilmtMain = { translatePage, restore, isActive };
+
+  initSelectionBubble({
+    onExplain: (text) => sendOpenChat(text, "explain"),
+    onFollowUp: (text) => sendOpenChat(text, "follow-up"),
+  });
 }
 
 async function translatePage(): Promise<void> {
@@ -240,6 +246,20 @@ function send(message: ClientToBackground): void {
     });
   }
   portClient.send(message);
+}
+
+/**
+ * Ask the background to open the side panel for a selection. Task 14 adds the
+ * `open-chat` handler; until then — and in unit tests — there may be no
+ * receiver, so a rejected send is deliberately ignored.
+ */
+function sendOpenChat(text: string, mode: "explain" | "follow-up"): void {
+  try {
+    const pending = chrome.runtime.sendMessage({ type: "open-chat", text, mode });
+    void Promise.resolve(pending).catch(() => {});
+  } catch {
+    // No `sendMessage` in the test mock / no listener registered yet.
+  }
 }
 
 function handleDelta(msg: Extract<BackgroundToClient, { type: "delta" }>): void {
