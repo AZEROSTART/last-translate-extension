@@ -47,7 +47,14 @@ export interface TranslateItem {
 }
 
 /** Normalized provider error codes (spec §8.6). */
-export type ErrorCode = "auth" | "rate_limit" | "timeout" | "network" | "bad_response" | "unknown";
+export type ErrorCode =
+  | "auth"
+  | "rate_limit"
+  | "timeout"
+  | "network"
+  | "bad_response"
+  | "aborted"
+  | "unknown";
 
 /** A model returned by `GET {baseURL}/models`. */
 export interface ModelInfo {
