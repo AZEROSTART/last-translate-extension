@@ -71,6 +71,10 @@ export function runContentMain(): void {
   if (started) return;
   started = true;
 
+  // The selection bubble is available before any translation, so its styles
+  // must exist at startup rather than waiting for the first `translatePage()`.
+  ensureStyles();
+
   chrome.runtime.onMessage.addListener(handleRuntimeMessage);
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
@@ -86,7 +90,8 @@ async function translatePage(): Promise<void> {
   if (active) return;
   active = true;
 
-  injectStyles();
+  // Idempotent safety net: reuses the startup stylesheet if it is still there.
+  ensureStyles();
   startPruneTimer();
   startObserver();
   startScrollListener();
@@ -418,7 +423,11 @@ function stopPruneTimer(): void {
   }
 }
 
-function injectStyles(): void {
+/**
+ * Inject the shared content stylesheet exactly once. Safe to call from both
+ * startup and activation: the existing `<style data-ilmt>` element is reused.
+ */
+export function ensureStyles(): void {
   if (document.querySelector("style[data-ilmt]")) return;
   const style = document.createElement("style");
   style.setAttribute("data-ilmt", "");

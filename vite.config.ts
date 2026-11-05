@@ -66,5 +66,8 @@ export default defineConfig({
     environment: "jsdom",
     include: ["tests/unit/**/*.test.ts"],
     setupFiles: ["./tests/setup/chrome-mock.ts"],
+    // `main.ts` imports inject.css with `?inline`; without CSS processing the
+    // module resolves to an empty string and no real stylesheet is testable.
+    css: true,
   },
 });
