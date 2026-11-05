@@ -31,7 +31,7 @@ export interface Settings {
   temperature: number;
   systemPrompt: string;
   promptVersion: string;
-  triggerMode: "shortcut" | "auto";
+  triggerMode: "shortcut" | "auto-current-site";
   siteRules: Record<string, "auto" | "never">;
   theme: "system" | "light" | "dark";
 }

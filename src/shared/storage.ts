@@ -30,12 +30,20 @@ export async function getSettings(): Promise<Settings> {
     | Partial<Settings>
     | undefined;
 
-  return {
+  const merged: Settings = {
     ...DEFAULT_SETTINGS,
     providers: [...DEFAULT_SETTINGS.providers],
     siteRules: { ...DEFAULT_SETTINGS.siteRules },
     ...(stored ?? {}),
   };
+
+  // Ruling 7: the canonical value is "auto-current-site" (spec §8.10); older
+  // builds stored the shorter "auto". Migrate it on every read.
+  if ((merged.triggerMode as string) === "auto") {
+    merged.triggerMode = "auto-current-site";
+  }
+
+  return merged;
 }
 
 export async function saveSettings(s: Settings): Promise<void> {
