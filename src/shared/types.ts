@@ -1,0 +1,121 @@
+/**
+ * Shared type vocabulary for the extension. Types only — no runtime logic here.
+ */
+
+/** A user-configured OpenAI-compatible provider (spec §8.6). */
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  kind: "custom";
+  baseURL: string;
+  apiKey: string;
+  model: string;
+  extraHeaders?: Record<string, string>;
+  overrides?: {
+    concurrency?: number;
+    maxRPS?: number;
+    temperature?: number;
+    systemPrompt?: string;
+  };
+  createdAt: number;
+  lastUsedAt?: number;
+}
+
+/** Persisted global settings (spec §9). */
+export interface Settings {
+  providers: ProviderConfig[];
+  activeProviderId: string;
+  targetLang: string;
+  concurrency: number;
+  maxRPS: number;
+  temperature: number;
+  systemPrompt: string;
+  promptVersion: string;
+  triggerMode: "shortcut" | "auto";
+  siteRules: Record<string, "auto" | "never">;
+  theme: "system" | "light" | "dark";
+}
+
+/** Per-paragraph translation state machine (spec §8.4). */
+export type ParagraphStatus = "unseen" | "queued" | "inflight" | "done" | "failed" | "skipped";
+
+/** A paragraph queued for translation (spec §8.11). */
+export interface TranslateItem {
+  id: string;
+  text: string;
+  hash: string;
+}
+
+/** Normalized provider error codes (spec §8.6). */
+export type ErrorCode = "auth" | "rate_limit" | "timeout" | "network" | "bad_response" | "unknown";
+
+/** A model returned by `GET {baseURL}/models`. */
+export interface ModelInfo {
+  id: string;
+  ownedBy?: string;
+}
+
+/** A single chat message sent to an OpenAI-compatible endpoint. */
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+/** Page context supplied to side-panel chat (spec §8.9). */
+export interface ChatContext {
+  pageUrl: string;
+  title: string;
+  quotes: string[];
+  recentParagraphs: Array<{ source: string; translation: string }>;
+}
+
+/** A persisted side-panel message (spec §9). */
+export interface SessionMessage {
+  role: "user" | "assistant";
+  content: string;
+  quote?: string;
+  ts: number;
+}
+
+/** A side-panel conversation pinned to the page where it started (spec §9). */
+export interface Session {
+  id: string;
+  tabId: number;
+  pageUrl: string;
+  pageTitle: string;
+  createdAt: number;
+  messages: SessionMessage[];
+}
+
+/** Messages sent from the content script to the background translate port. */
+export type ClientToBackground =
+  | { type: "translate"; requestId: string; tabId: number; items: TranslateItem[] }
+  | { type: "abort"; requestId: string }
+  | { type: "ping" };
+
+/** Messages sent from the background translate port back to the content script. */
+export type BackgroundToClient =
+  | { type: "delta"; requestId: string; id: string; text: string }
+  | { type: "result"; requestId: string; items: Array<{ id: string; text: string }> }
+  | { type: "error"; requestId: string; code: ErrorCode; message: string; retryable: boolean; ids: string[] }
+  | { type: "finish"; requestId: string }
+  | { type: "pong" }
+  | { type: "page-navigated" };
+
+/** Messages sent from the side panel to the background chat port. */
+export type ChatClientToBackground =
+  | { type: "chat"; requestId: string; sessionId: string; messages: ChatMessage[]; context: ChatContext }
+  | { type: "abort"; requestId: string };
+
+/** Messages sent from the background chat port back to the side panel. */
+export type ChatBackgroundToClient =
+  | { type: "delta"; requestId: string; text: string }
+  | { type: "finish"; requestId: string; usage?: ChatUsage }
+  | { type: "error"; requestId: string; code: ErrorCode; message: string; retryable: boolean };
+
+/** Token usage reported when a chat response finishes. */
+export interface ChatUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}

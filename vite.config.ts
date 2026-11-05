@@ -65,5 +65,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/unit/**/*.test.ts"],
+    setupFiles: ["./tests/setup/chrome-mock.ts"],
   },
 });
