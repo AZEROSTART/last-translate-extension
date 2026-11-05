@@ -4,7 +4,7 @@
  * A cache key hashes every input that can change a translation, so switching
  * provider, model or prompt version can never surface a stale result. Entries
  * expire after 30 days, and the least-recently-used ones are evicted once the
- * entry cap is exceeded.
+ * entry or byte cap is exceeded.
  */
 
 const DEFAULT_DB_NAME = "ilmt-cache";
@@ -12,6 +12,13 @@ const STORE_NAME = "translations";
 const DB_VERSION = 1;
 const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_ENTRIES = 20_000;
+const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
+
+const encoder = new TextEncoder();
+
+function textBytes(text: string): number {
+  return encoder.encode(text).byteLength;
+}
 
 export interface CacheKeyInput {
   sourceText: string;
@@ -24,6 +31,8 @@ export interface CacheKeyInput {
 export interface TranslationCacheOptions {
   /** Entries allowed before least-recently-used eviction, at least 1. */
   maxEntries?: number;
+  /** UTF-8 bytes of stored text allowed before LRU eviction; defaults to 50 MB. */
+  maxBytes?: number;
 }
 
 interface CacheRecord {
@@ -83,6 +92,7 @@ function withStore<T>(
 export class TranslationCache {
   private readonly dbName: string;
   private readonly maxEntries: number;
+  private readonly maxBytes: number;
   private dbPromise: Promise<IDBDatabase> | undefined;
 
   /**
@@ -94,6 +104,7 @@ export class TranslationCache {
   constructor(dbName: string = DEFAULT_DB_NAME, options: TranslationCacheOptions = {}) {
     this.dbName = dbName;
     this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? DEFAULT_MAX_ENTRIES));
+    this.maxBytes = Math.max(0, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
   }
 
   async get(key: string): Promise<string | undefined> {
@@ -124,13 +135,20 @@ export class TranslationCache {
     const db = await this.open();
     await withStore(db, "readwrite", store => request(store.put(record)));
 
-    const count = await withStore(db, "readonly", store => request(store.count()));
-    if (count <= this.maxEntries) return;
-
     const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
+    let remainingBytes = records.reduce((total, entry) => total + textBytes(entry.text), 0);
+    if (records.length <= this.maxEntries && remainingBytes <= this.maxBytes) return;
+
     records.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.key.localeCompare(b.key));
-    const excess = count - this.maxEntries;
-    const doomed = records.slice(0, excess).map(entry => entry.key);
+    const doomed: string[] = [];
+    let remainingCount = records.length;
+    for (const entry of records) {
+      if (remainingCount <= this.maxEntries && remainingBytes <= this.maxBytes) break;
+      doomed.push(entry.key);
+      remainingCount--;
+      remainingBytes -= textBytes(entry.text);
+    }
+
     await withStore(db, "readwrite", store => {
       for (const doomedKey of doomed) store.delete(doomedKey);
       return Promise.resolve();
@@ -145,8 +163,7 @@ export class TranslationCache {
   async stats(): Promise<{ count: number; bytes: number }> {
     const db = await this.open();
     const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
-    const encoder = new TextEncoder();
-    const bytes = records.reduce((total, record) => total + encoder.encode(record.text).byteLength, 0);
+    const bytes = records.reduce((total, record) => total + textBytes(record.text), 0);
     return { count: records.length, bytes };
   }
 

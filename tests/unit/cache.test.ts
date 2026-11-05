@@ -40,6 +40,17 @@ it("evicts least-recently-used beyond the entry cap", async () => {
   expect(await c.get(k3)).toBe("3");
 });
 
+it("evicts least-recently-used beyond the byte cap", async () => {
+  const c = new TranslationCache("ilmt-cache", { maxEntries: 10, maxBytes: 6 });
+  const k1 = await key({ sourceText: "a" }), k2 = await key({ sourceText: "b" }), k3 = await key({ sourceText: "c" });
+  await c.put(k1, "aaa", { modelId: "m" });
+  await c.put(k2, "bbb", { modelId: "m" });
+  await c.put(k3, "ccc", { modelId: "m" });
+  expect(await c.get(k1)).toBeUndefined();
+  expect(await c.get(k2)).toBe("bbb");
+  expect(await c.get(k3)).toBe("ccc");
+});
+
 it("clears entries and reports count and byte size", async () => {
   const c = new TranslationCache("ilmt-cache");
   await c.put(await key({ sourceText: "a" }), "你好", { modelId: "m" });
