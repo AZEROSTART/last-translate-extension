@@ -138,7 +138,7 @@ export function runContentMain(): void {
 async function translatePage(): Promise<void> {
   if (active) return;
   active = true;
-  const generation = ++scanGeneration;
+  scanGeneration += 1;
 
   try {
     showActiveBanner();
@@ -146,18 +146,24 @@ async function translatePage(): Promise<void> {
     startScrollListener();
 
     // At document_start `<body>` may not exist yet; wait for the parser before
-    // touching the tree. A scan started before that would throw.
+    // touching the tree. A rescan may have bumped the generation while we
+    // waited, so scan under the CURRENT generation instead of returning: the
+    // earlier rescan could not see a body and therefore queued nothing.
     await whenBodyReady();
-    if (!active || generation !== scanGeneration) return;
+    if (!active) return;
     startObserver();
 
-    await requestScan("full", generation);
+    await requestScan("full", scanGeneration);
   } catch (error) {
     reportScanError(error);
   }
 }
 
 async function rescan(): Promise<void> {
+  if (!active) return;
+  // A SPA route change can arrive before `<body>` exists. Bumping the
+  // generation then would strand the activation's pending scan; wait instead.
+  await whenBodyReady();
   if (!active) return;
   // Invalidate the previous scan first, then rebuild marks and run a fresh
   // full scan; the coordinator queues it behind any still-running scan.
@@ -171,12 +177,21 @@ async function rescan(): Promise<void> {
   await requestScan("full", generation);
 }
 
-/** Resolve once `<body>` exists; content scripts can start before it does. */
+/**
+ * Resolve once `<body>` exists; content scripts can start before it does and
+ * `readyState === "complete"` does not imply a body (e.g. XML documents).
+ */
 function whenBodyReady(): Promise<void> {
   if (document.body) return Promise.resolve();
-  if (document.readyState !== "loading") return Promise.resolve();
   return new Promise((resolve) => {
-    document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+    const root = document.documentElement;
+    if (!root) return;
+    const observer = new MutationObserver(() => {
+      if (!document.body) return;
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(root, { childList: true, subtree: true });
   });
 }
 

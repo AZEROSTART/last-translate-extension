@@ -268,7 +268,10 @@ it("stops auto-retrying rate limits at the cap and offers a manual retry", async
       "请求过于频繁，稍后自动重试",
     );
 
-    vi.advanceTimersByTime(delays[attempt]);
+    // The backoff grows: no retry one millisecond before this attempt's delay.
+    vi.advanceTimersByTime(delays[attempt] - 1);
+    expect(sent.filter((message) => message.type === "translate")).toHaveLength(attempt + 1);
+    vi.advanceTimersByTime(1);
     request = sent.filter((message) => message.type === "translate").at(-1);
   }
 

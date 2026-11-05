@@ -597,7 +597,11 @@ it("splits a multi-item group in half once on a context-length failure", async (
     }
     return { text: "[1] 甲\n[2] 乙" };
   });
-  const { d, sent, send } = deps({ adapter: fakeAdapter({ complete }) });
+  const put = vi.fn(async () => {});
+  const { d, sent, send } = deps({
+    adapter: fakeAdapter({ complete }),
+    cache: { get: vi.fn(async () => undefined), put },
+  });
 
   await handleTranslate(d, { type: "translate", requestId: "rx1", tabId: 1, items: items(4) }, send);
 
@@ -605,6 +609,8 @@ it("splits a multi-item group in half once on a context-length failure", async (
   expect(complete.mock.calls[0][1].messages[1].content.trim().split("\n")).toHaveLength(4);
   expect(complete.mock.calls[1][1].messages[1].content.trim().split("\n")).toHaveLength(2);
   expect(complete.mock.calls[2][1].messages[1].content.trim().split("\n")).toHaveLength(2);
+  // Both successful halves still cache every translated item.
+  expect(put).toHaveBeenCalledTimes(4);
 
   const result = sent.find((m) => m.type === "result");
   expect(result.items).toEqual([

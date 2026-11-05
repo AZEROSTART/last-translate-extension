@@ -109,6 +109,27 @@ it("does not skip a target-language paragraph below the skip ratio", async () =>
   ]);
 });
 
+it("aggregates script variants before comparing the skip ratio", async () => {
+  await setTargetLang("zh-CN");
+  // Each variant is below 0.8, but together they are 0.85 of the paragraph.
+  stubDetector(() => ({
+    languages: [
+      { language: "zh-Hans", percentage: 50 },
+      { language: "zh-Hant", percentage: 35 },
+      { language: "en", percentage: 15 },
+    ],
+  }));
+  document.body.innerHTML = `<p>这是简繁混合的中文段落内容。</p>`;
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (message: unknown) => sent.push(message) };
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  expect(sent.find((message) => message.type === "translate")).toBeUndefined();
+});
+
 it("accepts the promise shape of chrome.i18n.detectLanguage", async () => {
   await setTargetLang("zh-CN");
   (chrome as any).i18n = {

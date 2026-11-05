@@ -65,6 +65,49 @@ function captureConnectPort() {
   return { sent, messageListeners, connect };
 }
 
+/** Poll on real timers; jsdom has no layout so fixed sleeps are flaky. */
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error("condition was not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+it("scans a body that appears after a pre-body page-navigated rescan", async () => {
+  const body = document.body;
+  body.innerHTML = `<p>Delayed body paragraph.</p>`;
+  document.documentElement.removeChild(body);
+  expect(document.body).toBeNull();
+
+  const listener = await startMain();
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  // Activation and a rescan both arrive before the parser has a <body>.
+  listener({ type: "activate" }, { id: "test-extension-id" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  listener({ type: "page-navigated" }, { id: "test-extension-id" });
+
+  document.documentElement.appendChild(body);
+
+  await waitFor(() => sent.some((message) => message.type === "translate"));
+  const first = sent.find((message) => message.type === "translate");
+  expect(first.items.map((item: any) => item.text)).toEqual(["Delayed body paragraph."]);
+
+  // The observer must be installed too; a later paragraph needs a second scan.
+  body.insertAdjacentHTML("beforeend", `<p>Later body paragraph.</p>`);
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+  await waitFor(
+    () => sent.filter((message) => message.type === "translate").length === 2,
+  );
+  expect(
+    sent
+      .filter((message) => message.type === "translate")[1]
+      .items.map((item: any) => item.text),
+  ).toEqual(["Later body paragraph."]);
+});
+
 it("asks the background to explain the current selection", async () => {
   const listener = await startMain();
   selectText("  Hello world  ");
