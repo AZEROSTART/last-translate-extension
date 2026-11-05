@@ -12,6 +12,11 @@ type Listener = (...args: any[]) => void;
 function makeStorage() {
   const store = new Map<string, unknown>();
   const clone = <T,>(value: T): T => structuredClone(value);
+  const changeListeners: Listener[] = [];
+
+  const emit = (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>): void => {
+    for (const listener of changeListeners) listener(changes, "local");
+  };
 
   const get = (keys?: string | string[] | Record<string, unknown> | null): Promise<Record<string, unknown>> => {
     if (keys === null || keys === undefined) {
@@ -31,28 +36,41 @@ function makeStorage() {
   };
 
   const set = (items: Record<string, unknown>): Promise<void> => {
-    for (const [k, v] of Object.entries(items)) store.set(k, clone(v));
+    const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> = {};
+    for (const [k, v] of Object.entries(items)) {
+      changes[k] = { oldValue: store.has(k) ? clone(store.get(k)) : undefined, newValue: clone(v) };
+      store.set(k, clone(v));
+    }
+    emit(changes);
     return Promise.resolve();
   };
 
   const remove = (keys: string | string[]): Promise<void> => {
-    for (const k of Array.isArray(keys) ? keys : [keys]) store.delete(k);
+    const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> = {};
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      changes[k] = { oldValue: store.has(k) ? clone(store.get(k)) : undefined, newValue: undefined };
+      store.delete(k);
+    }
+    emit(changes);
     return Promise.resolve();
   };
 
-  return { get, set, remove, _store: store };
+  return { get, set, remove, _store: store, onChanged: { addListener: (cb: Listener) => changeListeners.push(cb) } };
 }
 
 interface ChromeOpts {
   pendingQuote?: unknown;
   history?: unknown;
-  tab?: { id: number; url: string; title: string };
+  settings?: unknown;
+  /** `null` makes `tabs.query` return no active tab. */
+  tab?: { id: number; url: string; title: string } | null;
 }
 
 function installChrome(opts: ChromeOpts = {}) {
   const storage = makeStorage();
   if (opts.pendingQuote !== undefined) storage._store.set("chat.pendingQuote", opts.pendingQuote);
   if (opts.history !== undefined) storage._store.set("chat.history", opts.history);
+  if (opts.settings !== undefined) storage._store.set("settings", opts.settings);
 
   const sent: unknown[] = [];
   const messageListeners: Listener[] = [];
@@ -71,10 +89,16 @@ function installChrome(opts: ChromeOpts = {}) {
     runtime: {
       id: "test-extension-id",
       connect: vi.fn(() => port),
+      sendMessage: vi.fn(async () => undefined),
     },
-    storage: { local: storage },
+    storage: { local: storage, onChanged: storage.onChanged },
     tabs: {
-      query: vi.fn(async () => [opts.tab ?? { id: 1, url: "https://a.test/x", title: "A", windowId: 1 }]),
+      query: vi.fn(async () =>
+        opts.tab === null
+          ? []
+          : [opts.tab ?? { id: 1, url: "https://a.test/x", title: "A", windowId: 1 }],
+      ),
+      sendMessage: vi.fn(async () => ({ paragraphs: [] })),
       onActivated: { addListener: (cb: Listener) => activatedListeners.push(cb) },
       onUpdated: { addListener: (cb: Listener) => updatedListeners.push(cb) },
     },
@@ -83,6 +107,11 @@ function installChrome(opts: ChromeOpts = {}) {
 
   return { chrome, storage, port, sent, messageListeners, disconnectListeners, activatedListeners, updatedListeners };
 }
+
+const flush = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 const originalChrome = (globalThis as any).chrome;
 
@@ -110,13 +139,163 @@ it("renders the fixed context note", async () => {
   expect(document.querySelector(".context-note")?.textContent).toBe("只参考已翻译的段落");
 });
 
-it("renders the pending quote chip and clears it from storage on load", async () => {
-  const { storage } = installChrome({ pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 } });
+function settingsFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    providers: [
+      { id: "p1", name: "Alpha", kind: "custom", baseURL: "https://a.test/v1", apiKey: "secret", model: "m1", createdAt: 1 },
+      { id: "p2", name: "", kind: "custom", baseURL: "https://b.test/v1", apiKey: "secret", model: "m2", createdAt: 2 },
+    ],
+    activeProviderId: "p1",
+    ...overrides,
+  };
+}
+
+it("renders the provider switcher with the active provider and its model", async () => {
+  installChrome({ settings: settingsFixture() });
+  await boot();
+
+  const select = document.querySelector(".provider-select") as HTMLSelectElement;
+  expect(select.hidden).toBe(false);
+  expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+    ["p1", "Alpha"],
+    ["p2", "p2"],
+  ]);
+  expect(select.value).toBe("p1");
+  expect(document.querySelector(".provider-model")?.textContent).toBe("m1");
+});
+
+it("falls back to the first provider when no active provider is set", async () => {
+  installChrome({ settings: settingsFixture({ activeProviderId: "" }) });
+  await boot();
+
+  const select = document.querySelector(".provider-select") as HTMLSelectElement;
+  expect(select.value).toBe("p1");
+  expect(document.querySelector(".provider-model")?.textContent).toBe("m1");
+});
+
+it("persists a provider change and updates the model label immediately", async () => {
+  const { storage } = installChrome({ settings: settingsFixture() });
+  await boot();
+
+  const select = document.querySelector(".provider-select") as HTMLSelectElement;
+  select.value = "p2";
+  select.dispatchEvent(new Event("change"));
+  expect(document.querySelector(".provider-model")?.textContent).toBe("m2");
+  await flush();
+
+  const saved = storage._store.get("settings") as { activeProviderId: string };
+  expect(saved.activeProviderId).toBe("p2");
+  expect(select.value).toBe("p2");
+});
+
+it("refreshes the provider switcher when settings change elsewhere", async () => {
+  const { storage } = installChrome({ settings: settingsFixture() });
+  await boot();
+
+  await storage.set({
+    settings: settingsFixture({
+      providers: [
+        { id: "p3", name: "Gamma", kind: "custom", baseURL: "https://c.test/v1", apiKey: "secret", model: "m3", createdAt: 3 },
+      ],
+      activeProviderId: "p3",
+    }),
+  });
+  await flush();
+
+  const select = document.querySelector(".provider-select") as HTMLSelectElement;
+  expect([...select.options].map((option) => option.value)).toEqual(["p3"]);
+  expect(select.value).toBe("p3");
+  expect(document.querySelector(".provider-model")?.textContent).toBe("m3");
+});
+
+it("shows the empty provider state and opens the options page", async () => {
+  const { chrome } = installChrome({ settings: settingsFixture({ providers: [], activeProviderId: "" }) });
+  await boot();
+
+  const select = document.querySelector(".provider-select") as HTMLSelectElement;
+  expect(select.hidden).toBe(true);
+  expect(document.querySelector(".provider-model")?.textContent).toBe("尚未配置模型");
+
+  const settingsButton = document.querySelector(".provider-settings") as HTMLButtonElement;
+  expect(settingsButton.hidden).toBe(false);
+  settingsButton.click();
+  expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "open-options" });
+});
+
+it("prefills a follow-up pending quote and clears it from storage on load", async () => {
+  const { storage, sent } = installChrome({
+    pendingQuote: { text: "选中的文字", mode: "follow-up", tabId: 1, ts: 1 },
+  });
   await boot();
 
   const chip = document.querySelector(".quote-chip") as HTMLElement;
   expect(chip.hidden).toBe(false);
   expect(chip.textContent).toContain("选中的文字");
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("选中的文字");
+  expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
+  expect(storage._store.has("chat.pendingQuote")).toBe(false);
+});
+
+it("auto-sends an explain pending quote on load without duplicating the user turn", async () => {
+  const { storage, sent } = installChrome({
+    pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 },
+  });
+  await boot();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string }>;
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(1);
+  expect(chats[0].messages).toEqual([{ role: "user", content: "这是什么意思？" }]);
+  expect(chats[0].context.quotes).toEqual(["选中的文字"]);
+  expect(document.querySelectorAll(".msg--user")).toHaveLength(1);
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(true);
+  expect(storage._store.has("chat.pendingQuote")).toBe(false);
+});
+
+it("does not auto-send an explain quote when there is no active tab", async () => {
+  const { sent } = installChrome({
+    tab: null,
+    pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 },
+  });
+  await boot();
+  await flush();
+
+  expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
+});
+
+it("applies an explain quote pushed while the panel is already open", async () => {
+  const { storage, sent } = installChrome();
+  await boot();
+
+  await storage.set({ "chat.pendingQuote": { text: "后来选中的文字", mode: "explain", tabId: 1, ts: 2 } });
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string }>;
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(1);
+  expect(chats[0].messages).toEqual([{ role: "user", content: "这是什么意思？" }]);
+  expect(chats[0].context.quotes).toEqual(["后来选中的文字"]);
+  expect(document.querySelectorAll(".msg--user")).toHaveLength(1);
+  expect(storage._store.has("chat.pendingQuote")).toBe(false);
+});
+
+it("prefills a follow-up quote pushed while the panel is already open", async () => {
+  const { storage, sent } = installChrome();
+  await boot();
+
+  await storage.set({ "chat.pendingQuote": { text: "后来选中的文字", mode: "follow-up", tabId: 1, ts: 2 } });
+  await flush();
+
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(false);
+  expect((document.querySelector(".quote-chip") as HTMLElement).textContent).toContain("后来选中的文字");
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("后来选中的文字");
+  expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
   expect(storage._store.has("chat.pendingQuote")).toBe(false);
 });
 
@@ -127,6 +306,7 @@ it("sends a chat request and appends streamed deltas to the assistant message", 
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "这是什么？";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
     requestId: string;
@@ -145,6 +325,83 @@ it("sends a chat request and appends streamed deltas to the assistant message", 
   expect(assistant.textContent).toBe("这是答案");
 });
 
+it("passes the content script's recent translated paragraphs into the chat context", async () => {
+  const { chrome, sent } = installChrome();
+  (chrome.tabs.sendMessage as any).mockResolvedValue({
+    paragraphs: [
+      { source: "Hello", translation: "你好" },
+      { source: "World", translation: "世界" },
+    ],
+  });
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "对比一下";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(1, { type: "get-recent-translations" });
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    context: { recentParagraphs: unknown[] };
+  };
+  expect(chat.context.recentParagraphs).toEqual([
+    { source: "Hello", translation: "你好" },
+    { source: "World", translation: "世界" },
+  ]);
+});
+
+it("uses an empty paragraph list when the content script rejects or returns junk", async () => {
+  const { chrome, sent } = installChrome();
+  (chrome.tabs.sendMessage as any).mockRejectedValue(new Error("no receiver"));
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "第一个问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const first = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    requestId: string;
+    context: { recentParagraphs: unknown[] };
+  };
+  expect(first.context.recentParagraphs).toEqual([]);
+
+  // Malformed payloads are treated the same as a failure.
+  (chrome.tabs.sendMessage as any).mockResolvedValue({ paragraphs: [{ source: 42 }] });
+  (document.querySelector(".composer-stop") as HTMLButtonElement).click();
+  input.value = "第二个问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    context: { recentParagraphs: unknown[] };
+  }>;
+  expect(chats.at(-1)!.context.recentParagraphs).toEqual([]);
+});
+
+it("does not start a second chat while the recent-paragraph fetch is pending", async () => {
+  const { chrome, sent } = installChrome();
+  let resolveRecent: (value: unknown) => void = () => {};
+  (chrome.tabs.sendMessage as any).mockReturnValue(
+    new Promise((resolve) => {
+      resolveRecent = resolve;
+    }),
+  );
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "只发一次";
+  const send = document.querySelector(".composer-send") as HTMLButtonElement;
+  send.click();
+  input.value = "第二次点击";
+  send.click();
+  resolveRecent({ paragraphs: [] });
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat");
+  expect(chats).toHaveLength(1);
+});
+
 it("aborts an in-flight request and keeps the partial answer with a resend action", async () => {
   const { sent, messageListeners } = installChrome();
   await boot();
@@ -152,6 +409,7 @@ it("aborts an in-flight request and keeps the partial answer with a resend actio
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "部分" });
@@ -163,6 +421,85 @@ it("aborts an in-flight request and keeps the partial answer with a resend actio
   expect(assistant.textContent).toBe("部分");
   expect(document.querySelector(".error-block")?.textContent).toContain("已中断");
   expect(document.querySelector(".error-block")?.textContent).toContain("重新发送");
+});
+
+it("retries with one user turn and no stale assistant answer", async () => {
+  const { sent, messageListeners } = installChrome({
+    pendingQuote: { text: "引用文字", mode: "follow-up", tabId: 1, ts: 1 },
+  });
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "原问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const first = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    requestId: string;
+    messages: Array<{ role: string; content: string }>;
+    context: { quotes: string[] };
+  };
+  expect(first.context.quotes).toEqual(["引用文字"]);
+  messageListeners[0]({ type: "delta", requestId: first.requestId, text: "半截答案" });
+  messageListeners[0]({
+    type: "error",
+    requestId: first.requestId,
+    code: "network",
+    message: "Network down",
+    retryable: true,
+  });
+
+  expect(document.querySelectorAll(".msg--user")).toHaveLength(1);
+  (document.querySelector(".error-retry") as HTMLButtonElement).click();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string; quote?: string }>;
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(2);
+  const retried = chats[1];
+  expect(retried.messages.filter((m) => m.role === "user")).toHaveLength(1);
+  expect(retried.messages.at(-1)).toMatchObject({ role: "user", content: "原问题" });
+  expect(retried.context.quotes).toEqual(["引用文字"]);
+  const sessionUser = (globalThis as any).__ilmtPanel.session.messages.find(
+    (message: { role: string }) => message.role === "user",
+  );
+  expect(sessionUser.quote).toBe("引用文字");
+  expect(document.querySelectorAll(".msg--user")).toHaveLength(1);
+  expect(document.querySelectorAll(".msg--assistant")).toHaveLength(1);
+  expect(document.querySelector(".error-block")).toBeNull();
+});
+
+it.each([
+  ["auth", "鉴权失败，请检查 API key"],
+  ["rate_limit", "请求过于频繁，请稍后重试"],
+  ["timeout", "请求超时"],
+  ["network", "网络错误"],
+  ["bad_response", "模型返回异常"],
+  ["aborted", "已取消"],
+  ["unknown", "请求失败"],
+] as const)("shows Chinese copy for the %s error", async (code, copy) => {
+  const { sent, messageListeners } = installChrome();
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  messageListeners[0]({
+    type: "error",
+    requestId: chat.requestId,
+    code,
+    message: "raw English provider message",
+    retryable: false,
+  });
+
+  const block = document.querySelector(".error-block") as HTMLElement;
+  expect(block.textContent).toContain(copy);
+  expect(block.textContent).not.toContain("raw English provider message");
 });
 
 it("invalidates the pinned context when the same tab navigates to a new URL", async () => {
@@ -188,6 +525,7 @@ it("invalidates the pinned context when the same tab navigates to a new URL", as
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "新页面的问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
     context: { pageUrl: string; title: string; recentParagraphs: unknown[] };
@@ -209,6 +547,7 @@ it("starts a fresh session pinned to the new page from the stale banner", async 
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "旧页面的问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
   const oldChat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   messageListeners[0]({ type: "delta", requestId: oldChat.requestId, text: "旧答案" });
   messageListeners[0]({ type: "finish", requestId: oldChat.requestId });
@@ -243,6 +582,7 @@ it("starts a fresh session pinned to the new page from the stale banner", async 
 
   input.value = "新页面的问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.filter((m) => (m as { type?: string }).type === "chat").at(-1) as {
     context: { pageUrl: string; title: string; recentParagraphs: unknown[] };
@@ -276,6 +616,7 @@ it("treats a navigation to an unobservable URL as stale", async () => {
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "还能用吗";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
     context: { pageUrl: string; title: string };
@@ -316,6 +657,7 @@ it("does not switch sessions from the stale banner while a response is streaming
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   const oldSessionId = (globalThis as any).__ilmtPanel.session.id as string;
   messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "部分" });
@@ -350,6 +692,7 @@ it("does not re-attach a stale session after a tab round-trip", async () => {
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "旧问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
   const oldChat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   messageListeners[0]({ type: "delta", requestId: oldChat.requestId, text: "旧答案" });
   messageListeners[0]({ type: "finish", requestId: oldChat.requestId });
@@ -391,6 +734,7 @@ it("shows the interrupted copy and persists the partial answer when the port dis
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "部分" });
@@ -415,6 +759,7 @@ it("persists the session to chat.history after the assistant finishes", async ()
   const input = document.querySelector("textarea") as HTMLTextAreaElement;
   input.value = "问题";
   (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
 
   const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
   messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "答" });

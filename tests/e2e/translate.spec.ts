@@ -220,7 +220,7 @@ test.describe("loaded extension", () => {
     }
   });
 
-  test("translates when the command/activate message is delivered again", async () => {
+  test("translates on one activate and restores on the next", async () => {
     try {
       server = await startMockServer();
       extension = await launchExtension();
@@ -230,15 +230,18 @@ test.describe("loaded extension", () => {
       await page.goto(`${server.origin}/${ARTICLES.english}`);
       const tabId = await activeTabId(extension.worker, page.url());
 
-      // First activate is consumed by the guard and loads content_main.
-      await activate(extension.worker, tabId);
-      await findContentMainContext(page);
-
-      // The shortcut's next press reaches the main listener. Do not call the
-      // exposed test hook: this must translate from the message alone.
+      // A single press must load content_main and translate the page. Do not
+      // call the exposed test hook or send a second activate.
       await activate(extension.worker, tabId);
       await expect(page.locator(".ilmt-tr")).toHaveCount(10);
       await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
+      await expect(page.locator(".ilmt-active-banner")).toContainText("翻译已开启");
+      expect(server.requests.some((request) => request.method === "POST")).toBe(true);
+
+      // The next press toggles back to the original page.
+      await activate(extension.worker, tabId);
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await expect(page.locator(".ilmt-active-banner")).toHaveCount(0);
     } finally {
       await cleanup();
     }
@@ -253,9 +256,9 @@ test.describe("loaded extension", () => {
       const page = await extension.context.newPage();
       await page.goto(`${server.origin}/${ARTICLES.chinese}`);
       await activate(extension.worker, await activeTabId(extension.worker, page.url()));
-      const content = await findContentMainContext(page);
+      // Wait for content_main before judging the request window.
+      await findContentMainContext(page);
 
-      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
       await expectNoProviderRequests(page, server);
       await expect(page.locator(".ilmt-tr")).toHaveCount(0);
     } finally {

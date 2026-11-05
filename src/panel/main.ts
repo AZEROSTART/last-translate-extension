@@ -6,19 +6,24 @@
  * persists history under `chat.history`.
  *
  * The chat context references only translated paragraphs (see the fixed note
- * "只参考已翻译的段落"). There is no content-script API exposing translated
- * paragraphs yet, so `recentParagraphs` is always `[]` for now — the title/URL
- * and any selected quote still travel with each request.
+ * "只参考已翻译的段落"). The content script answers `get-recent-translations`
+ * with its last finished records; a failed/slow fetch degrades to no paragraphs
+ * rather than blocking the conversation.
  */
 
 import { appendMessage, buildChatContext, createSession } from "./session";
+import { getSettings, saveSettings } from "../shared/storage";
 import type {
   ChatBackgroundToClient,
   ChatClientToBackground,
   ChatContext,
   ChatMessage,
+  ErrorCode,
+  OpenOptionsMessage,
+  RecentTranslationsMessage,
   Session,
   SessionMessage,
+  Settings,
 } from "../shared/types";
 import cssText from "../styles/panel.css?inline";
 
@@ -46,12 +51,20 @@ interface ActiveTab {
   title: string;
 }
 
-/**
- * TODO(T14): once the content script exposes its translated paragraphs, feed the
- * last five here so the chat context can reference them. Until then this stays
- * empty — never fabricate data or crawl the page.
- */
-const recentParagraphs: Array<{ source: string; translation: string }> = [];
+type RecentParagraph = { source: string; translation: string };
+
+/** How long the panel waits for the content script before sending anyway. */
+const RECENT_TIMEOUT_MS = 500;
+const EXPLAIN_QUESTION = "这是什么意思？";
+const CHINESE_ERRORS: Record<ErrorCode, string> = {
+  auth: "鉴权失败，请检查 API key",
+  rate_limit: "请求过于频繁，请稍后重试",
+  timeout: "请求超时",
+  network: "网络错误",
+  bad_response: "模型返回异常",
+  aborted: "已取消",
+  unknown: "请求失败",
+};
 
 const scope = globalThis as typeof globalThis & {
   __ilmtPanel?: {
@@ -71,6 +84,7 @@ let streaming = false;
 let activeTab: ActiveTab | null = null;
 let pendingQuote: PendingQuote | null = null;
 let lastRequest: { text: string; quote?: string } | null = null;
+let panelSettings: Settings | null = null;
 let requestIdCounter = 0;
 
 // --- DOM refs ---
@@ -84,6 +98,9 @@ let bannerTitle: HTMLElement;
 let bannerButton: HTMLButtonElement;
 let quoteChip: HTMLElement;
 let quoteTextEl: HTMLElement;
+let providerSelect: HTMLSelectElement;
+let providerModel: HTMLElement;
+let providerSettingsBtn: HTMLButtonElement;
 let assistantEl: HTMLElement | null = null;
 
 let resolveReady!: () => void;
@@ -108,8 +125,9 @@ export function runPanel(): Promise<void> {
 async function start(): Promise<void> {
   buildDom();
   injectStyles();
+  await loadPanelSettings();
   sessions = await loadSessions();
-  await consumePendingQuote();
+  const quote = await readPendingQuote();
   await refreshActiveTab();
   const tab = activeTab;
   session = findSession(sessions, tab?.id, tab?.url ?? "") ?? (tab ? createSession(tab.url, tab.title, tab.id) : createSession("", "", 0));
@@ -117,6 +135,8 @@ async function start(): Promise<void> {
   updateBanner();
   connectPort();
   wireTabs();
+  wireStorage();
+  applyPendingQuote(quote);
   resolveReady();
 }
 
@@ -157,6 +177,23 @@ function buildDom(): void {
   quoteRemove.addEventListener("click", clearQuoteChip);
   quoteChip.append(quoteTextEl, quoteRemove);
   root.appendChild(quoteChip);
+
+  const providerBar = document.createElement("div");
+  providerBar.className = "provider-bar";
+  providerSelect = document.createElement("select");
+  providerSelect.className = "provider-select";
+  providerSelect.setAttribute("aria-label", "选择模型提供商");
+  providerSelect.addEventListener("change", handleProviderChange);
+  providerModel = document.createElement("span");
+  providerModel.className = "provider-model";
+  providerSettingsBtn = document.createElement("button");
+  providerSettingsBtn.type = "button";
+  providerSettingsBtn.className = "provider-settings";
+  providerSettingsBtn.textContent = "设置";
+  providerSettingsBtn.hidden = true;
+  providerSettingsBtn.addEventListener("click", handleOpenOptions);
+  providerBar.append(providerSelect, providerModel, providerSettingsBtn);
+  root.appendChild(providerBar);
 
   msgList = document.createElement("div");
   msgList.className = "msg-list";
@@ -224,6 +261,80 @@ function renderMessage(message: SessionMessage): HTMLElement {
   return el;
 }
 
+// --- provider switcher (spec §8.9) ---
+
+async function loadPanelSettings(): Promise<void> {
+  try {
+    panelSettings = await getSettings();
+  } catch {
+    panelSettings = null;
+  }
+  renderProviderBar();
+}
+
+function renderProviderBar(): void {
+  const providers = panelSettings?.providers ?? [];
+  if (providers.length === 0) {
+    providerSelect.replaceChildren();
+    providerSelect.hidden = true;
+    providerSettingsBtn.hidden = false;
+    providerModel.textContent = "尚未配置模型";
+    return;
+  }
+
+  const configured = panelSettings?.activeProviderId ?? "";
+  const activeId = providers.some((provider) => provider.id === configured)
+    ? configured
+    : providers[0].id;
+
+  const options = providers.map((provider) => {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.name || provider.id;
+    return option;
+  });
+  providerSelect.replaceChildren(...options);
+  providerSelect.value = activeId;
+  providerSelect.hidden = false;
+  providerSettingsBtn.hidden = true;
+
+  const active = providers.find((provider) => provider.id === activeId);
+  providerModel.textContent = active?.model ?? "";
+}
+
+function handleProviderChange(): void {
+  if (!panelSettings) return;
+  const provider = panelSettings.providers.find((candidate) => candidate.id === providerSelect.value);
+  if (!provider) return;
+
+  panelSettings = { ...panelSettings, activeProviderId: provider.id };
+  // Update the read-only label immediately; the write is best-effort.
+  providerModel.textContent = provider.model;
+  void saveSettings(panelSettings).catch(() => {
+    void refreshSettingsFromStorage();
+  });
+}
+
+async function refreshSettingsFromStorage(): Promise<void> {
+  try {
+    panelSettings = await getSettings();
+  } catch {
+    return;
+  }
+  renderProviderBar();
+}
+
+function handleOpenOptions(): void {
+  try {
+    const pending = chrome.runtime.sendMessage({ type: "open-options" } satisfies OpenOptionsMessage);
+    if (pending && typeof pending.catch === "function") {
+      void pending.catch(() => {});
+    }
+  } catch {
+    // Nothing to open; never surface this in the panel.
+  }
+}
+
 // --- quoting ---
 
 function showQuoteChip(): void {
@@ -238,15 +349,18 @@ function clearQuoteChip(): void {
   quoteChip.hidden = true;
 }
 
-async function consumePendingQuote(): Promise<void> {
+function parsePendingQuote(value: unknown): PendingQuote | null {
+  if (!value || typeof value !== "object") return null;
+  const quote = value as { text?: unknown; mode?: unknown };
+  if (typeof quote.text !== "string" || quote.text.trim() === "") return null;
+  return { text: quote.text, mode: quote.mode === "follow-up" ? "follow-up" : "explain" };
+}
+
+async function readPendingQuote(): Promise<PendingQuote | null> {
+  let quote: PendingQuote | null = null;
   try {
     const stored = await chrome.storage.local.get(PENDING_QUOTE_KEY);
-    const quote = stored[PENDING_QUOTE_KEY] as { text?: unknown; mode?: unknown } | undefined;
-    if (quote && typeof quote.text === "string" && quote.text.trim() !== "") {
-      pendingQuote = { text: quote.text, mode: quote.mode === "follow-up" ? "follow-up" : "explain" };
-      showQuoteChip();
-      input.value = pendingQuote.text;
-    }
+    quote = parsePendingQuote(stored[PENDING_QUOTE_KEY]);
   } catch {
     // Unreadable storage: proceed without a pending quote.
   }
@@ -255,6 +369,55 @@ async function consumePendingQuote(): Promise<void> {
   } catch {
     // Best-effort clear; a stale quote is harmless.
   }
+  return quote;
+}
+
+/**
+ * Explain requests are sent immediately; follow-ups become an editable
+ * composer prefill. When the panel has no live session/tab (or is busy) the
+ * quote is offered as a prefill rather than dropped.
+ */
+function applyPendingQuote(quote: PendingQuote | null): void {
+  if (!quote) return;
+
+  const canAutoSend =
+    !!session &&
+    !!activeTab &&
+    session.tabId > 0 &&
+    activeTab.id === session.tabId &&
+    !streaming;
+
+  if (quote.mode === "explain" && canAutoSend) {
+    clearQuoteChip();
+    input.value = "";
+    void sendRequest({ text: EXPLAIN_QUESTION, quote: quote.text, appendUser: true });
+    return;
+  }
+
+  pendingQuote = { text: quote.text, mode: quote.mode };
+  showQuoteChip();
+  input.value = quote.text;
+}
+
+function wireStorage(): void {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+
+    const pending = changes[PENDING_QUOTE_KEY];
+    if (pending) {
+      const quote = parsePendingQuote(pending.newValue);
+      if (quote) {
+        void chrome.storage.local
+          .remove(PENDING_QUOTE_KEY)
+          .catch(() => {
+            // A stale quote is harmless; never leave the panel blocked.
+          });
+        applyPendingQuote(quote);
+      }
+    }
+
+    if (changes.settings) void refreshSettingsFromStorage();
+  });
 }
 
 // --- active tab / page pinning ---
@@ -344,17 +507,38 @@ function handleSend(): void {
   if (!text || streaming) return;
   clearQuoteChip();
   input.value = "";
-  sendText(text, quote);
+  void sendRequest({ text, quote, appendUser: true });
 }
 
-function sendText(text: string, quote?: string): void {
+interface SendRequestOptions {
+  text: string;
+  quote?: string;
+  /** Retry keeps the existing user turn; a fresh send appends one. */
+  appendUser: boolean;
+}
+
+async function sendRequest(options: SendRequestOptions): Promise<void> {
+  const { text, quote, appendUser } = options;
   if (!session || streaming) return;
-  lastRequest = { text, quote };
+
   const now = Date.now();
-  session = appendMessage(session, { role: "user", content: text, quote, ts: now });
-  const messages: ChatMessage[] = session.messages.map((m) => ({ role: m.role, content: m.content }));
+  // Set the guard before the first await so a double click cannot start a
+  // second request while the recent-paragraph fetch is pending.
+  streaming = true;
+  lastRequest = { text, quote };
+  setInputEnabled(false);
+
+  if (appendUser) {
+    session = appendMessage(session, { role: "user", content: text, quote, ts: now });
+  }
+  renderAll();
+  persistHistory();
+
   // Once the pinned page navigates away, never keep injecting the old page's
   // title/URL/paragraphs. The conversation itself is preserved.
+  const recentParagraphs = isContextStale() ? [] : await fetchRecentParagraphs(session.tabId);
+
+  const messages: ChatMessage[] = session.messages.map((m) => ({ role: m.role, content: m.content }));
   const context: ChatContext = isContextStale()
     ? { pageUrl: "", title: "", quotes: quote ? [quote] : [], recentParagraphs: [] }
     : buildChatContext(session, quote ? [quote] : [], recentParagraphs);
@@ -364,10 +548,58 @@ function sendText(text: string, quote?: string): void {
 
   const requestId = newRequestId();
   currentRequestId = requestId;
-  streaming = true;
-  setInputEnabled(false);
 
   send({ type: "chat", requestId, sessionId: session.id, messages, context });
+}
+
+/**
+ * Ask the loaded content script for its last finished translations. A missing
+ * receiver, a slow answer, or a malformed payload all degrade to an empty list
+ * so chat never waits on page state.
+ */
+function fetchRecentParagraphs(tabId: number): Promise<RecentParagraph[]> {
+  if (tabId <= 0) return Promise.resolve([]);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const finish = (paragraphs: RecentParagraph[]): void => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      resolve(paragraphs);
+    };
+
+    timeoutId = setTimeout(() => finish([]), RECENT_TIMEOUT_MS);
+
+    let response: Promise<unknown>;
+    try {
+      response = chrome.tabs.sendMessage(tabId, {
+        type: "get-recent-translations",
+      } satisfies RecentTranslationsMessage);
+    } catch {
+      finish([]);
+      return;
+    }
+
+    Promise.resolve(response).then(
+      (value) => finish(extractRecentParagraphs(value)),
+      () => finish([]),
+    );
+  });
+}
+
+function extractRecentParagraphs(value: unknown): RecentParagraph[] {
+  if (!value || typeof value !== "object") return [];
+  const paragraphs = (value as { paragraphs?: unknown }).paragraphs;
+  if (!Array.isArray(paragraphs) || !paragraphs.every(isRecentParagraph)) return [];
+  return paragraphs;
+}
+
+function isRecentParagraph(value: unknown): value is RecentParagraph {
+  if (!value || typeof value !== "object") return false;
+  const paragraph = value as { source?: unknown; translation?: unknown };
+  return typeof paragraph.source === "string" && typeof paragraph.translation === "string";
 }
 
 function handleStop(): void {
@@ -384,9 +616,22 @@ function handleStop(): void {
 
 function handleRetry(): void {
   removeError();
+  if (!session || streaming || !lastRequest) return;
   const request = lastRequest;
-  if (!request) return;
-  sendText(request.text, request.quote);
+
+  // Drop the failed/partial assistant turn and keep the original user turn
+  // exactly once. `sendRequest` then sends history without an empty assistant
+  // placeholder and appends a fresh one for the new stream.
+  const messages = session.messages.slice();
+  while (messages.length > 0 && messages.at(-1)!.role === "assistant") messages.pop();
+  if (!messages.some((message) => message.role === "user")) {
+    messages.push({ role: "user", content: request.text, quote: request.quote, ts: Date.now() });
+  }
+  session = { ...session, messages };
+  renderAll();
+  persistHistory();
+
+  void sendRequest({ text: request.text, quote: request.quote, appendUser: false });
 }
 
 function setInputEnabled(enabled: boolean): void {
@@ -482,7 +727,9 @@ function handleError(message: Extract<ChatBackgroundToClient, { type: "error" }>
   streaming = false;
   assistantEl = null;
   persistHistory();
-  showError(message.message, "重新发送");
+  // The provider's raw message is English and can leak internals; show only
+  // the normalized Chinese copy (the dispatch layer already logs failures).
+  showError(CHINESE_ERRORS[message.code] ?? CHINESE_ERRORS.unknown, "重新发送");
   setInputEnabled(true);
 }
 

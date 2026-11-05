@@ -20,6 +20,50 @@
   font-size: 12px;
 }
 
+/* Provider/model header (spec §8.9); uses the global provider config. */
+.provider-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.provider-select {
+  max-width: 45%;
+  padding: 3px 6px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
+.provider-model {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #59636e;
+}
+
+.provider-select[hidden],
+.provider-settings[hidden] {
+  display: none;
+}
+
+.provider-settings {
+  appearance: none;
+  border: 0;
+  padding: 2px 4px;
+  background: transparent;
+  color: #0969da;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* Page-switch banner: shown when the active tab differs from the session's. */
 .banner {
   display: flex;
