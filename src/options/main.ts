@@ -253,7 +253,7 @@ function buildShell(): void {
   const header = el("header", "page-header");
   header.append(
     el("h1", undefined, "翻译设置"),
-    el("p", "page-subtitle", "所有配置只保存在本机浏览器中；API Key 只发送给你配置的接口地址。"),
+    el("p", "page-subtitle", "所有配置只保存在本机浏览器中（chrome.storage.local 为明文存储）；API Key 只发送给你配置的接口地址。"),
   );
   root.appendChild(header);
 
@@ -398,13 +398,13 @@ function openForm(provider: ProviderConfig | null): void {
   baseURLInput.value = base.baseURL;
   baseURLInput.placeholder = "https://api.openai.com";
   const baseURLField = field("接口地址", baseURLInput, "可省略 /v1，发送请求时会按需自动补全。");
+  form.appendChild(baseURLField);
   const appendV1Input = el("input", "pf-appendV1");
   appendV1Input.type = "checkbox";
   appendV1Input.checked = base.appendV1 !== false;
-  const appendV1Label = el("label", "checkbox-row");
-  appendV1Label.append(appendV1Input, "自动补 /v1");
-  baseURLField.appendChild(appendV1Label);
-  form.appendChild(baseURLField);
+  const appendV1Row = el("label", "checkbox-row pf-appendV1-row");
+  appendV1Row.append(appendV1Input, "自动补 /v1");
+  form.appendChild(appendV1Row);
 
   const apiKeyInput = el("input", "pf-apiKey");
   apiKeyInput.type = "password";
