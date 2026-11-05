@@ -1,7 +1,8 @@
 /**
- * Background service worker entry: port routing, SPA navigation notifications,
- * and tab cleanup. All provider/prompt/queue logic lives in `dispatch.ts`;
- * this file only wires chrome events to it.
+ * Background service worker entry: port routing, command shortcuts, SPA
+ * navigation notifications, side-panel behavior and tab cleanup. All
+ * provider/prompt/queue logic lives in `dispatch.ts`; this file only wires
+ * chrome events to it.
  */
 
 import { createDeps, handleChat, handleTranslate } from "./dispatch";
@@ -17,6 +18,80 @@ const deps = createDeps();
 
 /** Storage key where a pending selection quote waits for the panel to read it. */
 const PENDING_QUOTE_KEY = "chat.pendingQuote";
+
+/** Only the window the user last interacted with has a meaningful active tab. */
+const ACTIVE_TAB_QUERY: chrome.tabs.QueryInfo = { active: true, lastFocusedWindow: true };
+
+/**
+ * Toolbar clicks open the side panel without content-script help (spec §8.9).
+ * Register it at startup, not only on install: a service-worker restart must
+ * not lose the behavior. Failures are non-fatal in every Chrome version.
+ */
+try {
+  void chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch(() => {
+      // Older Chrome or a missing permission; the panel shortcut still works.
+    });
+} catch {
+  // `setPanelBehavior` may be unavailable; never break the worker import.
+}
+
+/**
+ * Resolve the active tab in the last focused window. A missing tab (or a
+ * rejected query) simply makes the command a no-op.
+ */
+async function activeTabId(): Promise<number | undefined> {
+  try {
+    const tabs = await chrome.tabs.query(ACTIVE_TAB_QUERY);
+    return tabs[0]?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Deliver a runtime message to the active tab's content script. There may be no
+ * receiver (chrome:// pages, the guard failed to load), which Chrome reports as
+ * a rejected promise; that is expected and must stay silent.
+ */
+function sendToActiveTab(message: { type: "activate" | "ask-selection" }): void {
+  void activeTabId().then((tabId) => {
+    if (tabId === undefined) return;
+    try {
+      void chrome.tabs.sendMessage(tabId, message).catch(() => {
+        // No content script in this tab.
+      });
+    } catch {
+      // Synchronous sendMessage failure; same expected no-receiver case.
+    }
+  });
+}
+
+/**
+ * Command shortcuts (spec §10). `translate-page` activates the content main
+ * through the guard; `ask-selection` asks it to explain the current selection;
+ * `toggle-side-panel` opens the panel (the command event carries a user
+ * gesture, which `sidePanel.open` requires).
+ */
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "translate-page") {
+    sendToActiveTab({ type: "activate" });
+  } else if (command === "ask-selection") {
+    sendToActiveTab({ type: "ask-selection" });
+  } else if (command === "toggle-side-panel") {
+    void activeTabId().then((tabId) => {
+      if (tabId === undefined) return;
+      try {
+        void chrome.sidePanel.open({ tabId }).catch(() => {
+          // The gesture expired or the panel is unavailable.
+        });
+      } catch {
+        // Synchronous failure outside a user gesture.
+      }
+    });
+  }
+});
 
 /**
  * Content scripts ask for the side panel by sending `open-chat` (a runtime

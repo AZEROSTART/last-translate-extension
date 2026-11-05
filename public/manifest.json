@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "把网页翻译成中文并插在原文下方，支持自定义 OpenAI 兼容模型与侧栏问答。",
   "minimum_chrome_version": "120",
+  "action": {},
   "permissions": [
     "storage",
     "sidePanel",
@@ -20,6 +21,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content_guard.js"],
+      "css": ["inject.css"],
       "run_at": "document_start",
       "all_frames": false
     }
@@ -31,9 +33,18 @@
     }
   ],
   "commands": {
-    "translate-page": { "suggested_key": { "default": "Alt+A" } },
-    "ask-selection": { "suggested_key": { "default": "Alt+Q" } },
-    "toggle-side-panel": { "suggested_key": { "default": "Alt+S" } }
+    "translate-page": {
+      "suggested_key": { "default": "Alt+A" },
+      "description": "翻译当前页面"
+    },
+    "ask-selection": {
+      "suggested_key": { "default": "Alt+Q" },
+      "description": "解释当前选区"
+    },
+    "toggle-side-panel": {
+      "suggested_key": { "default": "Alt+S" },
+      "description": "打开侧栏"
+    }
   },
   "side_panel": {
     "default_path": "panel.html"

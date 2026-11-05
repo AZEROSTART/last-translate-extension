@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>E2E SPA article</title>
+  </head>
+  <body>
+    <header>
+      <button id="swap-content" type="button">Swap content</button>
+    </header>
+    <main id="spa-article">
+      <div id="spa-content">
+        <p id="spa-p1" class="spa-paragraph">
+          The original first paragraph describes a street before the rain arrives.
+        </p>
+        <p id="spa-p2" class="spa-paragraph">
+          The original second paragraph mentions a bicycle leaning against the wall.
+        </p>
+      </div>
+    </main>
+    <script>
+      document.getElementById("swap-content").addEventListener("click", () => {
+        document.getElementById("spa-content").innerHTML =
+          '<p id="spa-p3" class="spa-paragraph">The replaced first paragraph talks about a window left open all night.</p>' +
+          '<p id="spa-p4" class="spa-paragraph">The replaced second paragraph notices fresh footprints near the door.</p>';
+      });
+    </script>
+  </body>
+</html>

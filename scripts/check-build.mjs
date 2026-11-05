@@ -38,6 +38,9 @@ if (manifest) {
     for (const script of entry.js ?? []) {
       requireFile(script, "content_scripts");
     }
+    for (const stylesheet of entry.css ?? []) {
+      requireFile(stylesheet, "content_scripts");
+    }
   }
 
   const serviceWorker = manifest.background?.service_worker;

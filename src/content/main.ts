@@ -16,7 +16,6 @@ import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
 import { initSelectionBubble } from "./selection";
 import type { BackgroundToClient, ClientToBackground } from "../shared/types";
-import cssText from "../styles/inject.css?inline";
 
 /** Per-page paragraph ceiling (spec §13); beyond this we translate the first N only. */
 const MAX_PARAGRAPHS = 2000;
@@ -71,10 +70,8 @@ export function runContentMain(): void {
   if (started) return;
   started = true;
 
-  // The selection bubble is available before any translation, so its styles
-  // must exist at startup rather than waiting for the first `translatePage()`.
-  ensureStyles();
-
+  // Bubbles and translation nodes are styled by `inject.css` from the manifest
+  // content_scripts CSS entry, which page CSP cannot block (Ruling 20).
   chrome.runtime.onMessage.addListener(handleRuntimeMessage);
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
@@ -90,8 +87,6 @@ async function translatePage(): Promise<void> {
   if (active) return;
   active = true;
 
-  // Idempotent safety net: reuses the startup stylesheet if it is still there.
-  ensureStyles();
   startPruneTimer();
   startObserver();
   startScrollListener();
@@ -307,10 +302,26 @@ function handleDisconnect(): void {
 
 function handleRuntimeMessage(message: unknown, sender: chrome.runtime.MessageSender): void {
   if (!message || typeof message !== "object") return;
-  if ((message as { type?: string }).type !== "page-navigated") return;
+  const type = (message as { type?: unknown }).type;
+  if (type !== "page-navigated" && type !== "activate" && type !== "ask-selection") return;
   if (sender?.id !== chrome.runtime.id) return;
-  if (!active) return;
-  void rescan();
+
+  if (type === "page-navigated") {
+    if (active) void rescan();
+    return;
+  }
+
+  // `activate` is produced by the background command wiring. The first one is
+  // consumed by the guard (which loads this bundle); subsequent presses reach
+  // this listener and start translation.
+  if (type === "activate") {
+    void translatePage();
+    return;
+  }
+
+  // Alt+Q: explain the current selection in the side panel (spec §8.9).
+  const text = window.getSelection()?.toString().trim() ?? "";
+  if (text.length >= 2) sendOpenChat(text, "explain");
 }
 
 function handleVisibilityChange(): void {
@@ -421,18 +432,6 @@ function stopPruneTimer(): void {
     clearInterval(pruneTimer);
     pruneTimer = null;
   }
-}
-
-/**
- * Inject the shared content stylesheet exactly once. Safe to call from both
- * startup and activation: the existing `<style data-ilmt>` element is reused.
- */
-export function ensureStyles(): void {
-  if (document.querySelector("style[data-ilmt]")) return;
-  const style = document.createElement("style");
-  style.setAttribute("data-ilmt", "");
-  style.textContent = cssText;
-  (document.head ?? document.documentElement).appendChild(style);
 }
 
 async function readTargetLang(): Promise<string> {

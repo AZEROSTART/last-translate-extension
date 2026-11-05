@@ -5,11 +5,10 @@ afterEach(() => {
   if (main && typeof main.restore === "function") main.restore();
   delete (globalThis as any).__ilmtTestPort;
   delete (globalThis as any).__ilmtMain;
-  document.querySelectorAll("style[data-ilmt]").forEach((el) => el.remove());
   document.body.innerHTML = "";
 });
 
-it("injects the bubble stylesheet once at startup and keeps it single on activation", async () => {
+it("initializes the bubble once at startup and adds no inline stylesheet", async () => {
   document.body.innerHTML = `<p>Hello world</p>`;
   const { runContentMain } = await import("../../src/content/main");
 
@@ -21,9 +20,9 @@ it("injects the bubble stylesheet once at startup and keeps it single on activat
   expect(mouseupRegistrations).toHaveLength(1);
   addListener.mockRestore();
 
-  const styles = document.querySelectorAll("style[data-ilmt]");
-  expect(styles).toHaveLength(1);
-  expect(styles[0].textContent).toContain(".ilmt-bubble");
+  // Styles arrive through the manifest content_scripts CSS entry, never an
+  // inline <style>, so a strict page CSP cannot block them.
+  expect(document.querySelectorAll("style[data-ilmt]")).toHaveLength(0);
 
   // The bubble is usable before the page is translated: selecting text shows it.
   const range = document.createRange();
@@ -35,8 +34,8 @@ it("injects the bubble stylesheet once at startup and keeps it single on activat
   await new Promise((resolve) => setTimeout(resolve, 60));
   expect(document.querySelectorAll(".ilmt-bubble")).toHaveLength(1);
 
-  // Activation later must reuse the startup stylesheet, not add a second one.
+  // Activation must not start injecting styles either.
   (globalThis as any).__ilmtTestPort = { send: vi.fn() };
   await (globalThis as any).__ilmtMain.translatePage();
-  expect(document.querySelectorAll("style[data-ilmt]")).toHaveLength(1);
+  expect(document.querySelectorAll("style[data-ilmt]")).toHaveLength(0);
 });
