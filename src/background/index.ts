@@ -123,17 +123,61 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 /**
+ * Only this extension may drive the background (spec §12), and content-script
+ * senders must be the top frame. Extension pages and the service worker have no
+ * `tab`, so they stay trusted; tab senders that expose a `frameId` must be 0.
+ */
+function isTrustedSender(sender: chrome.runtime.MessageSender | undefined): boolean {
+  if (!deps.isTrustedSender(sender ?? {})) return false;
+  if (sender?.tab !== undefined && sender.frameId !== undefined && sender.frameId !== 0) return false;
+  return true;
+}
+
+/** Open the options page, falling back to a normal tab if that is unavailable. */
+function openOptionsPage(): void {
+  try {
+    if (typeof chrome.runtime.openOptionsPage !== "function") {
+      createOptionsTab();
+      return;
+    }
+    const opening = chrome.runtime.openOptionsPage();
+    if (opening && typeof opening.catch === "function") {
+      void opening.catch(() => createOptionsTab());
+    }
+    return;
+  } catch {
+    // Older Chrome or a restricted context; use the tab fallback.
+  }
+  createOptionsTab();
+}
+
+function createOptionsTab(): void {
+  try {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("options.html") }).catch(() => {
+      // Nowhere to open the page; never surface this to the sender.
+    });
+  } catch {
+    // Synchronous failure; swallow it for the same reason.
+  }
+}
+
+/**
  * Content scripts ask for the side panel by sending `open-chat` (a runtime
- * message, not a port message). Stash the selection under `chat.pendingQuote`
- * so the panel can pre-fill its quote chip, then open the panel for the sender's
- * tab. `sidePanel.open` requires a user gesture and may reject; that failure
- * must never surface to the page.
+ * message, not a port message) and for settings via `open-options`. Stash the
+ * selection under `chat.pendingQuote` so the panel can pre-fill its quote chip,
+ * then open the panel for the sender's tab. `sidePanel.open` requires a user
+ * gesture and may reject; that failure must never surface to the page.
  */
 chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender) => {
   if (!message || typeof message !== "object") return;
   const msg = message as { type?: unknown };
-  if (msg.type !== "open-chat") return;
-  if (sender.id !== chrome.runtime.id) return;
+  if (msg.type !== "open-chat" && msg.type !== "open-options") return;
+  if (!isTrustedSender(sender)) return;
+
+  if (msg.type === "open-options") {
+    openOptionsPage();
+    return;
+  }
 
   const openChat = message as OpenChatMessage;
   const tabId = sender.tab?.id;
@@ -155,8 +199,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
 });
 
 chrome.runtime.onConnect.addListener((port) => {
-  // Reject any connection not from this extension (spec §12).
-  if (!deps.isTrustedSender(port.sender ?? {})) {
+  // Reject any connection not from this extension's top frame (spec §12).
+  if (!isTrustedSender(port.sender)) {
     port.disconnect();
     return;
   }
@@ -167,7 +211,7 @@ chrome.runtime.onConnect.addListener((port) => {
     const senderTabId = port.sender?.tab?.id;
 
     port.onMessage.addListener((raw: ClientToBackground) => {
-      if (!deps.isTrustedSender(port.sender ?? {})) return;
+      if (!isTrustedSender(port.sender)) return;
 
       if (raw.type === "translate") {
         // `sender.tab.id` is authoritative; the message's tabId is only a
@@ -196,7 +240,7 @@ chrome.runtime.onConnect.addListener((port) => {
     const senderTabId = port.sender?.tab?.id;
 
     port.onMessage.addListener((raw: ChatClientToBackground) => {
-      if (!deps.isTrustedSender(port.sender ?? {})) return;
+      if (!isTrustedSender(port.sender)) return;
 
       if (raw.type === "chat") {
         const tabId = port.sender?.tab?.id ?? 0;

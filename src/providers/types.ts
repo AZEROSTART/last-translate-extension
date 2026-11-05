@@ -8,6 +8,13 @@ export interface CompletionRequest {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /**
+   * Total wall-clock budget for a streaming request. `undefined` uses the
+   * provider default (180s); `null` disables the total timer entirely
+   * (connect/first-token/idle deadlines still apply). Chat uses `null` because
+   * spec §8.9 sets no total timeout for an answer.
+   */
+  totalTimeoutMs?: number | null;
 }
 
 /** A non-streaming completion, with usage when the provider reports it. */

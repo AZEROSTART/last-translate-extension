@@ -1,5 +1,12 @@
-import { it, expect, vi } from "vitest";
-import { handleTranslate, handleChat, createDeps, createSingleSegmentPrefixStripper } from "../../src/background/dispatch";
+import { it, expect, vi, afterEach } from "vitest";
+import {
+  handleTranslate,
+  handleChat,
+  createDeps,
+  createSingleSegmentPrefixStripper,
+  isContextLengthError,
+  penalizedRps,
+} from "../../src/background/dispatch";
 import type { Deps } from "../../src/background/dispatch";
 import type { CompletionRequest, CompletionResult, ProviderAdapter } from "../../src/providers";
 import { ProviderError } from "../../src/shared/errors";
@@ -47,6 +54,10 @@ function deps(over: Partial<Deps> = {}) {
 
 const items = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `p_${i + 1}`, text: `hello ${i + 1}`, hash: `h${i + 1}` }));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 it("returns cached results without calling the provider", async () => {
   const { d, sent, send } = deps({ cache: { get: async () => "缓存的译文", put: async () => {} } });
@@ -284,4 +295,400 @@ it("streams a chat reply and emits delta then finish", async () => {
     1,
   );
   expect(sent.map((m) => m.type)).toEqual(["delta", "delta", "finish"]);
+});
+
+// ---------------------------------------------------------------------------
+// Settings/cache failures must never leave a request inflight.
+// ---------------------------------------------------------------------------
+
+it("reports a settings read failure and finishes instead of aborting silently", async () => {
+  const { d, sent, send } = deps({
+    getSettings: async () => {
+      throw new Error("IndexedDB is unavailable");
+    },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rs1", tabId: 1, items: items(2) }, send);
+
+  expect(sent).toEqual([
+    {
+      type: "error",
+      requestId: "rs1",
+      code: "bad_response",
+      message: "读取设置失败，请重试",
+      retryable: false,
+      ids: ["p_1", "p_2"],
+    },
+    { type: "finish", requestId: "rs1" },
+  ]);
+  expect(d.adapter.complete).not.toHaveBeenCalled();
+  expect(d.adapter.streamCompletion).not.toHaveBeenCalled();
+});
+
+it("reports a settings read failure to the chat panel and finishes", async () => {
+  const { d, sent, send } = deps({
+    getSettings: async () => {
+      throw new Error("storage broke");
+    },
+  });
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cs1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "你好" }],
+      context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+    },
+    send,
+    1,
+  );
+
+  expect(sent).toEqual([
+    { type: "error", requestId: "cs1", code: "bad_response", message: "读取设置失败，请重试", retryable: false },
+    { type: "finish", requestId: "cs1" },
+  ]);
+  expect(d.adapter.streamCompletion).not.toHaveBeenCalled();
+});
+
+it("treats a cache read failure as a miss and still translates", async () => {
+  const { d, sent, send } = deps({
+    cache: {
+      get: vi.fn(async () => {
+        throw new Error("IndexedDB read failed");
+      }),
+      put: vi.fn(async () => {}),
+    },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rc1", tabId: 1, items: items(1) }, send);
+
+  expect(d.adapter.streamCompletion).toHaveBeenCalledTimes(1);
+  expect(sent).toContainEqual({ type: "result", requestId: "rc1", items: [{ id: "p_1", text: "你好" }] });
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rc1" });
+});
+
+it("treats a cache write failure as non-fatal and still reports the result", async () => {
+  const { d, sent, send } = deps({
+    cache: {
+      get: vi.fn(async () => undefined),
+      put: vi.fn(async () => {
+        throw new Error("IndexedDB write failed");
+      }),
+    },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rc2", tabId: 1, items: items(1) }, send);
+
+  expect(sent).toContainEqual({ type: "result", requestId: "rc2", items: [{ id: "p_1", text: "你好" }] });
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rc2" });
+});
+
+it("sends exactly one finish when every group fails", async () => {
+  const rejection = () => new ProviderError("auth", "bad key", { retryable: false });
+  const complete = vi.fn(async () => {
+    throw rejection();
+  });
+  const streamCompletion = vi.fn(async function* (): AsyncGenerator<string> {
+    throw rejection();
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ complete, streamCompletion }) });
+
+  // 21 items form two groups (the grouping cap is 20).
+  await handleTranslate(d, { type: "translate", requestId: "rg1", tabId: 1, items: items(21) }, send);
+
+  expect(sent.filter((m) => m.type === "error")).toHaveLength(2);
+  expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// Chat timeout policy (spec §8.9: no total timeout) and prompt layout (§12).
+// ---------------------------------------------------------------------------
+
+it("requests no total timeout for chat and keeps the default for translation", async () => {
+  const chatStream = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {});
+  const { d: chatDeps, send: chatSend } = deps({ adapter: fakeAdapter({ streamCompletion: chatStream }) });
+  await handleChat(
+    chatDeps,
+    {
+      type: "chat",
+      requestId: "ct1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "你好" }],
+      context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+    },
+    chatSend,
+    1,
+  );
+  expect(chatStream.mock.calls[0][1].totalTimeoutMs).toBeNull();
+
+  const translateStream = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
+    yield "[1] 你好";
+  });
+  const { d: translateDeps, send: translateSend } = deps({ adapter: fakeAdapter({ streamCompletion: translateStream }) });
+  await handleTranslate(
+    translateDeps,
+    { type: "translate", requestId: "tt1", tabId: 1, items: items(1) },
+    translateSend,
+  );
+  expect(translateStream.mock.calls[0][1].totalTimeoutMs).toBeUndefined();
+});
+
+it("keeps page context out of the system prompt and inside the user message", async () => {
+  const streamCompletion = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
+    yield "好的";
+  });
+  const { d, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cp1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "请解释这句话" }],
+      context: {
+        pageUrl: "https://example.com/page",
+        title: "示例页面标题",
+        quotes: ["引用文字"],
+        recentParagraphs: [{ source: "原文段落", translation: "译文段落" }],
+      },
+    },
+    send,
+    1,
+  );
+
+  const request = streamCompletion.mock.calls[0][1];
+  const system = request.messages[0];
+  const user = request.messages[1];
+
+  expect(system.role).toBe("system");
+  for (const secret of ["https://example.com/page", "示例页面标题", "引用文字", "原文段落", "译文段落"]) {
+    expect(system.content).not.toContain(secret);
+  }
+
+  expect(user.role).toBe("user");
+  expect(user.content).toContain("【页面上下文】");
+  for (const contextText of ["https://example.com/page", "示例页面标题", "引用文字", "原文段落", "译文段落"]) {
+    expect(user.content).toContain(contextText);
+  }
+  expect(user.content).toContain("【问题】");
+  expect(user.content).toContain("请解释这句话");
+  // The question must appear exactly once, not duplicated by the context block.
+  expect(user.content.match(/请解释这句话/g)).toHaveLength(1);
+});
+
+it("attaches page context to the latest user turn without touching earlier turns", async () => {
+  const streamCompletion = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
+    yield "好";
+  });
+  const { d, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cp2",
+      sessionId: "s1",
+      messages: [
+        { role: "user", content: "第一问" },
+        { role: "assistant", content: "第一答" },
+        { role: "user", content: "第二问" },
+      ],
+      context: {
+        pageUrl: "https://example.com/page",
+        title: "示例页面标题",
+        quotes: [],
+        recentParagraphs: [],
+      },
+    },
+    send,
+    1,
+  );
+
+  const messages = streamCompletion.mock.calls[0][1].messages;
+  expect(messages[1]).toEqual({ role: "user", content: "第一问" });
+  expect(messages[2]).toEqual({ role: "assistant", content: "第一答" });
+  expect(messages[3].content).toContain("【页面上下文】");
+  expect(messages[3].content).toContain("第二问");
+  expect(messages[3].content.match(/第二问/g)).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// Chat retries must not duplicate streamed deltas.
+// ---------------------------------------------------------------------------
+
+it("does not retry a chat stream that already emitted a delta", async () => {
+  const streamCompletion = vi.fn(async function* () {
+    yield "已经发出的内容";
+    throw new ProviderError("network", "connection reset", { retryable: true });
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cr1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "你好" }],
+      context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+    },
+    send,
+    1,
+  );
+
+  expect(streamCompletion).toHaveBeenCalledTimes(1);
+  expect(sent.filter((m) => m.type === "error")).toHaveLength(1);
+  expect(sent.filter((m) => m.type === "delta")).toHaveLength(1);
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "cr1" });
+});
+
+it("still retries a chat stream that failed before emitting any delta", async () => {
+  let calls = 0;
+  const streamCompletion = vi.fn(async function* () {
+    calls += 1;
+    if (calls === 1) throw new ProviderError("network", "connection reset", { retryable: true });
+    yield "好了";
+  });
+  const { d, sent, send } = deps({
+    adapter: fakeAdapter({ streamCompletion }),
+    sleep: async () => {},
+  });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cr2",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "你好" }],
+      context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+    },
+    send,
+    1,
+  );
+
+  expect(streamCompletion).toHaveBeenCalledTimes(2);
+  expect(sent.filter((m) => m.type === "delta")).toHaveLength(1);
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "cr2" });
+});
+
+// ---------------------------------------------------------------------------
+// Context-length failures split multi-item groups once (spec §11).
+// ---------------------------------------------------------------------------
+
+it("recognizes context-length provider failures", () => {
+  expect(
+    isContextLengthError(
+      new ProviderError("bad_response", "This model's maximum context length is 4097 tokens", { status: 400 }),
+    ),
+  ).toBe(true);
+  expect(isContextLengthError(new ProviderError("bad_response", "input is too long", { status: 413 }))).toBe(true);
+  expect(isContextLengthError(new ProviderError("bad_response", "payload too large", { status: 413 }))).toBe(true);
+  expect(isContextLengthError(new ProviderError("bad_response", "too many tokens", { status: 400 }))).toBe(true);
+  expect(isContextLengthError(new ProviderError("bad_response", "invalid request", { status: 400 }))).toBe(false);
+  expect(isContextLengthError(new ProviderError("auth", "context", { status: 401 }))).toBe(false);
+  expect(isContextLengthError(new Error("context too long"))).toBe(false);
+});
+
+it("splits a multi-item group in half once on a context-length failure", async () => {
+  const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
+    const lines = req.messages[1].content.trim().split("\n");
+    if (lines.length === 4) {
+      throw new ProviderError("bad_response", "maximum context length exceeded", { status: 400 });
+    }
+    return { text: "[1] 甲\n[2] 乙" };
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ complete }) });
+
+  await handleTranslate(d, { type: "translate", requestId: "rx1", tabId: 1, items: items(4) }, send);
+
+  expect(complete).toHaveBeenCalledTimes(3);
+  expect(complete.mock.calls[0][1].messages[1].content.trim().split("\n")).toHaveLength(4);
+  expect(complete.mock.calls[1][1].messages[1].content.trim().split("\n")).toHaveLength(2);
+  expect(complete.mock.calls[2][1].messages[1].content.trim().split("\n")).toHaveLength(2);
+
+  const result = sent.find((m) => m.type === "result");
+  expect(result.items).toEqual([
+    { id: "p_1", text: "甲" },
+    { id: "p_2", text: "乙" },
+    { id: "p_3", text: "甲" },
+    { id: "p_4", text: "乙" },
+  ]);
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rx1" });
+});
+
+it("does not split a single-item group and reports the context failure", async () => {
+  const streamCompletion = vi.fn(async function* (): AsyncGenerator<string> {
+    throw new ProviderError("bad_response", "context length exceeded", { status: 400 });
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+
+  await handleTranslate(d, { type: "translate", requestId: "rx2", tabId: 1, items: items(1) }, send);
+
+  expect(streamCompletion).toHaveBeenCalledTimes(1);
+  const err = sent.find((m) => m.type === "error");
+  expect(err.code).toBe("bad_response");
+  expect(err.ids).toEqual(["p_1"]);
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rx2" });
+});
+
+it("splits at most one level and fails a half that is still too long", async () => {
+  const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
+    const lines = req.messages[1].content.trim().split("\n");
+    if (lines.length >= 2) {
+      throw new ProviderError("bad_response", "maximum context length exceeded", { status: 400 });
+    }
+    return { text: "[1] 甲" };
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ complete }) });
+
+  await handleTranslate(d, { type: "translate", requestId: "rx3", tabId: 1, items: items(4) }, send);
+
+  // 4-item group + two 2-item halves = three calls, no further splitting.
+  expect(complete).toHaveBeenCalledTimes(3);
+  expect(sent.filter((m) => m.type === "error")).toHaveLength(1);
+  expect(sent.find((m) => m.type === "error").ids).toEqual(["p_1", "p_2", "p_3", "p_4"]);
+  expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// 429 exhaustion halves the effective RPS for about a minute.
+// ---------------------------------------------------------------------------
+
+it("halves the effective RPS for 60s after a rate-limit group failure", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(1_000_000));
+
+  const complete = vi.fn(async () => {
+    throw new ProviderError("rate_limit", "busy", { retryable: true });
+  });
+  const { d } = deps({
+    getSettings: async () => ({ ...settings, concurrency: 2, maxRPS: 10 }),
+    adapter: fakeAdapter({ complete }),
+    sleep: async () => {},
+  });
+  const setLimits = vi.spyOn(d.queue, "setLimits");
+
+  const send1 = vi.fn();
+  await handleTranslate(d, { type: "translate", requestId: "rl1", tabId: 1, items: items(2) }, send1);
+  expect(setLimits.mock.calls).toEqual([[2, 10]]);
+
+  setLimits.mockClear();
+  const send2 = vi.fn();
+  await handleTranslate(d, { type: "translate", requestId: "rl2", tabId: 1, items: items(2) }, send2);
+  expect(setLimits.mock.calls).toEqual([[2, 5]]);
+
+  await vi.advanceTimersByTimeAsync(60_001);
+
+  setLimits.mockClear();
+  const send3 = vi.fn();
+  await handleTranslate(d, { type: "translate", requestId: "rl3", tabId: 1, items: items(2) }, send3);
+  expect(setLimits.mock.calls).toEqual([[2, 10]]);
+});
+
+it("penalizedRps halves rates without ever dropping below 1", () => {
+  expect(penalizedRps(10, false)).toBe(10);
+  expect(penalizedRps(10, true)).toBe(5);
+  expect(penalizedRps(3, true)).toBe(1);
+  expect(penalizedRps(1, true)).toBe(1);
+  expect(penalizedRps(0, true)).toBe(1);
 });

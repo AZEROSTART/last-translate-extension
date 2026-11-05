@@ -47,8 +47,34 @@ it("does not collect the same element twice", async () => {
   expect(second).toHaveLength(0);
 });
 
-describe("target language and marks", () => {
-  it("compares language prefixes against targetLang", async () => {
+describe("source sanitizing", () => {
+  it("strips C0 control characters without touching the page nodes", async () => {
+    document.body.innerHTML = "";
+    const paragraph = document.createElement("p");
+    // Assign the string directly: the HTML parser itself drops U+0000.
+    paragraph.textContent = "Hello\u0000 \u0001world\u001f text";
+    document.body.appendChild(paragraph);
+
+    const ps = await collectParagraphs(document.body);
+
+    expect(ps).toHaveLength(1);
+    expect(ps[0].text).toBe("Hello world text");
+    expect(paragraph.textContent).toContain("\u0000");
+    expect(paragraph.textContent).toContain("\u001f");
+  });
+
+  it("caps each paragraph at 20,000 characters", async () => {
+    const root = html(`<p>${"a".repeat(25_000)}</p>`);
+    const ps = await collectParagraphs(root);
+
+    expect(ps).toHaveLength(1);
+    expect(ps[0].text).toHaveLength(20_000);
+    // The DOM is untouched: only the text sent for translation is clamped.
+    expect(root.querySelector("p")!.textContent).toHaveLength(25_000);
+  });
+});
+
+describe("target language and marks", () => {  it("compares language prefixes against targetLang", async () => {
     const root = html(`<p lang="zh">这是中文文本内容。</p><p lang="en">This is English text.</p>`);
     const ps = await collectParagraphs(root, {
       targetLang: "zh-CN",

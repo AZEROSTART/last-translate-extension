@@ -353,10 +353,18 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
   let totalTimedOut = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
-  const totalTimer = setTimeout(() => {
-    totalTimedOut = true;
-    controller.abort();
-  }, PROVIDER_TIMEOUTS.totalMs);
+  // `undefined` keeps the default budget; `null` disables the total timer, as
+  // side-panel chat has no total deadline (spec §8.9). The connect,
+  // first-token and idle deadlines below still protect the stream.
+  const totalTimeoutMs =
+    req.totalTimeoutMs === undefined ? PROVIDER_TIMEOUTS.totalMs : req.totalTimeoutMs;
+  const totalTimer =
+    totalTimeoutMs === null
+      ? undefined
+      : setTimeout(() => {
+          totalTimedOut = true;
+          controller.abort();
+        }, totalTimeoutMs);
 
   try {
     // The connect deadline is cleared when headers arrive; the 45s/60s/180s

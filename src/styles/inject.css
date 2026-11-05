@@ -23,6 +23,74 @@
   opacity: 0.4;
 }
 
+/* "Translation on" banner with a restore action (fixed, CSP-safe styles). */
+.ilmt-active-banner {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2328;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Top error banner: one at a time, never auto-closed. */
+.ilmt-error-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(92vw, 720px);
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: #fff4e5;
+  color: #663c00;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ilmt-error-message {
+  flex: 1 1 auto;
+}
+
+.ilmt-active-banner button,
+.ilmt-error-banner button {
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ilmt-active-banner button:hover,
+.ilmt-error-banner button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.ilmt-error-banner .ilmt-error-close {
+  border-color: transparent;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
 /* Selection bubble (划词气泡): floats above the selection when there is room. */
 .ilmt-bubble {
   position: fixed;

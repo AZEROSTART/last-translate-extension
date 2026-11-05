@@ -50,6 +50,11 @@ export class ParagraphRegistry {
     if (record) record.translation = translation;
   }
 
+  /** Drop one record (an edited paragraph must be re-collected under a fresh id). */
+  remove(id: string): void {
+    this.records.delete(id);
+  }
+
   /**
    * Take up to `limit` `queued` records in insertion order (FIFO) and mark them
    * `inflight`. Returns the records that were taken.

@@ -461,3 +461,102 @@ describe("getAdapter", () => {
     expect(adapter.streamCompletion).toBe(streamCompletion);
   });
 });
+
+describe("streamCompletion total timeout", () => {
+  /**
+   * A body whose reads can be fed on demand. If the request signal aborts, the
+   * stream errors like a real fetch body would.
+   */
+  function controlledStream() {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    mockFetch(async (_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          controller = c;
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              try {
+                c.error(init.signal?.reason);
+              } catch {
+                // Already closed.
+              }
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    return {
+      enqueue(text: string) {
+        controller.enqueue(new TextEncoder().encode(text));
+      },
+      close() {
+        controller.close();
+      },
+    };
+  }
+
+  it("does not apply a total deadline when totalTimeoutMs is null", async () => {
+    vi.useFakeTimers();
+    const body = controlledStream();
+    const deltas: string[] = [];
+    const consumed = (async () => {
+      for await (const delta of streamCompletion(cfg, req({ totalTimeoutMs: null }))) deltas.push(delta);
+    })();
+    const settled = consumed.then(
+      () => "done" as const,
+      (err: unknown) => err,
+    );
+
+    await vi.advanceTimersByTimeAsync(0); // headers arrive
+
+    // Keep the first-token/idle budgets satisfied while crossing 180s.
+    for (let i = 0; i < 7; i += 1) {
+      try {
+        body.enqueue('data: {"choices":[{"delta":{"content":"x"}}]}\n\n');
+      } catch {
+        // A regression would have aborted the body already.
+      }
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+
+    try {
+      body.enqueue("data: [DONE]\n\n");
+      body.close();
+    } catch {
+      // Already aborted by a regression.
+    }
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(await settled).toBe("done");
+    expect(deltas.join("")).toBe("xxxxxxx");
+  });
+
+  it("still applies the 180s total deadline for the default request", async () => {
+    vi.useFakeTimers();
+    const body = controlledStream();
+    const deltas: string[] = [];
+    const consumed = (async () => {
+      for await (const delta of streamCompletion(cfg, req())) deltas.push(delta);
+    })();
+    const settled = consumed.then(
+      () => "done" as const,
+      (err: unknown) => err,
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    for (let i = 0; i < 7; i += 1) {
+      try {
+        body.enqueue('data: {"choices":[{"delta":{"content":"x"}}]}\n\n');
+      } catch {
+        // The total deadline has fired, as expected.
+      }
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+
+    expect(await settled).toMatchObject({ code: "timeout", retryable: true });
+  });
+});

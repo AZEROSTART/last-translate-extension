@@ -18,11 +18,15 @@ function installChrome() {
   const storageSet = vi.fn(async () => {});
   const tabsQuery = vi.fn(async () => [{ id: 42 }]);
   const tabsSendMessage = vi.fn(async () => undefined);
+  const openOptionsPage = vi.fn(async () => {});
+  const tabsCreate = vi.fn(async () => ({}));
   (globalThis as any).chrome = {
     runtime: {
       id: "test-extension-id",
       onConnect: { addListener: (cb: Listener) => onConnect.push(cb) },
       onMessage: { addListener: (cb: Listener) => onMessage.push(cb) },
+      openOptionsPage,
+      getURL: (path: string) => `chrome-extension://test-extension-id/${path}`,
     },
     commands: { onCommand: { addListener: (cb: Listener) => onCommand.push(cb) } },
     webNavigation: { onHistoryStateUpdated: { addListener: vi.fn() } },
@@ -30,6 +34,7 @@ function installChrome() {
       onRemoved: { addListener: vi.fn() },
       query: tabsQuery,
       sendMessage: tabsSendMessage,
+      create: tabsCreate,
     },
     sidePanel: { open: sidePanelOpen, setPanelBehavior },
     storage: { local: { set: storageSet, get: vi.fn(async () => ({})), remove: vi.fn(async () => {}) } },
@@ -43,14 +48,19 @@ function installChrome() {
     storageSet,
     tabsQuery,
     tabsSendMessage,
+    openOptionsPage,
+    tabsCreate,
   };
 }
 
-function fakePort(name: string, tabId: number | undefined) {
+function fakePort(name: string, tabId: number | undefined, frameId?: number) {
   const disconnectListeners: Listener[] = [];
   return {
     name,
-    sender: tabId === undefined ? { id: "test-extension-id" } : { id: "test-extension-id", tab: { id: tabId } },
+    sender:
+      tabId === undefined
+        ? { id: "test-extension-id" }
+        : { id: "test-extension-id", tab: { id: tabId }, ...(frameId === undefined ? {} : { frameId }) },
     postMessage: vi.fn(),
     disconnect: vi.fn(),
     onMessage: { addListener: vi.fn() },
@@ -218,4 +228,115 @@ it("swallows sendMessage rejections when no content script is listening", async 
 
   expect(() => onCommand[0]("translate-page", { id: 7, tab: { id: 7 } })).not.toThrow();
   await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+it("opens the options page for a trusted top-frame tab sender", async () => {
+  const { onMessage, openOptionsPage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 0 });
+
+  expect(openOptionsPage).toHaveBeenCalledTimes(1);
+});
+
+it("opens the options page for an extension-page sender without a tab", async () => {
+  const { onMessage, openOptionsPage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "test-extension-id" });
+
+  expect(openOptionsPage).toHaveBeenCalledTimes(1);
+});
+
+it("ignores open-options from another extension", async () => {
+  const { onMessage, openOptionsPage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "someone-else", tab: { id: 9 }, frameId: 0 });
+
+  expect(openOptionsPage).not.toHaveBeenCalled();
+});
+
+it("ignores open-options from a non-top frame", async () => {
+  const { onMessage, openOptionsPage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 3 });
+
+  expect(openOptionsPage).not.toHaveBeenCalled();
+});
+
+it("falls back to a tab when opening the options page rejects", async () => {
+  const { onMessage, openOptionsPage, tabsCreate } = installChrome();
+  openOptionsPage.mockRejectedValueOnce(new Error("no options page"));
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(tabsCreate).toHaveBeenCalledWith({
+    url: "chrome-extension://test-extension-id/options.html",
+  });
+});
+
+it("ignores open-chat from a non-top frame", async () => {
+  const { onMessage, sidePanelOpen, storageSet } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-chat", text: "x", mode: "explain" }, {
+    id: "test-extension-id",
+    tab: { id: 9 },
+    frameId: 4,
+  });
+
+  expect(storageSet).not.toHaveBeenCalled();
+  expect(sidePanelOpen).not.toHaveBeenCalled();
+});
+
+it("rejects the translate port from a non-top frame", async () => {
+  const { onConnect } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  const port = fakePort("ilmt-translate", 42, 2);
+  onConnect[0](port);
+
+  expect(port.disconnect).toHaveBeenCalledTimes(1);
+  expect(port.onMessage.addListener).not.toHaveBeenCalled();
+  expect(port.disconnectListeners).toHaveLength(0);
+});
+
+it("rejects the chat port from a non-top frame", async () => {
+  const { onConnect } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  const port = fakePort("ilmt-chat", 7, 1);
+  onConnect[0](port);
+
+  expect(port.disconnect).toHaveBeenCalledTimes(1);
+  expect(port.onMessage.addListener).not.toHaveBeenCalled();
+  expect(port.disconnectListeners).toHaveLength(0);
+});
+
+it("keeps the chat port working for a top-frame tab sender", async () => {
+  const { onConnect } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  const port = fakePort("ilmt-chat", 7, 0);
+  onConnect[0](port);
+
+  expect(port.disconnect).not.toHaveBeenCalled();
+  expect(port.onMessage.addListener).toHaveBeenCalledTimes(1);
+});
+
+it("falls back to a tab when openOptionsPage is unavailable", async () => {
+  const { onMessage, tabsCreate } = installChrome();
+  delete (globalThis as any).chrome.runtime.openOptionsPage;
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0]({ type: "open-options" }, { id: "test-extension-id" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(tabsCreate).toHaveBeenCalledWith({
+    url: "chrome-extension://test-extension-id/options.html",
+  });
 });

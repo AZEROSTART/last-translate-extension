@@ -6,7 +6,11 @@
 
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 
-type MessageListener = (message: unknown, sender: { id?: string }) => void;
+type MessageListener = (
+  message: unknown,
+  sender: { id?: string },
+  sendResponse?: (response: unknown) => void,
+) => void;
 
 let listeners: MessageListener[] = [];
 
@@ -26,6 +30,7 @@ afterEach(() => {
   if (main && typeof main.restore === "function") main.restore();
   delete (globalThis as any).__ilmtTestPort;
   delete (globalThis as any).__ilmtMain;
+  (globalThis as any).chrome.runtime.connect = undefined;
 });
 
 async function startMain(): Promise<MessageListener> {
@@ -46,6 +51,18 @@ function selectText(text: string): void {
   const selection = window.getSelection()!;
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function captureConnectPort() {
+  const sent: any[] = [];
+  const messageListeners: Array<(message: unknown) => void> = [];
+  const connect = vi.fn(() => ({
+    postMessage: (message: unknown) => sent.push(message),
+    onMessage: { addListener: (cb: (message: unknown) => void) => messageListeners.push(cb) },
+    onDisconnect: { addListener: vi.fn() },
+    disconnect: vi.fn(),
+  }));
+  return { sent, messageListeners, connect };
 }
 
 it("asks the background to explain the current selection", async () => {
@@ -102,4 +119,79 @@ it("starts translation on a trusted activate message", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   expect(sent.some((message) => message.type === "translate")).toBe(true);
+});
+
+it("toggles restore when activate arrives while translation is active", async () => {
+  const listener = await startMain();
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  listener({ type: "activate" }, { id: "test-extension-id" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const request = sent.find((message) => message.type === "translate");
+  expect(request).toBeTruthy();
+  expect(document.querySelectorAll(".ilmt-active-banner")).toHaveLength(1);
+
+  messageListeners[0]({
+    type: "result",
+    requestId: request.requestId,
+    items: [{ id: request.items[0].id, text: "译文" }],
+  });
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+
+  listener({ type: "activate" }, { id: "test-extension-id" });
+
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  expect(document.querySelectorAll("[data-ilmt-p]")).toHaveLength(0);
+  expect(document.querySelectorAll(".ilmt-active-banner")).toHaveLength(0);
+});
+
+it("answers get-recent-translations with the last five finished paragraphs", async () => {
+  const listener = await startMain();
+  document.body.innerHTML = Array.from(
+    { length: 6 },
+    (_, i) => `<p>Paragraph number ${i} here.</p>`,
+  ).join("");
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  listener({ type: "activate" }, { id: "test-extension-id" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const request = sent.find((message) => message.type === "translate");
+  expect(request.items).toHaveLength(6);
+  messageListeners[0]({
+    type: "result",
+    requestId: request.requestId,
+    items: request.items.map((item: any, index: number) => ({
+      id: item.id,
+      text: `译文 ${index}`,
+    })),
+  });
+
+  const sendResponse = vi.fn();
+  listener({ type: "get-recent-translations" }, { id: "test-extension-id" }, sendResponse);
+
+  expect(sendResponse).toHaveBeenCalledTimes(1);
+  const response = sendResponse.mock.calls[0][0];
+  expect(response.paragraphs).toHaveLength(5);
+  expect(response.paragraphs.map((item: any) => item.source)).toEqual([
+    "Paragraph number 1 here.",
+    "Paragraph number 2 here.",
+    "Paragraph number 3 here.",
+    "Paragraph number 4 here.",
+    "Paragraph number 5 here.",
+  ]);
+  expect(response.paragraphs.at(-1).translation).toBe("译文 5");
+});
+
+it("does not answer get-recent-translations from another extension", async () => {
+  const listener = await startMain();
+  const sendResponse = vi.fn();
+
+  listener({ type: "get-recent-translations" }, { id: "someone-else" }, sendResponse);
+
+  expect(sendResponse).not.toHaveBeenCalled();
 });

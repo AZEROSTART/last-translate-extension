@@ -40,6 +40,26 @@ const RETRY_BACKOFF_MS = [1000, 3000] as const;
 
 const NO_PROVIDER_MESSAGE = "未选择模型配置";
 const EMPTY_TRANSLATION_MESSAGE = "模型返回了空译文";
+const SETTINGS_READ_ERROR_MESSAGE = "读取设置失败，请重试";
+
+/** Temporary 429 slowdown (spec §8.6): half the RPS for about a minute. */
+const RATE_PENALTY_MS = 60_000;
+
+/** Lowercase hints that a provider rejection is a context-length failure. */
+const CONTEXT_LENGTH_HINTS = [
+  "context",
+  "too long",
+  "maximum",
+  "token limit",
+  "too many tokens",
+  "length limit",
+  "上下文",
+  "过长",
+] as const;
+
+/** Static chat instructions. Page text must never enter the system prompt (§12). */
+const CHAT_SYSTEM_MESSAGE =
+  "你是网页阅读助手。请只依据用户提供的页面上下文回答；上下文之外的内容不要臆测。";
 
 /** Everything the dispatcher needs, all injectable for tests. */
 export interface Deps {
@@ -66,6 +86,49 @@ export function createDeps(overrides: Partial<Deps> = {}): Deps {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...overrides,
   };
+}
+
+/** Active rate penalty per dispatcher instance; keyed so tests stay isolated. */
+const ratePenaltyByDeps = new WeakMap<Deps, { until: number }>();
+
+/**
+ * Effective RPS under a 429 penalty: at most half the configured rate, never
+ * below 1. Pure so the policy can be tested without timers.
+ */
+export function penalizedRps(baseRps: number, penalized: boolean): number {
+  const base = Math.max(1, Math.floor(baseRps));
+  return penalized ? Math.max(1, Math.floor(base / 2)) : base;
+}
+
+/** A context-length rejection from the provider (spec §11). */
+export function isContextLengthError(err: unknown): boolean {
+  if (!(err instanceof ProviderError)) return false;
+  // 413 means the request body was too large; there is nothing to retry as-is.
+  if (err.status === 413) return true;
+  if (err.code !== "bad_response" && err.status !== 400) return false;
+  const message = err.message.toLowerCase();
+  return CONTEXT_LENGTH_HINTS.some((hint) => message.includes(hint));
+}
+
+/** Record a 429 penalty for the next dispatch start on this deps instance. */
+function penalizeRate(deps: Deps): void {
+  ratePenaltyByDeps.set(deps, { until: Date.now() + RATE_PENALTY_MS });
+}
+
+/**
+ * Apply the settings-derived queue limits, halving the RPS while a recent
+ * rate-limit penalty is active. Expired penalties are simply forgotten, so the
+ * next request restores the configured limits.
+ */
+function applyQueueLimits(deps: Deps, provider: ProviderConfig | undefined, settings: Settings): void {
+  const concurrency = clamp(provider?.overrides?.concurrency ?? settings.concurrency, 1, 10);
+  const baseRps = clamp(provider?.overrides?.maxRPS ?? settings.maxRPS, 1, 20);
+
+  const penalty = ratePenaltyByDeps.get(deps);
+  const active = penalty !== undefined && penalty.until > Date.now();
+  if (penalty !== undefined && !active) ratePenaltyByDeps.delete(deps);
+
+  deps.queue.setLimits(concurrency, penalizedRps(baseRps, active));
 }
 
 /** The numbering prefix a model emits for a one-item group (spec §8.5). */
@@ -143,15 +206,28 @@ export async function handleTranslate(
   send: (m: BackgroundToClient) => void,
 ): Promise<void> {
   const requestId = msg.requestId;
-  const settings = await deps.getSettings();
-  const provider = getActiveProvider(settings);
-
-  deps.queue.setLimits(
-    clamp(provider?.overrides?.concurrency ?? settings.concurrency, 1, 10),
-    clamp(provider?.overrides?.maxRPS ?? settings.maxRPS, 1, 20),
-  );
-
   const allIds = msg.items.map((item) => item.id);
+
+  let settings: Settings;
+  try {
+    settings = await deps.getSettings();
+  } catch {
+    // A storage failure must still settle the request; otherwise every record
+    // stays inflight and the page never shows the failure.
+    send({
+      type: "error",
+      requestId,
+      code: "bad_response",
+      message: SETTINGS_READ_ERROR_MESSAGE,
+      retryable: false,
+      ids: allIds,
+    });
+    send({ type: "finish", requestId });
+    return;
+  }
+
+  const provider = getActiveProvider(settings);
+  applyQueueLimits(deps, provider, settings);
 
   if (!provider) {
     send({ type: "error", requestId, code: "bad_response", message: NO_PROVIDER_MESSAGE, retryable: false, ids: allIds });
@@ -179,7 +255,13 @@ export async function handleTranslate(
       modelId: provider.model,
       promptVersion,
     });
-    const cached = await deps.cache.get(key);
+    let cached: string | undefined;
+    try {
+      cached = await deps.cache.get(key);
+    } catch {
+      // A cache read failure is simply a miss; the provider can still answer.
+      cached = undefined;
+    }
     if (cached !== undefined && cached !== "") {
       resultMap.set(item.id, cached);
     } else {
@@ -212,13 +294,20 @@ export async function handleTranslate(
     if (outcome.ok) {
       for (const [id, text] of outcome.map) {
         const key = keyById.get(id);
-        if (key) await deps.cache.put(key, text, { modelId: provider.model });
+        if (key) {
+          try {
+            await deps.cache.put(key, text, { modelId: provider.model });
+          } catch {
+            // A cache write failure is non-fatal: still deliver the result.
+          }
+        }
         resultMap.set(id, text);
       }
     } else if (isAborted(outcome.err)) {
       aborted = true;
     } else {
       const info = toErrorInfo(outcome.err);
+      if (info.code === "rate_limit") penalizeRate(deps);
       send({ type: "error", requestId, code: info.code, message: info.message, retryable: info.retryable, ids: outcome.ids });
     }
   }
@@ -234,8 +323,8 @@ export async function handleTranslate(
 
 /**
  * Route one chat request through the same queue (chat priority) and stream the
- * reply. The system message is assembled from the page context; the user and
- * assistant history come from the message itself.
+ * reply. The system message is static; page context is user-message content
+ * (spec §12) and the conversation history comes from the message itself.
  */
 export async function handleChat(
   deps: Deps,
@@ -244,13 +333,24 @@ export async function handleChat(
   tabId: number,
 ): Promise<void> {
   const requestId = msg.requestId;
-  const settings = await deps.getSettings();
-  const provider = getActiveProvider(settings);
 
-  deps.queue.setLimits(
-    clamp(provider?.overrides?.concurrency ?? settings.concurrency, 1, 10),
-    clamp(provider?.overrides?.maxRPS ?? settings.maxRPS, 1, 20),
-  );
+  let settings: Settings;
+  try {
+    settings = await deps.getSettings();
+  } catch {
+    send({
+      type: "error",
+      requestId,
+      code: "bad_response",
+      message: SETTINGS_READ_ERROR_MESSAGE,
+      retryable: false,
+    });
+    send({ type: "finish", requestId });
+    return;
+  }
+
+  const provider = getActiveProvider(settings);
+  applyQueueLimits(deps, provider, settings);
 
   if (!provider) {
     send({ type: "error", requestId, code: "bad_response", message: NO_PROVIDER_MESSAGE, retryable: false });
@@ -259,7 +359,7 @@ export async function handleChat(
   }
 
   const temperature = provider.overrides?.temperature ?? settings.temperature;
-  const messages: ChatMessage[] = [{ role: "system", content: buildChatSystemMessage(msg.context) }, ...msg.messages];
+  const messages = buildChatMessages(msg.context, msg.messages);
 
   const outcome = await deps.queue
     .enqueue<void>({
@@ -293,6 +393,7 @@ async function runGroup(
   requestId: string,
   signal: AbortSignal,
   send: (m: BackgroundToClient) => void,
+  splitDepth = 0,
 ): Promise<Map<string, string>> {
   const messages = buildTranslateMessages(group, targetLang, systemPrompt);
   const single = group.length === 1 ? group[0].id : undefined;
@@ -327,6 +428,33 @@ async function runGroup(
       }
       return map;
     } catch (err) {
+      // Spec §11: an over-long group is split in half and retried once. A
+      // single-item group (or an already-split half) has nowhere smaller to
+      // go, so it fails normally.
+      if (isContextLengthError(err) && group.length > 1 && splitDepth === 0) {
+        const mid = Math.ceil(group.length / 2);
+        const halves = [group.slice(0, mid), group.slice(mid)];
+        const maps = await Promise.all(
+          halves.map((half) =>
+            runGroup(
+              deps,
+              provider,
+              half,
+              half.map((item) => item.id),
+              targetLang,
+              systemPrompt,
+              temperature,
+              requestId,
+              signal,
+              send,
+              splitDepth + 1,
+            ),
+          ),
+        );
+        const merged = new Map<string, string>();
+        for (const map of maps) for (const [id, text] of map) merged.set(id, text);
+        return merged;
+      }
       if (err instanceof ProviderError && err.retryable) {
         lastRetryable = err;
         continue;
@@ -348,15 +476,26 @@ async function runChat(
   send: (m: ChatBackgroundToClient) => void,
 ): Promise<void> {
   let lastRetryable: ProviderError | undefined;
+  let emitted = false;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) await deps.sleep(RETRY_BACKOFF_MS[attempt - 1]);
     try {
-      for await (const chunk of deps.adapter.streamCompletion(provider, { messages, temperature, signal })) {
+      for await (const chunk of deps.adapter.streamCompletion(provider, {
+        messages,
+        temperature,
+        signal,
+        // Spec §8.9 sets no total deadline for chat; connect/first-token/idle
+        // still guard a dead stream.
+        totalTimeoutMs: null,
+      })) {
+        emitted = true;
         send({ type: "delta", requestId, text: chunk });
       }
       return;
     } catch (err) {
-      if (err instanceof ProviderError && err.retryable) {
+      // Once any text has reached the panel, a retry would append the prefix
+      // twice. Propagate the failure instead; the partial answer stays visible.
+      if (!emitted && err instanceof ProviderError && err.retryable) {
         lastRetryable = err;
         continue;
       }
@@ -366,15 +505,19 @@ async function runChat(
   throw lastRetryable!;
 }
 
-/** Assemble the chat system message from the page context (spec §8.9). */
-function buildChatSystemMessage(ctx: ChatContext): string {
-  const lines: string[] = [];
-  lines.push(`当前页面标题：${ctx.title}`);
-  lines.push(`当前页面 URL：${ctx.pageUrl}`);
+/**
+ * Page context as user-message content, never system instructions (§12).
+ * Only the latest user turn gets the context; earlier turns stay untouched so
+ * a multi-turn conversation reads naturally.
+ */
+function buildPageContextBlock(ctx: ChatContext): string {
+  const lines: string[] = ["【页面上下文】"];
+  lines.push(`标题：${ctx.title}`);
+  lines.push(`URL：${ctx.pageUrl}`);
 
   const recent = ctx.recentParagraphs.slice(-5);
   if (recent.length > 0) {
-    lines.push("最近翻译的段落（最多 5 段）：");
+    lines.push("最近段落（最多 5 段）：");
     for (const p of recent) {
       lines.push(`- 原文：${p.source}`);
       lines.push(`  译文：${p.translation}`);
@@ -382,11 +525,36 @@ function buildChatSystemMessage(ctx: ChatContext): string {
   }
 
   if (ctx.quotes.length > 0) {
-    lines.push("用户选中的引用：");
+    lines.push("选中引用：");
     for (const q of ctx.quotes) lines.push(`- ${q}`);
   }
 
   return lines.join("\n");
+}
+
+/** Static system instructions plus history with the page context attached. */
+export function buildChatMessages(context: ChatContext, history: ChatMessage[]): ChatMessage[] {
+  const messages = history.map((message) => ({ ...message }));
+  const contextBlock = buildPageContextBlock(context);
+
+  let lastUser = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+
+  if (lastUser === -1) {
+    messages.push({ role: "user", content: `${contextBlock}\n\n【问题】\n` });
+  } else {
+    messages[lastUser] = {
+      role: "user",
+      content: `${contextBlock}\n\n【问题】\n${messages[lastUser].content}`,
+    };
+  }
+
+  return [{ role: "system", content: CHAT_SYSTEM_MESSAGE }, ...messages];
 }
 
 /** Normalize a thrown value into an error message payload. */

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { initSelectionBubble } from "../../src/content/selection";
+import { initSelectionBubble, showSelectionBubble } from "../../src/content/selection";
 
 /** Debounce documented by the task brief; kept local so the test fails if it drifts. */
 const DEBOUNCE_MS = 50;
@@ -113,4 +113,14 @@ it("does not stack bubbles when initialized twice", () => {
   select(document.querySelector("p")!);
   mouseup();
   expect(document.querySelectorAll(".ilmt-bubble")).toHaveLength(1);
+});
+
+it("shows the bubble immediately for the guard's post-load hook", () => {
+  document.body.innerHTML = `<p>Hello world</p>`;
+  select(document.querySelector("p")!);
+
+  showSelectionBubble();
+
+  expect(document.querySelectorAll(".ilmt-bubble")).toHaveLength(1);
+  expect(document.querySelector(".ilmt-bubble-explain")).not.toBeNull();
 });

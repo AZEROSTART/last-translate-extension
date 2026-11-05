@@ -117,6 +117,10 @@ const DEFAULT_MIN_LENGTH = 4;
 const DEFAULT_LANG_SKIP_RATIO = 0.8;
 const DEFAULT_TARGET_LANG = "zh-CN";
 const CJK_SKIP_RATIO = 0.6;
+/** Spec §12: per-paragraph source cap. */
+const MAX_SOURCE_LENGTH = 20_000;
+/** C0 control characters; stripped from the text we send (spec §12). */
+const CONTROL_CHARS = /[\u0000-\u001f]/g;
 
 /** Module-global so ids never repeat across scans in one content script. */
 let paragraphIdCounter = 0;
@@ -153,7 +157,7 @@ export async function collectParagraphs(
   const nodes: ParagraphNode[] = [];
 
   for (const el of candidates) {
-    const text = (el.textContent ?? "").trim();
+    const text = sourceText(el);
     if (text.length < minLength) continue;
     if (await isAlreadyTargetLang(text, detectLang, langSkipRatio, targetLang)) continue;
 
@@ -163,6 +167,14 @@ export async function collectParagraphs(
   }
 
   return nodes;
+}
+
+/** Page text cleaned for sending: control characters removed and length capped. */
+function sourceText(el: Element): string {
+  return (el.textContent ?? "")
+    .replace(CONTROL_CHARS, "")
+    .trim()
+    .slice(0, MAX_SOURCE_LENGTH);
 }
 
 /** `<main>` → `<article>` → `[role=main]` → the given root (or `document.body`). */
@@ -211,6 +223,14 @@ function shouldSkip(el: Element): boolean {
   if (el.classList.contains("notranslate")) return true;
   if (isMarked(el)) return true;
   if (el.classList.contains("ilmt-tr")) return true;
+  // Our own UI (banner, error banner, selection bubble) is never page text.
+  if (
+    el.classList.contains("ilmt-active-banner") ||
+    el.classList.contains("ilmt-error-banner") ||
+    el.classList.contains("ilmt-bubble")
+  ) {
+    return true;
+  }
 
   const style = computedStyle(el);
   if (style) {

@@ -122,6 +122,20 @@ export interface AskSelectionMessage {
 
 export type ContentRuntimeMessage = ActivateMessage | AskSelectionMessage;
 
+/** Ask the content script for its most recent finished translations. */
+export interface RecentTranslationsMessage {
+  type: "get-recent-translations";
+}
+
+export interface RecentTranslationsResponse {
+  paragraphs: Array<{ source: string; translation: string }>;
+}
+
+/** Ask the background to open the extension options page (error banner action). */
+export interface OpenOptionsMessage {
+  type: "open-options";
+}
+
 /** Messages sent from the side panel to the background chat port. */
 export type ChatClientToBackground =
   | { type: "chat"; requestId: string; sessionId: string; messages: ChatMessage[]; context: ChatContext }

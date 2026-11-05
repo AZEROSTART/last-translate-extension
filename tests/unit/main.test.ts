@@ -134,15 +134,20 @@ it("renders deltas and results and continues with the next batch on finish", asy
 it("translates newly added paragraphs after the observer debounce", async () => {
   document.body.innerHTML = `<p>First paragraph here.</p>`;
   const { runContentMain } = await import("../../src/content/main");
-  runContentMain();
-  const sent: any[] = [];
-  (globalThis as any).__ilmtTestPort = { send: (m: any) => sent.push(m) };
-  await (globalThis as any).__ilmtMain.translatePage();
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
 
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  const first = sent.find((m) => m.type === "translate");
+  expect(first).toBeTruthy();
+
+  // Still in flight: the new paragraph is queued, not a second request.
   document.body.insertAdjacentHTML("beforeend", `<p>New paragraph here.</p>`);
   await new Promise((resolve) => setTimeout(resolve, 350));
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
 
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
   expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
 });
 
@@ -166,18 +171,22 @@ it("rescans and picks up new paragraphs on page-navigated", async () => {
 
   const messageListeners: Array<(message: unknown, sender: { id?: string }) => void> = [];
   (globalThis as any).chrome.runtime.onMessage.addListener = (cb: any) => messageListeners.push(cb);
+  const { sent, messageListeners: portListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
 
   runContentMain();
-  const sent: any[] = [];
-  (globalThis as any).__ilmtTestPort = { send: (m: any) => sent.push(m) };
   await (globalThis as any).__ilmtMain.translatePage();
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+  const first = sent.find((m) => m.type === "translate");
+  expect(first).toBeTruthy();
+  portListeners[0]({ type: "finish", requestId: first.requestId });
 
   document.body.insertAdjacentHTML("beforeend", `<p>Newly added paragraph here.</p>`);
   messageListeners[0]({ type: "page-navigated" }, { id: (globalThis as any).chrome.runtime.id });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items).toHaveLength(2);
 });
 
 it("caps the page at 2000 paragraphs and warns", async () => {
@@ -252,10 +261,12 @@ it("pumps queued paragraphs on scroll when no request is in flight", async () =>
   await new Promise((resolve) => setTimeout(resolve, 320));
   expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
 
-  // Server-side disconnect requeues inflight work and clears the in-flight id.
+  // Server-side disconnect requeues inflight work and resumes it immediately
+  // through the port client's reconnect queue.
   disconnectListeners[0]();
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
 
+  // The requeued batch is now in flight; a scroll must not preempt it.
   window.dispatchEvent(new Event("scroll"));
   await new Promise((resolve) => setTimeout(resolve, 320));
   expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);

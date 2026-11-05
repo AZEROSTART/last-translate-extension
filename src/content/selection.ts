@@ -57,6 +57,19 @@ export function initSelectionBubble(opts: SelectionBubbleOptions): void {
   window.addEventListener("scroll", dismiss, { passive: true });
 }
 
+/**
+ * Check the current selection right now (no debounce). Used by the guard after
+ * it lazily loads this bundle on a mouseup: the selection may already be gone
+ * by the time the dynamic import settles, but usually it is still present.
+ */
+export function showSelectionBubble(): void {
+  if (timer !== null) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  checkSelection();
+}
+
 function scheduleSelectionCheck(): void {
   if (timer !== null) clearTimeout(timer);
   timer = setTimeout(() => {
