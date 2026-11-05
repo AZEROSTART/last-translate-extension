@@ -82,6 +82,33 @@ it("translates only the non-target half of a mixed page", async () => {
   ]);
 });
 
+it("does not skip a target-language paragraph below the skip ratio", async () => {
+  await setTargetLang("zh-CN");
+  stubDetector((text) => {
+    if (!cjk(text)) return { languages: [{ language: "en", percentage: 100 }] };
+    const share = text.includes("几乎") ? 90 : 70;
+    return {
+      languages: [
+        { language: "zh-Hans", percentage: share },
+        { language: "en", percentage: 100 - share },
+      ],
+    };
+  });
+  document.body.innerHTML = `<p>这是中英混合的段落 with plenty of English.</p>
+    <p>这是几乎全中文的段落内容。</p>`;
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (message: unknown) => sent.push(message) };
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  const translate = sent.find((message) => message.type === "translate");
+  expect(translate.items.map((item: any) => item.text)).toEqual([
+    "这是中英混合的段落 with plenty of English.",
+  ]);
+});
+
 it("accepts the promise shape of chrome.i18n.detectLanguage", async () => {
   await setTargetLang("zh-CN");
   (chrome as any).i18n = {

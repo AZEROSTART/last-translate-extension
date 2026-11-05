@@ -44,9 +44,19 @@ afterEach(() => {
   if (main && typeof main.restore === "function") main.restore();
   delete (globalThis as any).__ilmtTestPort;
   delete (globalThis as any).__ilmtMain;
+  delete (globalThis as any).chrome.i18n;
   (globalThis as any).chrome.runtime.connect = undefined;
   vi.useRealTimers();
 });
+
+/** Poll until `condition` holds so async scans can be driven without fixed sleeps. */
+async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error("condition was not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 it("appends streaming deltas instead of replacing the previous chunk", async () => {
   document.body.innerHTML = `<p>Hello world from the page.</p>`;
@@ -188,6 +198,194 @@ it("keeps one banner instance and lets the user dismiss it", async () => {
 
   document.querySelector<HTMLButtonElement>(".ilmt-error-close")!.click();
   expect(document.querySelector(".ilmt-error-banner")).toBeNull();
+});
+
+it("requeues every failed group when one request reports several errors", async () => {
+  document.body.innerHTML = `<p>First failed group paragraph.</p><p>Second failed group paragraph.</p>`;
+  const { sent, deliver, request } = await startTranslating();
+  expect(request.items).toHaveLength(2);
+  const [first, second] = request.items;
+
+  // Both errors belong to the SAME request. The first one must not clear the
+  // request id and strand the second group inflight.
+  deliver({
+    type: "error",
+    requestId: request.requestId,
+    code: "timeout",
+    message: "first group failed",
+    retryable: true,
+    ids: [first.id],
+  });
+  deliver({
+    type: "error",
+    requestId: request.requestId,
+    code: "timeout",
+    message: "second group failed",
+    retryable: true,
+    ids: [second.id],
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  document.querySelector<HTMLButtonElement>(".ilmt-error-retry")!.click();
+
+  const translates = sent.filter((message) => message.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items.map((item: any) => item.id).sort()).toEqual(
+    [first.id, second.id].sort(),
+  );
+});
+
+it("stops auto-retrying rate limits at the cap and offers a manual retry", async () => {
+  document.body.innerHTML = `<p>First rate limited paragraph.</p><p>Second rate limited paragraph.</p>`;
+  const { sent, deliver } = await startTranslating();
+  vi.useFakeTimers();
+
+  let request = sent.find((message) => message.type === "translate");
+  expect(request.items).toHaveLength(2);
+
+  const delays = [3000, 6000, 12000];
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    // Two 429 groups for the same request must still count as one attempt.
+    deliver({
+      type: "error",
+      requestId: request.requestId,
+      code: "rate_limit",
+      message: "429",
+      retryable: true,
+      ids: [request.items[0].id],
+    });
+    deliver({
+      type: "error",
+      requestId: request.requestId,
+      code: "rate_limit",
+      message: "429",
+      retryable: true,
+      ids: [request.items[1].id],
+    });
+    deliver({ type: "finish", requestId: request.requestId });
+
+    expect(document.querySelector(".ilmt-error-message")!.textContent).toBe(
+      "请求过于频繁，稍后自动重试",
+    );
+
+    vi.advanceTimersByTime(delays[attempt]);
+    request = sent.filter((message) => message.type === "translate").at(-1);
+  }
+
+  // Initial request plus exactly three automatic retries.
+  expect(sent.filter((message) => message.type === "translate")).toHaveLength(4);
+
+  // The fourth 429 exhausts the budget: no more timer, manual retry only.
+  deliver({
+    type: "error",
+    requestId: request.requestId,
+    code: "rate_limit",
+    message: "429",
+    retryable: true,
+    ids: [request.items[0].id],
+  });
+  deliver({
+    type: "error",
+    requestId: request.requestId,
+    code: "rate_limit",
+    message: "429",
+    retryable: true,
+    ids: [request.items[1].id],
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  expect(document.querySelector(".ilmt-error-message")!.textContent).toBe(
+    "请求过于频繁，请稍后手动重试",
+  );
+  const retryButton = document.querySelector<HTMLButtonElement>(".ilmt-error-retry");
+  expect(retryButton).not.toBeNull();
+
+  vi.advanceTimersByTime(60_000);
+  expect(sent.filter((message) => message.type === "translate")).toHaveLength(4);
+
+  retryButton!.click();
+  expect(sent.filter((message) => message.type === "translate")).toHaveLength(5);
+});
+
+it("cancels an in-flight scan on restore without marking or sending anything", async () => {
+  document.body.innerHTML = `<p>Slow paragraph to detect.</p>`;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  (chrome as any).i18n = {
+    detectLanguage: vi.fn((_text: string, callback: (result: unknown) => void) => {
+      calls += 1;
+      void gate.then(() => callback({ languages: [{ language: "en", percentage: 100 }] }));
+    }),
+  };
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (message: unknown) => sent.push(message) };
+
+  const scanning = (globalThis as any).__ilmtMain.translatePage();
+  await until(() => calls > 0);
+  (globalThis as any).__ilmtMain.restore();
+  release();
+  await scanning;
+
+  expect(document.querySelectorAll("[data-ilmt-p]")).toHaveLength(0);
+  expect(sent.filter((message) => message.type === "translate")).toHaveLength(0);
+});
+
+it("serializes mutation scans behind a slow initial scan", async () => {
+  document.body.innerHTML = `<p>Initial paragraph here.</p>`;
+  let calls = 0;
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  (chrome as any).i18n = {
+    detectLanguage: vi.fn((_text: string, callback: (result: unknown) => void) => {
+      calls += 1;
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      const finish = () => {
+        concurrent -= 1;
+        callback({ languages: [{ language: "en", percentage: 100 }] });
+      };
+      if (calls === 1) void firstGate.then(finish);
+      else finish();
+    }),
+  };
+
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+  runContentMain();
+
+  const scanning = (globalThis as any).__ilmtMain.translatePage();
+  await until(() => calls > 0);
+
+  document.body.insertAdjacentHTML("beforeend", `<p>Mutated paragraph here.</p>`);
+  // Past the mutation debounce: the follow-up scan must be queued, not run
+  // alongside the still-blocked initial scan.
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  expect(maxConcurrent).toBe(1);
+
+  releaseFirst();
+  await scanning;
+  expect(maxConcurrent).toBe(1);
+
+  const first = sent.find((message) => message.type === "translate");
+  expect(first.items.map((item: any) => item.text)).toEqual(["Initial paragraph here."]);
+
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+  const translates = sent.filter((message) => message.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items.map((item: any) => item.text)).toEqual([
+    "Mutated paragraph here.",
+  ]);
 });
 
 it("drops a stale translation and re-queues a paragraph edited via characterData", async () => {

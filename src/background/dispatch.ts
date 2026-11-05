@@ -57,6 +57,18 @@ const CONTEXT_LENGTH_HINTS = [
   "过长",
 ] as const;
 
+/**
+ * Internal signal that a multi-item group hit the provider's context limit and
+ * must be retried as two smaller groups. It never reaches the panel: the
+ * dispatcher consumes it and enqueues each half as its own queue task.
+ */
+class ContextLengthSplitError extends Error {
+  constructor(readonly original: unknown) {
+    super("context length split");
+    this.name = "ContextLengthSplitError";
+  }
+}
+
 /** Static chat instructions. Page text must never enter the system prompt (§12). */
 const CHAT_SYSTEM_MESSAGE =
   "你是网页阅读助手。请只依据用户提供的页面上下文回答；上下文之外的内容不要臆测。";
@@ -272,22 +284,54 @@ export async function handleTranslate(
 
   const groups = groupSegments(misses, GROUP_OPTS);
 
-  const outcomes = await Promise.all(
-    groups.map((group) => {
-      const groupIds = group.map((item) => item.id);
-      return deps.queue
-        .enqueue<Map<string, string>>({
-          tabId: msg.tabId,
-          priority: "translate",
-          run: (signal) =>
-            runGroup(deps, provider, group, groupIds, settings.targetLang, systemPrompt, temperature, requestId, signal, send),
-        })
-        .then(
-          (map) => ({ ok: true as const, ids: groupIds, map }),
-          (err: unknown) => ({ ok: false as const, ids: groupIds, err }),
-        );
-    }),
+  // Run each group as one queue task first. A context-length failure comes back
+  // as a split signal; only after the parent task has settled do we enqueue the
+  // halves, so a concurrency-1 queue cannot deadlock waiting on itself.
+  const parentOutcomes = await Promise.all(
+    groups.map((group) =>
+      enqueueTranslateGroup(
+        deps,
+        provider,
+        group,
+        settings.targetLang,
+        systemPrompt,
+        temperature,
+        requestId,
+        msg.tabId,
+        send,
+        true,
+      ),
+    ),
   );
+
+  const outcomes: GroupOutcome[] = [];
+  for (let i = 0; i < parentOutcomes.length; i += 1) {
+    const outcome = parentOutcomes[i];
+    if (!outcome.ok && outcome.err instanceof ContextLengthSplitError) {
+      const group = groups[i];
+      const mid = Math.ceil(group.length / 2);
+      const halves = [group.slice(0, mid), group.slice(mid)];
+      const halfOutcomes = await Promise.all(
+        halves.map((half) =>
+          enqueueTranslateGroup(
+            deps,
+            provider,
+            half,
+            settings.targetLang,
+            systemPrompt,
+            temperature,
+            requestId,
+            msg.tabId,
+            send,
+            false,
+          ),
+        ),
+      );
+      outcomes.push(...halfOutcomes);
+    } else {
+      outcomes.push(outcome);
+    }
+  }
 
   let aborted = false;
   for (const outcome of outcomes) {
@@ -319,6 +363,53 @@ export async function handleTranslate(
     send({ type: "result", requestId, items });
   }
   if (!aborted) send({ type: "finish", requestId });
+}
+
+/** Result of one queued translate group, normalized so callers merge halves. */
+type GroupOutcome =
+  | { ok: true; ids: string[]; map: Map<string, string> }
+  | { ok: false; ids: string[]; err: unknown };
+
+/**
+ * Queue one translate group as its own task. `allowSplit` is true only for the
+ * original group: a split half that is still too long fails normally.
+ */
+function enqueueTranslateGroup(
+  deps: Deps,
+  provider: ProviderConfig,
+  group: TranslateItem[],
+  targetLang: string,
+  systemPrompt: string,
+  temperature: number,
+  requestId: string,
+  tabId: number,
+  send: (m: BackgroundToClient) => void,
+  allowSplit: boolean,
+): Promise<GroupOutcome> {
+  const ids = group.map((item) => item.id);
+  return deps.queue
+    .enqueue<Map<string, string>>({
+      tabId,
+      priority: "translate",
+      run: (signal) =>
+        runGroup(
+          deps,
+          provider,
+          group,
+          ids,
+          targetLang,
+          systemPrompt,
+          temperature,
+          requestId,
+          signal,
+          send,
+          allowSplit,
+        ),
+    })
+    .then(
+      (map) => ({ ok: true as const, ids, map }),
+      (err: unknown) => ({ ok: false as const, ids, err }),
+    );
 }
 
 /**
@@ -393,7 +484,7 @@ async function runGroup(
   requestId: string,
   signal: AbortSignal,
   send: (m: BackgroundToClient) => void,
-  splitDepth = 0,
+  allowSplit: boolean,
 ): Promise<Map<string, string>> {
   const messages = buildTranslateMessages(group, targetLang, systemPrompt);
   const single = group.length === 1 ? group[0].id : undefined;
@@ -428,32 +519,11 @@ async function runGroup(
       }
       return map;
     } catch (err) {
-      // Spec §11: an over-long group is split in half and retried once. A
-      // single-item group (or an already-split half) has nowhere smaller to
-      // go, so it fails normally.
-      if (isContextLengthError(err) && group.length > 1 && splitDepth === 0) {
-        const mid = Math.ceil(group.length / 2);
-        const halves = [group.slice(0, mid), group.slice(mid)];
-        const maps = await Promise.all(
-          halves.map((half) =>
-            runGroup(
-              deps,
-              provider,
-              half,
-              half.map((item) => item.id),
-              targetLang,
-              systemPrompt,
-              temperature,
-              requestId,
-              signal,
-              send,
-              splitDepth + 1,
-            ),
-          ),
-        );
-        const merged = new Map<string, string>();
-        for (const map of maps) for (const [id, text] of map) merged.set(id, text);
-        return merged;
+      // Spec §11: an over-long original group is handed back to the dispatcher,
+      // which re-queues each half as its own task. A single-item group or an
+      // already-split half has nowhere smaller to go, so it fails normally.
+      if (isContextLengthError(err) && group.length > 1 && allowSplit) {
+        throw new ContextLengthSplitError(err);
       }
       if (err instanceof ProviderError && err.retryable) {
         lastRetryable = err;

@@ -10,7 +10,11 @@
  * startup. One translate request is in flight at a time per page.
  */
 
-import { collectParagraphs, type ParagraphNode } from "./paragraphs";
+import {
+  collectParagraphs,
+  type LanguageDetection,
+  type ParagraphNode,
+} from "./paragraphs";
 import { renderTranslation, restoreAll } from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
@@ -37,8 +41,12 @@ const SCROLL_DEBOUNCE_MS = 250;
 const PRUNE_INTERVAL_MS = 30_000;
 const DEFAULT_TARGET_LANG = "zh-CN";
 const DYNAMIC_WINDOW_MS = 60_000;
-/** Delay before an automatic retry after the provider rate-limited us. */
+/** Base delay before an automatic retry after the provider rate-limited us. */
 const RATE_LIMIT_RETRY_MS = 3000;
+/** Automatic rate-limit retries per request before the user must retry. */
+const MAX_RATE_LIMIT_RETRIES = 3;
+/** Upper bound for the exponential rate-limit backoff. */
+const RATE_LIMIT_RETRY_MAX_MS = 30_000;
 /** Recent translations exposed to the side panel. */
 const RECENT_TRANSLATIONS_LIMIT = 5;
 /** Bound on the per-text language-detection cache. */
@@ -81,6 +89,23 @@ let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 /** While set, `pump` waits for the single rate-limit retry timer. */
 let rateLimitHold = false;
+/** Automatic retries spent since the last successful/manual request. */
+let rateLimitAttempts = 0;
+/** The requestId already counted for a 429 (several groups may report one). */
+let rateLimitAttemptedRequestId: string | null = null;
+/** Request whose automatic retry budget is exhausted. */
+let rateLimitExhaustedRequestId: string | null = null;
+
+/** Scan coordinator: one scan at a time; a newer one is queued behind it. */
+type ScanKind = "full" | "dynamic";
+interface ScanTicket {
+  kind: ScanKind;
+  generation: number;
+}
+/** Invalidates async scans captured before restore/rescan/activation. */
+let scanGeneration = 0;
+let scanInFlight: Promise<void> | null = null;
+let pendingScan: ScanTicket | null = null;
 
 let activeBanner: HTMLElement | null = null;
 let errorBanner: HTMLElement | null = null;
@@ -88,7 +113,7 @@ let errorBanner: HTMLElement | null = null;
 /** Latest streamed text per paragraph; deltas append rather than replace. */
 const deltaBuffers = new Map<string, string>();
 /** `chrome.i18n.detectLanguage` results, bounded to one page's paragraphs. */
-const langCache = new Map<string, string | null>();
+const langCache = new Map<string, LanguageDetection | null>();
 
 let dynamicCount = 0;
 let dynamicWindowStart = 0;
@@ -113,32 +138,121 @@ export function runContentMain(): void {
 async function translatePage(): Promise<void> {
   if (active) return;
   active = true;
-  showActiveBanner();
+  const generation = ++scanGeneration;
 
-  startPruneTimer();
-  startObserver();
-  startScrollListener();
+  try {
+    showActiveBanner();
+    startPruneTimer();
+    startScrollListener();
 
-  await collectAndQueue();
+    // At document_start `<body>` may not exist yet; wait for the parser before
+    // touching the tree. A scan started before that would throw.
+    await whenBodyReady();
+    if (!active || generation !== scanGeneration) return;
+    startObserver();
+
+    await requestScan("full", generation);
+  } catch (error) {
+    reportScanError(error);
+  }
 }
 
 async function rescan(): Promise<void> {
+  if (!active) return;
+  // Invalidate the previous scan first, then rebuild marks and run a fresh
+  // full scan; the coordinator queues it behind any still-running scan.
+  const generation = ++scanGeneration;
   registry = new ParagraphRegistry();
   // `restoreAll` removes both injected translation spans and `data-ilmt-p`
   // marks. Without it a surviving SPA paragraph would keep its previous
   // translation, and `collectParagraphs` would read `textContent` polluted by
   // it — producing a translation-of-translation.
-  restoreAll(document.body);
-  await collectAndQueue();
+  if (document.body) restoreAll(document.body);
+  await requestScan("full", generation);
+}
+
+/** Resolve once `<body>` exists; content scripts can start before it does. */
+function whenBodyReady(): Promise<void> {
+  if (document.body) return Promise.resolve();
+  if (document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => {
+    document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+  });
+}
+
+/**
+ * Queue a scan. Only one runs at a time; a request during a scan merges into a
+ * single follow-up, and a full scan always dominates a dynamic one.
+ */
+function requestScan(kind: ScanKind, generation: number): Promise<void> {
+  if (scanInFlight) {
+    const queued = pendingScan;
+    pendingScan = {
+      kind: queued?.kind === "full" || kind === "full" ? "full" : "dynamic",
+      generation: Math.max(queued?.generation ?? generation, generation),
+    };
+    return scanInFlight;
+  }
+
+  const run = runScanQueue({ kind, generation });
+  scanInFlight = run;
+  return run;
+}
+
+async function runScanQueue(first: ScanTicket): Promise<void> {
+  let ticket: ScanTicket | null = first;
+  try {
+    while (ticket) {
+      const current = ticket;
+      ticket = null;
+      try {
+        if (current.kind === "full") await collectAndQueue(current.generation);
+        else await enqueueNewParagraphs(current.generation);
+      } catch (error) {
+        reportScanError(error);
+      }
+
+      const queued = pendingScan;
+      pendingScan = null;
+      ticket = queued;
+    }
+  } finally {
+    scanInFlight = null;
+  }
+}
+
+/** Unexpected scan failures surface a banner instead of an unhandled rejection. */
+function reportScanError(error: unknown): void {
+  console.warn("[ilmt] page scan failed", error);
+  if (active) showErrorBanner("unknown", "");
+}
+
+/** Remove marks added by a scan that was invalidated before it could queue. */
+function unmarkNodes(nodes: ParagraphNode[]): void {
+  for (const node of nodes) node.el.removeAttribute("data-ilmt-p");
 }
 
 /** Collect the full page, cap at MAX_PARAGRAPHS, queue and start the first batch. */
-async function collectAndQueue(): Promise<void> {
-  targetLang = await readTargetLang();
-  const nodes = await collectParagraphs(document.body, {
-    targetLang,
+async function collectAndQueue(generation: number): Promise<void> {
+  if (!active || generation !== scanGeneration) return;
+  const body = document.body;
+  if (!body) return;
+
+  const lang = await readTargetLang();
+  if (!active || generation !== scanGeneration) return;
+  targetLang = lang;
+
+  const nodes = await collectParagraphs(body, {
+    targetLang: lang,
     detectLang: detectLang,
   });
+
+  // A restore/rescan may have landed while detection was in flight: drop the
+  // marks this scan added instead of resurrecting a cancelled page.
+  if (!active || generation !== scanGeneration) {
+    unmarkNodes(nodes);
+    return;
+  }
 
   const overflow = nodes.slice(MAX_PARAGRAPHS);
   for (const node of overflow) node.el.removeAttribute("data-ilmt-p");
@@ -226,6 +340,10 @@ function viewportRank(record: ParagraphRecord): number {
 
 function restore(): void {
   active = false;
+  // Invalidate any async scan and drop a queued follow-up: after restore a
+  // cancelled scan must not mark or queue paragraphs.
+  scanGeneration += 1;
+  pendingScan = null;
 
   if (currentRequestId) {
     send({ type: "abort", requestId: currentRequestId });
@@ -233,7 +351,7 @@ function restore(): void {
   }
   lastCompletedRequestId = null;
 
-  restoreAll(document.body);
+  if (document.body) restoreAll(document.body);
   registry = new ParagraphRegistry();
   deltaBuffers.clear();
   langCache.clear();
@@ -243,6 +361,7 @@ function restore(): void {
   removeActiveBanner();
   removeErrorBanner();
   clearRateLimitTimer();
+  resetRateLimitAttempts();
   // A fresh activation gets a clean observer and dynamic rate budget.
   observerPaused = false;
   dynamicCount = 0;
@@ -340,24 +459,57 @@ function handleError(msg: PortError): void {
   if (msg.requestId !== currentRequestId) return;
 
   if (msg.code === "rate_limit") {
-    // Retryable at the request level: keep the source text, put the ids back,
-    // show the banner and let a single delayed pump retry when idle.
-    for (const id of msg.ids) {
-      registry.setStatus(id, "queued");
-      deltaBuffers.delete(id);
-    }
-    showErrorBanner(msg.code, msg.message);
-    scheduleRateLimitRetry();
-    completeRequest(msg.requestId);
+    handleRateLimitError(msg);
+    return;
+  }
+
+  // Handle EVERY group error for this request. Do not clear the request on
+  // error: a later group's error must still be processed. The background's
+  // `finish` clears the request and pumps once all groups have settled.
+  failIds(msg.ids);
+  if (msg.code !== "aborted") showErrorBanner(msg.code, msg.message);
+}
+
+/**
+ * A 429 keeps the source text and retries automatically, but only a bounded
+ * number of times. Several groups may report 429 for the same request; each
+ * request counts as one attempt.
+ */
+function handleRateLimitError(msg: Extract<PortError, { type: "error" }>): void {
+  const exhausted =
+    rateLimitExhaustedRequestId === msg.requestId ||
+    countRateLimitAttempt(msg.requestId) > MAX_RATE_LIMIT_RETRIES;
+
+  if (exhausted) {
+    rateLimitExhaustedRequestId = msg.requestId;
+    failIds(msg.ids);
+    clearRateLimitTimer();
+    showErrorBanner(msg.code, msg.message, true);
     return;
   }
 
   for (const id of msg.ids) {
+    registry.setStatus(id, "queued");
+    deltaBuffers.delete(id);
+  }
+  showErrorBanner(msg.code, msg.message);
+  scheduleRateLimitRetry(rateLimitAttempts);
+}
+
+/** Count one automatic attempt per request; returns the current total. */
+function countRateLimitAttempt(requestId: string): number {
+  if (rateLimitAttemptedRequestId !== requestId) {
+    rateLimitAttemptedRequestId = requestId;
+    rateLimitAttempts += 1;
+  }
+  return rateLimitAttempts;
+}
+
+function failIds(ids: string[]): void {
+  for (const id of ids) {
     registry.setStatus(id, "failed");
     deltaBuffers.delete(id);
   }
-  if (msg.code !== "aborted") showErrorBanner(msg.code, msg.message);
-  completeRequest(msg.requestId);
 }
 
 /** The current request ended: clear it and start the next batch exactly once. */
@@ -366,6 +518,8 @@ function completeRequest(requestId: string): void {
   currentRequestId = null;
   lastCompletedRequestId = requestId;
   deltaBuffers.clear();
+  // A request that finished without any 429 ends the rate-limit episode.
+  if (rateLimitAttemptedRequestId !== requestId) resetRateLimitAttempts();
   if (!rateLimitHold) pump();
 }
 
@@ -399,7 +553,7 @@ function handleRuntimeMessage(
   if (sender?.id !== chrome.runtime.id) return;
 
   if (type === "page-navigated") {
-    if (active) void rescan();
+    if (active) void rescan().catch(reportScanError);
     return;
   }
 
@@ -412,7 +566,7 @@ function handleRuntimeMessage(
   // every later press reaches this listener and toggles translation.
   if (type === "activate") {
     if (isActive()) restore();
-    else void translatePage();
+    else void translatePage().catch(reportScanError);
     return;
   }
 
@@ -452,8 +606,10 @@ function handleVisibilityChange(): void {
 
 function startObserver(): void {
   if (observer || observerPaused) return;
+  const body = document.body;
+  if (!body) return;
   observer = new MutationObserver(handleMutations);
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  observer.observe(body, { childList: true, subtree: true, characterData: true });
 }
 
 function stopObserver(): void {
@@ -515,7 +671,8 @@ function handleMutations(mutations: MutationRecord[]): void {
   if (mutationTimer !== null) return;
   mutationTimer = setTimeout(() => {
     mutationTimer = null;
-    void enqueueNewParagraphs();
+    if (!active) return;
+    void requestScan("dynamic", scanGeneration).catch(reportScanError);
   }, MUTATION_DEBOUNCE_MS);
 }
 
@@ -532,16 +689,25 @@ function invalidateParagraph(el: Element): void {
   deltaBuffers.delete(id);
 }
 
-async function enqueueNewParagraphs(): Promise<void> {
-  if (!active || observerPaused) return;
-  const nodes = await collectParagraphs(document.body, {
+async function enqueueNewParagraphs(generation: number): Promise<void> {
+  if (!active || observerPaused || generation !== scanGeneration) return;
+  const body = document.body;
+  if (!body) return;
+
+  const nodes = await collectParagraphs(body, {
     targetLang,
     detectLang: detectLang,
   });
+
+  // Cancelled or paused mid-scan: undo exactly the marks this scan added.
+  if (!active || observerPaused || generation !== scanGeneration) {
+    unmarkNodes(nodes);
+    return;
+  }
   if (nodes.length === 0) return;
 
   if (!reserveDynamicSlots(nodes.length)) {
-    for (const node of nodes) node.el.removeAttribute("data-ilmt-p");
+    unmarkNodes(nodes);
     pauseObservation();
     return;
   }
@@ -586,12 +752,22 @@ interface ErrorPresentation {
 }
 
 /** Map a background error code/message to the Chinese banner copy (spec §11). */
-function describeError(code: string, message: string): ErrorPresentation {
+function describeError(
+  code: string,
+  message: string,
+  rateLimitExhausted = false,
+): ErrorPresentation {
   switch (code) {
     case "auth":
       return { text: "API key 无效或权限不足", settings: true, retry: false };
     case "rate_limit":
-      return { text: "请求过于频繁，稍后自动重试", settings: false, retry: true };
+      return {
+        text: rateLimitExhausted
+          ? "请求过于频繁，请稍后手动重试"
+          : "请求过于频繁，稍后自动重试",
+        settings: false,
+        retry: true,
+      };
     case "timeout":
     case "network":
     case "unknown":
@@ -632,8 +808,8 @@ function removeActiveBanner(): void {
 }
 
 /** One error banner at a time, never auto-closed, with an explicit `×`. */
-function showErrorBanner(code: string, message: string): void {
-  const presentation = describeError(code, message);
+function showErrorBanner(code: string, message: string, rateLimitExhausted = false): void {
+  const presentation = describeError(code, message, rateLimitExhausted);
   removeErrorBanner();
 
   const el = document.createElement("div");
@@ -693,6 +869,7 @@ function removeErrorBanner(): void {
 function retryFailedRequests(): void {
   removeErrorBanner();
   clearRateLimitTimer();
+  resetRateLimitAttempts();
   for (const record of registry.all()) {
     if (record.status === "failed") registry.setStatus(record.id, "queued");
   }
@@ -708,14 +885,18 @@ function sendOpenOptions(): void {
   }
 }
 
-function scheduleRateLimitRetry(): void {
+function scheduleRateLimitRetry(attempt: number): void {
   rateLimitHold = true;
   if (rateLimitTimer !== null) return;
+  const delay = Math.min(
+    RATE_LIMIT_RETRY_MS * 2 ** Math.max(0, attempt - 1),
+    RATE_LIMIT_RETRY_MAX_MS,
+  );
   rateLimitTimer = setTimeout(() => {
     rateLimitTimer = null;
     rateLimitHold = false;
     pump();
-  }, RATE_LIMIT_RETRY_MS);
+  }, delay);
 }
 
 function clearRateLimitTimer(): void {
@@ -724,6 +905,12 @@ function clearRateLimitTimer(): void {
     clearTimeout(rateLimitTimer);
     rateLimitTimer = null;
   }
+}
+
+function resetRateLimitAttempts(): void {
+  rateLimitAttempts = 0;
+  rateLimitAttemptedRequestId = null;
+  rateLimitExhaustedRequestId = null;
 }
 
 async function readTargetLang(): Promise<string> {
@@ -744,7 +931,7 @@ async function readTargetLang(): Promise<string> {
  * and the promise shape; accept either. Failures degrade to `null`, which
  * makes `collectParagraphs` use its CJK heuristic.
  */
-async function detectLang(text: string): Promise<string | null> {
+async function detectLang(text: string): Promise<LanguageDetection | null> {
   if (langCache.has(text)) return langCache.get(text) ?? null;
   const detected = await detectLanguage(text);
   if (langCache.size >= LANG_CACHE_LIMIT) langCache.clear();
@@ -752,7 +939,7 @@ async function detectLang(text: string): Promise<string | null> {
   return detected;
 }
 
-function detectLanguage(text: string): Promise<string | null> {
+function detectLanguage(text: string): Promise<LanguageDetection | null> {
   const api = (chrome.i18n as typeof chrome.i18n | undefined)?.detectLanguage as
     | ((text: string, callback: (result: unknown) => void) => unknown)
     | undefined;
@@ -776,16 +963,43 @@ function detectLanguage(text: string): Promise<string | null> {
   });
 }
 
-function topLanguage(result: unknown): string | null {
+/**
+ * Reduce `chrome.i18n.detectLanguage`'s 0–100 per-language shares to the
+ * dominant language and its aggregate share (0–1). Variants of the same
+ * language (`zh-Hans`, `zh-Hant`) are summed before choosing the winner.
+ */
+function topLanguage(result: unknown): LanguageDetection | null {
   const languages = (result as { languages?: Array<{ language?: unknown; percentage?: unknown }> })
     ?.languages;
   if (!Array.isArray(languages) || languages.length === 0) return null;
 
-  let best = languages[0];
+  const totals = new Map<string, number>();
+  const languageByPrefix = new Map<string, string>();
   for (const candidate of languages) {
-    if (Number(candidate.percentage) > Number(best.percentage)) best = candidate;
+    if (typeof candidate.language !== "string" || candidate.language.length === 0) continue;
+    const prefix = languagePrefix(candidate.language);
+    if (prefix.length === 0) continue;
+    const percentage = Number(candidate.percentage);
+    totals.set(prefix, (totals.get(prefix) ?? 0) + (Number.isFinite(percentage) ? percentage : 0));
+    if (!languageByPrefix.has(prefix)) languageByPrefix.set(prefix, candidate.language);
   }
-  return typeof best.language === "string" && best.language.length > 0 ? best.language : null;
+  if (totals.size === 0) return null;
+
+  let bestPrefix = "";
+  let bestTotal = -1;
+  for (const [prefix, total] of totals) {
+    if (total > bestTotal) {
+      bestPrefix = prefix;
+      bestTotal = total;
+    }
+  }
+  const language = languageByPrefix.get(bestPrefix);
+  if (!language) return null;
+  return { language, percentage: Math.max(0, Math.min(1, bestTotal / 100)) };
+}
+
+function languagePrefix(lang: string): string {
+  return (lang.trim().toLowerCase().split(/[-_]/, 1)[0] ?? "");
 }
 
 function newRequestId(): string {

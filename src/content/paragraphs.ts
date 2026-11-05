@@ -17,13 +17,25 @@ export interface ParagraphNode {
   text: string;
 }
 
+/** A detector verdict: the language and its normalized share (0–1). */
+export interface LanguageDetection {
+  language: string;
+  percentage: number;
+}
+
+/**
+ * Detector result. A bare string is accepted as full confidence so older
+ * callers/tests keep working; main wiring returns `{ language, percentage }`.
+ */
+export type LanguageDetectorResult = string | LanguageDetection | null;
+
 interface CollectOptions {
   /** Minimum trimmed text length; shorter candidates are skipped. */
   minLength?: number;
-  /** Share of detections that must match `targetLang` before skipping. */
+  /** Minimum target-language share (0–1) required before skipping. */
   langSkipRatio?: number;
   /** Optional language detector; a `null` result falls back to the CJK heuristic. */
-  detectLang?: (text: string) => Promise<string | null>;
+  detectLang?: (text: string) => Promise<LanguageDetectorResult>;
   /** BCP-47 target language used by the language-skip rule. */
   targetLang?: string;
 }
@@ -278,15 +290,18 @@ async function isAlreadyTargetLang(
   targetLang: string,
 ): Promise<boolean> {
   if (detectLang) {
-    let detected: string | null = null;
+    let detected: LanguageDetectorResult = null;
     try {
       detected = await detectLang(text);
     } catch {
       detected = null;
     }
     if (detected) {
-      const matches = languagePrefix(detected) === languagePrefix(targetLang);
-      return matches && 1 >= langSkipRatio;
+      // A bare string keeps the legacy "full confidence" contract.
+      const language = typeof detected === "string" ? detected : detected.language;
+      const percentage = typeof detected === "string" ? 1 : detected.percentage;
+      const matches = languagePrefix(language) === languagePrefix(targetLang);
+      return matches && percentage >= langSkipRatio;
     }
     // Detection failed: fall through to the character heuristic.
   }

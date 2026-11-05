@@ -83,6 +83,26 @@ describe("target language and marks", () => {  it("compares language prefixes ag
     expect(ps.map(p => p.text.trim())).toEqual(["This is English text."]);
   });
 
+  it("skips only when the target-language share meets the skip ratio", async () => {
+    const root = html(`<p>这是一段中英混合的段落内容 with plenty of English.</p>
+      <p>这是几乎全中文的段落内容。</p>`);
+    const shares: Record<string, number> = {
+      "这是一段中英混合的段落内容 with plenty of English.": 0.7,
+      "这是几乎全中文的段落内容。": 0.9,
+    };
+
+    const ps = await collectParagraphs(root, {
+      targetLang: "zh-CN",
+      langSkipRatio: 0.8,
+      detectLang: async (text) => ({ language: "zh", percentage: shares[text] ?? 1 }),
+    });
+
+    // 0.7 is below the ratio, so it is sent; 0.9 is already target language.
+    expect(ps.map((p) => p.text.trim())).toEqual([
+      "这是一段中英混合的段落内容 with plenty of English.",
+    ]);
+  });
+
   it("falls back to the CJK heuristic when detection returns null", async () => {
     const root = html(`<p>这是一段完全由中文组成的段落内容</p><p>This is English content.</p>`);
     const ps = await collectParagraphs(root, {

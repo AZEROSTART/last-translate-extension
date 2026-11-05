@@ -613,7 +613,70 @@ it("splits a multi-item group in half once on a context-length failure", async (
     { id: "p_3", text: "甲" },
     { id: "p_4", text: "乙" },
   ]);
+  expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
   expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rx1" });
+});
+
+it("enqueues split halves as separate queue tasks", async () => {
+  const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
+    const lines = req.messages[1].content.trim().split("\n");
+    if (lines.length === 4) {
+      throw new ProviderError("bad_response", "maximum context length exceeded", { status: 400 });
+    }
+    return { text: "[1] 甲\n[2] 乙" };
+  });
+  const { d, send } = deps({ adapter: fakeAdapter({ complete }) });
+  const enqueue = vi.spyOn(d.queue, "enqueue");
+
+  await handleTranslate(d, { type: "translate", requestId: "rx4", tabId: 1, items: items(4) }, send);
+
+  // Original group + two halves, each its own queue task.
+  expect(enqueue).toHaveBeenCalledTimes(3);
+  enqueue.mockRestore();
+});
+
+it("completes a split with a concurrency-1 queue", async () => {
+  const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
+    const lines = req.messages[1].content.trim().split("\n");
+    if (lines.length === 4) {
+      throw new ProviderError("bad_response", "maximum context length exceeded", { status: 400 });
+    }
+    return { text: "[1] 甲\n[2] 乙" };
+  });
+  const { d, sent, send } = deps({
+    getSettings: async () => ({ ...settings, concurrency: 1 }),
+    adapter: fakeAdapter({ complete }),
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "rx5", tabId: 1, items: items(4) }, send);
+
+  expect(complete).toHaveBeenCalledTimes(3);
+  expect(sent.find((m) => m.type === "result").items).toHaveLength(4);
+  expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
+});
+
+it("keeps a successful half when the other half is still too long", async () => {
+  const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
+    const content = req.messages[1].content;
+    const lines = content.trim().split("\n");
+    if (lines.length === 4 || content.includes("hello 1")) {
+      throw new ProviderError("bad_response", "maximum context length exceeded", { status: 400 });
+    }
+    return { text: "[1] 甲\n[2] 乙" };
+  });
+  const { d, sent, send } = deps({ adapter: fakeAdapter({ complete }) });
+
+  await handleTranslate(d, { type: "translate", requestId: "rx6", tabId: 1, items: items(4) }, send);
+
+  expect(complete).toHaveBeenCalledTimes(3);
+  expect(sent.find((m) => m.type === "result").items).toEqual([
+    { id: "p_3", text: "甲" },
+    { id: "p_4", text: "乙" },
+  ]);
+  const errors = sent.filter((m) => m.type === "error");
+  expect(errors).toHaveLength(1);
+  expect(errors[0].ids).toEqual(["p_1", "p_2"]);
+  expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
 });
 
 it("does not split a single-item group and reports the context failure", async () => {
@@ -631,7 +694,7 @@ it("does not split a single-item group and reports the context failure", async (
   expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rx2" });
 });
 
-it("splits at most one level and fails a half that is still too long", async () => {
+it("splits at most one level and fails each half that is still too long", async () => {
   const complete = vi.fn(async (_cfg: ProviderConfig, req: CompletionRequest) => {
     const lines = req.messages[1].content.trim().split("\n");
     if (lines.length >= 2) {
@@ -645,8 +708,13 @@ it("splits at most one level and fails a half that is still too long", async () 
 
   // 4-item group + two 2-item halves = three calls, no further splitting.
   expect(complete).toHaveBeenCalledTimes(3);
-  expect(sent.filter((m) => m.type === "error")).toHaveLength(1);
-  expect(sent.find((m) => m.type === "error").ids).toEqual(["p_1", "p_2", "p_3", "p_4"]);
+  const errors = sent.filter((m) => m.type === "error");
+  expect(errors).toHaveLength(2);
+  expect(errors.map((m) => m.ids)).toEqual([
+    ["p_1", "p_2"],
+    ["p_3", "p_4"],
+  ]);
+  expect(sent.some((m) => m.type === "result")).toBe(false);
   expect(sent.filter((m) => m.type === "finish")).toHaveLength(1);
 });
 
