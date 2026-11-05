@@ -165,6 +165,63 @@ it("aborts an in-flight request and keeps the partial answer with a resend actio
   expect(document.querySelector(".error-block")?.textContent).toContain("重新发送");
 });
 
+it("invalidates the pinned context when the same tab navigates to a new URL", async () => {
+  const { chrome, sent, updatedListeners } = installChrome();
+  await boot();
+
+  // Same tab (id 1) now points at a different URL.
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 1, url: "https://a.test/y", title: "B", windowId: 1 },
+  ]);
+  updatedListeners[0](
+    1,
+    { url: "https://a.test/y" },
+    { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const banner = document.querySelector(".banner") as HTMLElement;
+  expect(banner.hidden).toBe(false);
+  expect(banner.textContent).toContain("上下文已失效");
+  expect(banner.textContent).toContain("针对新页面开新会话");
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "新页面的问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    context: { pageUrl: string; title: string; recentParagraphs: unknown[] };
+  };
+  expect(chat).toBeTruthy();
+  expect(chat.context.pageUrl).toBe("");
+  expect(chat.context.title).toBe("");
+  expect(chat.context.recentParagraphs).toEqual([]);
+});
+
+it("shows the interrupted copy and persists the partial answer when the port disconnects", async () => {
+  const { storage, sent, messageListeners, disconnectListeners } = installChrome();
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "部分" });
+
+  disconnectListeners[0]();
+
+  const assistant = document.querySelector(".msg--assistant .msg-body") as HTMLElement;
+  expect(assistant.textContent).toBe("部分");
+  expect(document.querySelector(".error-block")?.textContent).toContain("已中断，重新发送");
+
+  const history = storage._store.get("chat.history") as Array<{
+    messages: Array<{ role: string; content: string }>;
+  }>;
+  expect(history).toHaveLength(1);
+  expect(history[0].messages.at(-1)).toMatchObject({ role: "assistant", content: "部分" });
+});
+
 it("persists the session to chat.history after the assistant finishes", async () => {
   const { storage, sent, messageListeners } = installChrome();
   await boot();

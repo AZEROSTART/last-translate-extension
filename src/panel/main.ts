@@ -114,6 +114,7 @@ async function start(): Promise<void> {
   const tab = activeTab;
   session = findSession(sessions, tab?.id) ?? (tab ? createSession(tab.url, tab.title, tab.id) : createSession("", "", 0));
   renderAll();
+  updateBanner();
   connectPort();
   wireTabs();
   resolveReady();
@@ -280,14 +281,42 @@ function wireTabs(): void {
       void refreshActiveTab();
     }
   });
+  // SPA history changes do not always surface as `tabs.onUpdated` URL changes.
+  // The panel has the `webNavigation` permission, so it can observe the same
+  // navigation signal the background forwards to content scripts.
+  const nav = chrome.webNavigation;
+  nav?.onCommitted?.addListener((details) => {
+    if (details.frameId === 0) void refreshActiveTab();
+  });
+  nav?.onHistoryStateUpdated?.addListener((details) => {
+    if (details.frameId === 0) void refreshActiveTab();
+  });
+}
+
+/**
+ * The session is still pinned to the active tab, but that tab has navigated to
+ * a different URL. The conversation stays, yet its page context no longer
+ * describes what the user is looking at.
+ */
+function isContextStale(): boolean {
+  return (
+    !!activeTab &&
+    !!session &&
+    session.pageUrl !== "" &&
+    activeTab.id === session.tabId &&
+    activeTab.url !== session.pageUrl
+  );
 }
 
 function updateBanner(): void {
   const switched = !!activeTab && !!session && activeTab.id !== session.tabId;
-  banner.hidden = !switched;
+  const stale = !switched && isContextStale();
+  banner.hidden = !switched && !stale;
   if (switched) {
     const label = activeTab!.title || activeTab!.url;
     bannerTitle.textContent = label ? `当前页面已切换：${label}` : "当前页面已切换";
+  } else if (stale) {
+    bannerTitle.textContent = "上下文已失效";
   }
 }
 
@@ -318,7 +347,11 @@ function sendText(text: string, quote?: string): void {
   const now = Date.now();
   session = appendMessage(session, { role: "user", content: text, quote, ts: now });
   const messages: ChatMessage[] = session.messages.map((m) => ({ role: m.role, content: m.content }));
-  const context: ChatContext = buildChatContext(session, quote ? [quote] : [], recentParagraphs);
+  // Once the pinned page navigates away, never keep injecting the old page's
+  // title/URL/paragraphs. The conversation itself is preserved.
+  const context: ChatContext = isContextStale()
+    ? { pageUrl: "", title: "", quotes: quote ? [quote] : [], recentParagraphs: [] }
+    : buildChatContext(session, quote ? [quote] : [], recentParagraphs);
   session = appendMessage(session, { role: "assistant", content: "", ts: now + 1 });
   renderAll();
   persistHistory();
@@ -452,7 +485,8 @@ function handleDisconnect(): void {
   streaming = false;
   currentRequestId = null;
   assistantEl = null;
-  showError("连接已断开", "重新发送");
+  persistHistory();
+  showError("已中断，重新发送", "重新发送");
   setInputEnabled(true);
 }
 
