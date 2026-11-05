@@ -1,0 +1,24 @@
+/* Translation nodes inserted by the content script. */
+
+/* Block translations sit directly under the source paragraph. */
+.ilmt-block {
+  display: block !important;
+  margin-top: 0.35em !important;
+}
+
+/* Inline translations flow right after the translated inline element. */
+.ilmt-inline {
+  display: inline !important;
+}
+
+/* Inherit the surrounding typography; let the translation read as secondary. */
+.ilmt-tr {
+  font: inherit;
+  color: inherit;
+  opacity: 0.82;
+}
+
+/* Pending translation: dim until text arrives. */
+.ilmt-tr[data-loading="1"] {
+  opacity: 0.4;
+}
