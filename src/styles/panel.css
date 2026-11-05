@@ -1,0 +1,203 @@
+/* Side-panel chat UI (panel.html). Vanilla DOM; scoped under #root. */
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 10px;
+  gap: 10px;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color: #1f2328;
+}
+
+/* Fixed note explaining the context scope. */
+.context-note {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  color: #59636e;
+  font-size: 12px;
+}
+
+/* Page-switch banner: shown when the active tab differs from the session's. */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(9, 105, 218, 0.35);
+  border-radius: 8px;
+  background: rgba(9, 105, 218, 0.08);
+  color: #0969da;
+  font-size: 12px;
+}
+
+.banner[hidden] {
+  display: none;
+}
+
+.banner button {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: #0969da;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Pending-selection quote chip. */
+.quote-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid #0969da;
+  border-radius: 6px;
+  background: rgba(9, 105, 218, 0.06);
+  color: #1f2328;
+  font-size: 12px;
+}
+
+.quote-chip[hidden] {
+  display: none;
+}
+
+.quote-chip-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quote-chip-remove {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #59636e;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* Message list. */
+.msg-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  max-width: 85%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.msg--user {
+  align-self: flex-end;
+  background: #0969da;
+  color: #fff;
+}
+
+.msg--assistant {
+  align-self: flex-start;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.msg-quote {
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  border-left: 2px solid currentColor;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.msg-body:empty::after {
+  content: "…";
+  opacity: 0.6;
+}
+
+/* Inline error / interruption notice with a resend action. */
+.error-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(207, 34, 46, 0.08);
+  color: #cf222e;
+  font-size: 12px;
+}
+
+.error-block button {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #cf222e;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Composer: textarea + send/stop. */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.composer-input {
+  flex: 1;
+  resize: none;
+  min-height: 40px;
+  max-height: 160px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  box-sizing: border-box;
+}
+
+.composer-input:disabled {
+  opacity: 0.6;
+}
+
+.composer button {
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer-send {
+  background: #0969da;
+  color: #fff;
+}
+
+.composer-send[hidden] {
+  display: none;
+}
+
+.composer-stop {
+  background: #cf222e;
+  color: #fff;
+}
+
+.composer-stop[hidden] {
+  display: none;
+}

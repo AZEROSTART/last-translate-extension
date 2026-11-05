@@ -10,9 +10,45 @@ import type {
   ChatBackgroundToClient,
   ChatClientToBackground,
   ClientToBackground,
+  OpenChatMessage,
 } from "../shared/types";
 
 const deps = createDeps();
+
+/** Storage key where a pending selection quote waits for the panel to read it. */
+const PENDING_QUOTE_KEY = "chat.pendingQuote";
+
+/**
+ * Content scripts ask for the side panel by sending `open-chat` (a runtime
+ * message, not a port message). Stash the selection under `chat.pendingQuote`
+ * so the panel can pre-fill its quote chip, then open the panel for the sender's
+ * tab. `sidePanel.open` requires a user gesture and may reject; that failure
+ * must never surface to the page.
+ */
+chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender) => {
+  if (!message || typeof message !== "object") return;
+  const msg = message as { type?: unknown };
+  if (msg.type !== "open-chat") return;
+  if (sender.id !== chrome.runtime.id) return;
+
+  const openChat = message as OpenChatMessage;
+  const tabId = sender.tab?.id;
+  if (tabId === undefined) return;
+
+  void chrome.storage.local
+    .set({ [PENDING_QUOTE_KEY]: { text: openChat.text, mode: openChat.mode, tabId, ts: Date.now() } })
+    .catch(() => {
+      // Storage write failed; the panel just opens without a pre-filled quote.
+    });
+
+  try {
+    void chrome.sidePanel.open({ tabId }).catch(() => {
+      // No user gesture (or panel already open): ignore, never throw to the page.
+    });
+  } catch {
+    // `sidePanel.open` can throw synchronously outside a user gesture.
+  }
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   // Reject any connection not from this extension (spec §12).

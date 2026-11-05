@@ -126,3 +126,14 @@ export interface ChatUsage {
   completionTokens?: number;
   totalTokens?: number;
 }
+
+/**
+ * Runtime message the content script sends (via `chrome.runtime.sendMessage`)
+ * to ask the background to open the side panel with a selected quote. A runtime
+ * message, not a port message.
+ */
+export interface OpenChatMessage {
+  type: "open-chat";
+  text: string;
+  mode: "explain" | "follow-up";
+}
