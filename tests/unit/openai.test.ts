@@ -62,6 +62,18 @@ async function captureError(promise: Promise<unknown>): Promise<ProviderError> {
   throw new Error("Expected the promise to reject");
 }
 
+async function collectWithError(
+  gen: AsyncGenerator<string>,
+): Promise<{ deltas: string[]; error?: ProviderError }> {
+  const deltas: string[] = [];
+  try {
+    for await (const delta of gen) deltas.push(delta);
+    return { deltas };
+  } catch (err) {
+    return { deltas, error: err as ProviderError };
+  }
+}
+
 describe("normalizeBaseURL", () => {
   it("appends /v1 by default", () => {
     expect(normalizeBaseURL("https://api.test")).toBe("https://api.test/v1");
@@ -221,14 +233,131 @@ describe("streamCompletion", () => {
     expect(await collect(streamCompletion(cfg, req()))).toBe("你好");
   });
 
-  it("does not emit a trailing partial event at stream end", async () => {
+  it("does not emit a trailing partial event and rejects the truncated stream", async () => {
     mockFetch(async () =>
       streamResponse([
         'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"好"}}]}',
       ]),
     );
+    const { deltas, error } = await collectWithError(streamCompletion(cfg, req()));
+    expect(deltas).toEqual(["你"]);
+    expect(error).toMatchObject({ code: "bad_response", retryable: false });
+  });
+
+  it("rejects a clean EOF that arrives without [DONE] or finish_reason", async () => {
+    mockFetch(async () =>
+      streamResponse(['data: {"choices":[{"delta":{"content":"你"}}]}\n\n']),
+    );
+    const { deltas, error } = await collectWithError(streamCompletion(cfg, req()));
+    expect(deltas).toEqual(["你"]);
+    expect(error).toMatchObject({ code: "bad_response", retryable: false });
+  });
+
+  it("accepts finish_reason as a terminator when [DONE] is absent", async () => {
+    mockFetch(async () =>
+      streamResponse(['data: {"choices":[{"delta":{"content":"你"},"finish_reason":"stop"}]}\n\n']),
+    );
     expect(await collect(streamCompletion(cfg, req()))).toBe("你");
+  });
+
+  it("accepts a final [DONE] even when its blank line is missing", async () => {
+    mockFetch(async () =>
+      streamResponse(['data: {"choices":[{"delta":{"content":"你"}}]}\n\n', "data: [DONE]"]),
+    );
+    expect(await collect(streamCompletion(cfg, req()))).toBe("你");
+  });
+
+  it("rejects malformed SSE data as bad_response", async () => {
+    mockFetch(async () =>
+      streamResponse(['data: {"choices":[{"delta":{"content":"你"}}]}\n\n', "data: not-json\n\n"]),
+    );
+    const { deltas, error } = await collectWithError(streamCompletion(cfg, req()));
+    expect(deltas).toEqual(["你"]);
+    expect(error).toMatchObject({ code: "bad_response", retryable: false });
+  });
+
+  it("rejects an error event delivered on HTTP 200 and redacts the key", async () => {
+    mockFetch(async () =>
+      streamResponse(['data: {"error":{"message":"upstream overloaded for sk-1"}}\n\n']),
+    );
+    const err = await captureError(collect(streamCompletion(cfg, req())));
+    expect(err).toMatchObject({ code: "bad_response", retryable: false });
+    expect(err.message).toContain("upstream overloaded");
+    expect(err.message).not.toContain("sk-1");
+  });
+
+  it("rejects a 200 JSON error body sent to a streaming request", async () => {
+    mockFetch(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "bad request" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(collect(streamCompletion(cfg, req()))).rejects.toMatchObject({
+      code: "bad_response",
+      retryable: false,
+    });
+  });
+
+  it("keeps a stream alive past the connect budget once headers have arrived", async () => {
+    vi.useFakeTimers();
+    // Route AbortSignal.timeout through fake timers so a regression that folds
+    // the connect deadline into the fetch signal fails deterministically.
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const abort = new AbortController();
+      setTimeout(() => abort.abort(new DOMException("Timeout", "TimeoutError")), ms);
+      return abort.signal;
+    });
+
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    mockFetch(async (_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+          // Real fetch errors the response body when its signal aborts.
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              try {
+                controller.error(init.signal?.reason);
+              } catch {
+                // Already closed.
+              }
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+
+    const deltas: string[] = [];
+    const consumed = (async () => {
+      for await (const delta of streamCompletion(cfg, req())) deltas.push(delta);
+    })();
+    const settled = consumed.then(
+      () => "done" as const,
+      (err: unknown) => err,
+    );
+
+    await vi.advanceTimersByTimeAsync(0); // headers arrive; connect deadline cleared
+    await vi.advanceTimersByTimeAsync(PROVIDER_TIMEOUTS.connectMs + 1_000); // still open past 15s
+    expect(deltas).toEqual([]);
+
+    const bytes = new TextEncoder();
+    try {
+      bodyController.enqueue(bytes.encode('data: {"choices":[{"delta":{"content":"你"}}]}\n\n'));
+      bodyController.enqueue(bytes.encode("data: [DONE]\n\n"));
+      bodyController.close();
+    } catch {
+      // A regression would have cancelled the body at the connect budget.
+    }
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await settled).toBe("done");
+    expect(deltas.join("")).toBe("你");
   });
 
   it("stops at [DONE] and ignores anything after it", async () => {

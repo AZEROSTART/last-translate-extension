@@ -61,11 +61,19 @@ function classifyStatus(status: number): { code: ErrorCode; retryable: boolean }
   return { code: "bad_response", retryable: false };
 }
 
-function isAbortError(err: unknown): boolean {
+function isNamedError(err: unknown, name: string): boolean {
   if (typeof err !== "object" || err === null) return false;
-  if ((err as { name?: unknown }).name === "AbortError") return true;
+  if ((err as { name?: unknown }).name === name) return true;
   const cause = (err as { cause?: unknown }).cause;
-  return cause !== undefined && cause !== err && isAbortError(cause);
+  return cause !== undefined && cause !== err && isNamedError(cause, name);
+}
+
+function isAbortError(err: unknown): boolean {
+  return isNamedError(err, "AbortError");
+}
+
+function isTimeoutError(err: unknown): boolean {
+  return isNamedError(err, "TimeoutError");
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -116,11 +124,48 @@ function mapFetchError(err: unknown, cfg: ProviderConfig, url: string, ctx: Erro
   if (ctx.timedOut) {
     return new ProviderError("timeout", `Request to ${url} timed out`, { cause: err });
   }
+  if (isTimeoutError(err)) {
+    return new ProviderError("timeout", `Request to ${url} timed out`, { cause: err });
+  }
   if (isAbortError(err)) {
     return new ProviderError("aborted", redact(`Request aborted for ${url}`, cfg.apiKey), { cause: err });
   }
   const detail = err instanceof Error ? err.message : String(err);
   return new ProviderError("network", redact(`Network error from ${url}: ${detail}`, cfg.apiKey), { cause: err });
+}
+
+/**
+ * Race the fetch handshake against a connect deadline. The deadline is cleared
+ * as soon as headers arrive, so a long-lived SSE response cannot be aborted by
+ * the connect budget. The response body stays tied to `signal`, so caller and
+ * total-timeout aborts still cancel in-flight reads.
+ */
+async function fetchWithConnectTimeout(
+  url: string,
+  init: Omit<RequestInit, "signal">,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  if (signal?.aborted) throw new ProviderError("aborted", "Request aborted");
+
+  const connectAbort = new AbortController();
+  const onAbort = () => connectAbort.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  const combined = signal ? AbortSignal.any([signal, connectAbort.signal]) : connectAbort.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const connectDeadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new ProviderError("timeout", `Connection timed out after ${PROVIDER_TIMEOUTS.connectMs}ms`, { retryable: true }));
+      connectAbort.abort();
+    }, PROVIDER_TIMEOUTS.connectMs);
+  });
+
+  try {
+    return await Promise.race([fetch(url, { ...init, signal: combined }), connectDeadline]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 function parseUsage(raw: unknown): ChatUsage | undefined {
@@ -199,15 +244,13 @@ function readWithTimeout(
 /** `GET {baseURL}/models`; a failure here must never block the settings UI. */
 export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Promise<ModelInfo[]> {
   const url = `${normalizeBaseURL(cfg.baseURL)}/models`;
-  const connectTimeout = AbortSignal.timeout(PROVIDER_TIMEOUTS.connectMs);
-  const combined = signal ? AbortSignal.any([signal, connectTimeout]) : connectTimeout;
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: buildHeaders(cfg, "GET"),
-      signal: combined,
-    });
+    const response = await fetchWithConnectTimeout(
+      url,
+      { method: "GET", headers: buildHeaders(cfg, "GET") },
+      signal,
+    );
     if (!response.ok) throw await httpError(cfg, response, url);
 
     const data = await readJson(cfg, response, url);
@@ -228,7 +271,7 @@ export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Pro
     }
     return models;
   } catch (err) {
-    throw mapFetchError(err, cfg, url, { timedOut: connectTimeout.aborted, callerAborted: signal?.aborted ?? false });
+    throw mapFetchError(err, cfg, url, { callerAborted: signal?.aborted ?? false });
   }
 }
 
@@ -236,15 +279,18 @@ export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Pro
 export async function complete(cfg: ProviderConfig, req: CompletionRequest): Promise<CompletionResult> {
   const url = `${normalizeBaseURL(cfg.baseURL)}/chat/completions`;
   const totalTimeout = AbortSignal.timeout(PROVIDER_TIMEOUTS.totalMs);
-  const combined = req.signal ? AbortSignal.any([req.signal, totalTimeout]) : totalTimeout;
+  const operationSignal = req.signal ? AbortSignal.any([req.signal, totalTimeout]) : totalTimeout;
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: buildHeaders(cfg, "POST"),
-      body: JSON.stringify(buildBody(cfg, req, false)),
-      signal: combined,
-    });
+    const response = await fetchWithConnectTimeout(
+      url,
+      {
+        method: "POST",
+        headers: buildHeaders(cfg, "POST"),
+        body: JSON.stringify(buildBody(cfg, req, false)),
+      },
+      operationSignal,
+    );
     if (!response.ok) throw await httpError(cfg, response, url);
 
     const data = asObject(await readJson(cfg, response, url));
@@ -272,12 +318,28 @@ export async function complete(cfg: ProviderConfig, req: CompletionRequest): Pro
   }
 }
 
+function hasFinishReason(payload: unknown): boolean {
+  const choices = asObject(payload)?.choices;
+  if (!Array.isArray(choices)) return false;
+  return choices.some(choice => {
+    const reason = asObject(choice)?.finish_reason;
+    return typeof reason === "string" && reason.length > 0;
+  });
+}
+
+function providerErrorMessage(error: unknown): string | undefined {
+  if (typeof error === "string") return error;
+  const message = asObject(error)?.message;
+  return typeof message === "string" ? message : undefined;
+}
+
 /**
  * Stream `POST {baseURL}/chat/completions` as text deltas.
  *
  * SSE events are buffered until a full `\n\n` delimiter arrives, so an event
- * split across chunks is never parsed early. A trailing partial event at EOF
- * is intentionally discarded.
+ * split across chunks is never parsed early. Content from a trailing partial
+ * event is never emitted. A stream must end with `[DONE]` or a `finish_reason`;
+ * otherwise it is reported as a truncated `bad_response`.
  */
 export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequest): AsyncGenerator<string> {
   const url = `${normalizeBaseURL(cfg.baseURL)}/chat/completions`;
@@ -288,9 +350,6 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
   const onCallerAbort = () => controller.abort();
   caller?.addEventListener("abort", onCallerAbort, { once: true });
 
-  const connectTimeout = AbortSignal.timeout(PROVIDER_TIMEOUTS.connectMs);
-  const signal = AbortSignal.any([controller.signal, connectTimeout]);
-  let connected = false;
   let totalTimedOut = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -300,13 +359,18 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
   }, PROVIDER_TIMEOUTS.totalMs);
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: buildHeaders(cfg, "POST"),
-      body: JSON.stringify(buildBody(cfg, req, true)),
-      signal,
-    });
-    connected = true;
+    // The connect deadline is cleared when headers arrive; the 45s/60s/180s
+    // budgets below govern the body. Never fold a connect timeout into the
+    // response-body signal or every long stream would be truncated.
+    const response = await fetchWithConnectTimeout(
+      url,
+      {
+        method: "POST",
+        headers: buildHeaders(cfg, "POST"),
+        body: JSON.stringify(buildBody(cfg, req, true)),
+      },
+      controller.signal,
+    );
     if (!response.ok) throw await httpError(cfg, response, url);
     if (!response.body) {
       throw new ProviderError("bad_response", redact(`Empty response body from ${url}`, cfg.apiKey), {
@@ -318,11 +382,40 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
     const decoder = new TextDecoder();
     let buffer = "";
     let firstEvent = true;
+    let terminated = false;
 
     while (true) {
       const timeoutMs = firstEvent ? PROVIDER_TIMEOUTS.firstTokenMs : PROVIDER_TIMEOUTS.idleMs;
       const result = await readWithTimeout(reader, timeoutMs, controller);
-      if (result.done) return;
+      if (result.done) {
+        if (terminated) return;
+
+        // A provider may omit the final blank line. Accept an unterminated
+        // control marker, but never emit content from a trailing partial event.
+        const tailPayload = eventData(buffer);
+        if (tailPayload !== null) {
+          if (tailPayload.trim() === "[DONE]") return;
+          const tail = tryParseJson(tailPayload);
+          if (tail !== undefined) {
+            const tailObject = asObject(tail);
+            if (tailObject?.error !== undefined) {
+              const detail = redactedBody(
+                providerErrorMessage(tailObject.error) ?? "Provider returned an error event",
+              );
+              throw new ProviderError("bad_response", redact(`Provider error from ${url}: ${detail}`, cfg.apiKey), {
+                status: response.status,
+              });
+            }
+            if (hasFinishReason(tail)) return;
+          }
+        }
+
+        throw new ProviderError(
+          "bad_response",
+          redact(`Stream from ${url} ended before a completion marker`, cfg.apiKey),
+          { status: response.status },
+        );
+      }
 
       // Keep the raw tail in `buffer`; only complete `\n\n`-delimited events are parsed.
       buffer = `${buffer}${decoder.decode(result.value, { stream: true })}`.replace(/\r\n/g, "\n");
@@ -333,14 +426,30 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
         buffer = buffer.slice(boundary + 2);
 
         const payload = eventData(event);
-        if (payload !== null) {
+        if (payload !== null && payload.trim().length > 0) {
           if (payload.trim() === "[DONE]") return;
+
           const parsed = tryParseJson(payload);
-          if (parsed !== undefined) {
-            firstEvent = false;
-            const content = deltaContent(parsed);
-            if (content !== undefined && content.length > 0) yield content;
+          if (parsed === undefined) {
+            throw new ProviderError(
+              "bad_response",
+              redact(`Malformed SSE event from ${url}: ${redactedBody(payload)}`, cfg.apiKey),
+              { status: response.status },
+            );
           }
+
+          const parsedObject = asObject(parsed);
+          if (parsedObject?.error !== undefined) {
+            const detail = redactedBody(providerErrorMessage(parsedObject.error) ?? "Provider returned an error event");
+            throw new ProviderError("bad_response", redact(`Provider error from ${url}: ${detail}`, cfg.apiKey), {
+              status: response.status,
+            });
+          }
+
+          firstEvent = false;
+          if (hasFinishReason(parsed)) terminated = true;
+          const content = deltaContent(parsed);
+          if (content !== undefined && content.length > 0) yield content;
         }
 
         boundary = buffer.indexOf("\n\n");
@@ -348,7 +457,7 @@ export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequ
     }
   } catch (err) {
     throw mapFetchError(err, cfg, url, {
-      timedOut: totalTimedOut || (!connected && connectTimeout.aborted),
+      timedOut: totalTimedOut,
       callerAborted: caller?.aborted ?? false,
     });
   } finally {
