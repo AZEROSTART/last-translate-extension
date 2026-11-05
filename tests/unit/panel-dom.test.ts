@@ -198,6 +198,61 @@ it("invalidates the pinned context when the same tab navigates to a new URL", as
   expect(chat.context.recentParagraphs).toEqual([]);
 });
 
+it("starts a fresh session pinned to the new page from the stale banner", async () => {
+  const { chrome, sent, messageListeners, updatedListeners } = installChrome();
+  await boot();
+
+  const oldSessionId = (globalThis as any).__ilmtPanel.session.id as string;
+
+  // Give the original session real history so it is persisted and findable by
+  // `tabId`; this is the path where the stale session used to be reused.
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "旧页面的问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  const oldChat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  messageListeners[0]({ type: "delta", requestId: oldChat.requestId, text: "旧答案" });
+  messageListeners[0]({ type: "finish", requestId: oldChat.requestId });
+
+  // Same tab (id 1) now points at a different URL.
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 1, url: "https://a.test/y", title: "B", windowId: 1 },
+  ]);
+  updatedListeners[0](
+    1,
+    { url: "https://a.test/y" },
+    { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const banner = document.querySelector(".banner") as HTMLElement;
+  expect(banner.hidden).toBe(false);
+  (document.querySelector(".banner-action") as HTMLButtonElement).click();
+
+  // A new session, not the stale one, pinned to the current page.
+  const session = (globalThis as any).__ilmtPanel.session as {
+    id: string;
+    pageUrl: string;
+    pageTitle: string;
+    messages: unknown[];
+  };
+  expect(session.id).not.toBe(oldSessionId);
+  expect(session.pageUrl).toBe("https://a.test/y");
+  expect(session.pageTitle).toBe("B");
+  expect(session.messages).toEqual([]);
+  expect(banner.hidden).toBe(true);
+
+  input.value = "新页面的问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+
+  const chat = sent.filter((m) => (m as { type?: string }).type === "chat").at(-1) as {
+    context: { pageUrl: string; title: string; recentParagraphs: unknown[] };
+  };
+  expect(chat).toBeTruthy();
+  expect(chat.context.pageUrl).toBe("https://a.test/y");
+  expect(chat.context.title).toBe("B");
+  expect(chat.context.recentParagraphs).toEqual([]);
+});
+
 it("shows the interrupted copy and persists the partial answer when the port disconnects", async () => {
   const { storage, sent, messageListeners, disconnectListeners } = installChrome();
   await boot();

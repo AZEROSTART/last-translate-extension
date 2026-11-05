@@ -324,7 +324,10 @@ function handleNewSession(): void {
   const tab = activeTab;
   if (!tab) return;
   persistHistory();
-  const existing = findSession(sessions, tab.id);
+  // In the stale state the tab still holds the old session id. Reusing it would
+  // keep the panel pinned to a page the user has already left, so start a fresh
+  // session against the page that is active now.
+  const existing = isContextStale() ? null : findSession(sessions, tab.id);
   session = existing ?? createSession(tab.url, tab.title, tab.id);
   renderAll();
   updateBanner();
