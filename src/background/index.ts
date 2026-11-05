@@ -24,6 +24,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "ilmt-translate") {
     // requestId → owning tab, so an `abort` can cancel the whole tab.
     const tabByRequest = new Map<string, number>();
+    const senderTabId = port.sender?.tab?.id;
 
     port.onMessage.addListener((raw: ClientToBackground) => {
       if (!deps.isTrustedSender(port.sender ?? {})) return;
@@ -43,8 +44,16 @@ chrome.runtime.onConnect.addListener((port) => {
         port.postMessage({ type: "pong" } satisfies BackgroundToClient);
       }
     });
+
+    // A killed port must cancel the tab's work even when the content script's
+    // `abort` never arrived (tab close, reload, service-worker teardown). The
+    // content side also defers `close()` one macrotask so `abort` wins first.
+    port.onDisconnect.addListener(() => {
+      if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
+    });
   } else if (port.name === "ilmt-chat") {
     const tabByRequest = new Map<string, number>();
+    const senderTabId = port.sender?.tab?.id;
 
     port.onMessage.addListener((raw: ChatClientToBackground) => {
       if (!deps.isTrustedSender(port.sender ?? {})) return;
@@ -57,6 +66,10 @@ chrome.runtime.onConnect.addListener((port) => {
         const tabId = tabByRequest.get(raw.requestId);
         if (tabId !== undefined) deps.queue.cancelTab(tabId);
       }
+    });
+
+    port.onDisconnect.addListener(() => {
+      if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
     });
   }
 });

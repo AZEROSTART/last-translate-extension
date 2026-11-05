@@ -30,13 +30,15 @@ function djb2Hex(text: string): string {
 function captureConnectPort() {
   const sent: any[] = [];
   const messageListeners: Array<(message: unknown) => void> = [];
+  const disconnectListeners: Array<() => void> = [];
+  const disconnect = vi.fn();
   const connect = vi.fn(() => ({
     postMessage: (m: unknown) => sent.push(m),
     onMessage: { addListener: (cb: (message: unknown) => void) => messageListeners.push(cb) },
-    onDisconnect: { addListener: vi.fn() },
-    disconnect: vi.fn(),
+    onDisconnect: { addListener: (cb: () => void) => disconnectListeners.push(cb) },
+    disconnect,
   }));
-  return { sent, messageListeners, connect };
+  return { sent, messageListeners, disconnectListeners, disconnect, connect };
 }
 
 it("translates only paragraphs near the viewport on first trigger", async () => {
@@ -190,4 +192,121 @@ it("caps the page at 2000 paragraphs and warns", async () => {
   expect(document.querySelectorAll("[data-ilmt-p]")).toHaveLength(2000);
   expect(warn).toHaveBeenCalled();
   warn.mockRestore();
+});
+
+/** Give one element a synthetic viewport position for ordering assertions. */
+function stubRect(el: Element, top: number, bottom: number): void {
+  (el as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+}
+
+it("sends the paragraph nearest the viewport first, then the 300px band", async () => {
+  document.body.innerHTML = [
+    `<p id="far">Far away paragraph here.</p>`,
+    `<p id="near">Nearest paragraph here.</p>`,
+    `<p id="below">Just below paragraph here.</p>`,
+  ].join("");
+  stubRect(document.getElementById("far")!, 5000, 5050);
+  stubRect(document.getElementById("near")!, 100, 150);
+  stubRect(document.getElementById("below")!, 900, 950); // 132px below a 768px viewport
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (m: any) => sent.push(m) };
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  const translate = sent.find((m) => m.type === "translate");
+  expect(translate.items.map((item: any) => item.text)).toEqual([
+    "Nearest paragraph here.",
+    "Just below paragraph here.",
+    "Far away paragraph here.",
+  ]);
+});
+
+it("pumps queued paragraphs on scroll when no request is in flight", async () => {
+  document.body.innerHTML = Array.from(
+    { length: 21 },
+    (_, i) => `<p>Paragraph number ${i} here.</p>`,
+  ).join("");
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, disconnectListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+
+  // Still in flight: a scroll must not start a second request.
+  window.dispatchEvent(new Event("scroll"));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+
+  // Server-side disconnect requeues inflight work and clears the in-flight id.
+  disconnectListeners[0]();
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+
+  window.dispatchEvent(new Event("scroll"));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
+});
+
+it("removes old translations before an SPA rescan so sources stay clean", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+
+  const navListeners: Array<(message: unknown, sender: { id?: string }) => void> = [];
+  (globalThis as any).chrome.runtime.onMessage.addListener = (cb: any) => navListeners.push(cb);
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  const first = sent.find((m) => m.type === "translate");
+  messageListeners[0]({
+    type: "result",
+    requestId: first.requestId,
+    items: [{ id: first.items[0].id, text: "译文" }],
+  });
+  const paragraph = document.querySelector("p")!;
+  expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+  expect(paragraph.textContent).toBe("First paragraph here.译文");
+
+  navListeners[0]({ type: "page-navigated" }, { id: (globalThis as any).chrome.runtime.id });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items).toHaveLength(1);
+  expect(translates[1].items[0].text).toBe("First paragraph here.");
+});
+
+it("defers closing the port until after the abort message is posted", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, disconnect, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  (globalThis as any).__ilmtMain.restore();
+
+  const abort = sent.find((m) => m.type === "abort");
+  expect(abort).toBeTruthy();
+  expect(disconnect).not.toHaveBeenCalled();
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(disconnect).toHaveBeenCalledTimes(1);
 });
