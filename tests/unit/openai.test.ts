@@ -128,6 +128,12 @@ describe("listModels", () => {
     expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer sk-1");
   });
 
+  it("omits /v1 when appendV1 is false", async () => {
+    const fn = mockFetch(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await listModels({ ...cfg, appendV1: false });
+    expect(fn.mock.calls[0][0]).toBe("https://api.test/models");
+  });
+
   it("maps 401 to a non-retryable auth error", async () => {
     mockFetch(async () => new Response("{}", { status: 401 }));
     await expect(listModels(cfg)).rejects.toMatchObject({ code: "auth", retryable: false, status: 401 });
@@ -182,6 +188,14 @@ describe("complete", () => {
       async () => new Response(JSON.stringify({ choices: [{ message: { content: "甲" } }] }), { status: 200 }),
     );
     await expect(complete(cfg, req({ messages: [{ role: "user", content: "[1] a" }] }))).resolves.toEqual({ text: "甲" });
+  });
+
+  it("omits /v1 for completions when appendV1 is false", async () => {
+    const fn = mockFetch(
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: "甲" } }] }), { status: 200 }),
+    );
+    await complete({ ...cfg, appendV1: false }, req());
+    expect(fn.mock.calls[0][0]).toBe("https://api.test/chat/completions");
   });
 
   it("sends a non-streaming request and forwards usage", async () => {

@@ -377,6 +377,37 @@ textarea {
   display: none;
 }
 
+.global-cache-message {
+  font-size: 13px;
+}
+
+.global-cache-message.success {
+  color: #1a7f37;
+}
+
+.global-cache-message.error {
+  color: #cf222e;
+}
+
+.global-cache-message[hidden] {
+  display: none;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #0969da;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: #0d1117;

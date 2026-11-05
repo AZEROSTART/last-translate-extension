@@ -4,6 +4,8 @@ import type { Deps } from "../../src/background/dispatch";
 import type { CompletionRequest, CompletionResult, ProviderAdapter } from "../../src/providers";
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey } from "../../src/background/cache";
+import { DEFAULT_SETTINGS } from "../../src/shared/storage";
+import { promptVersionFor } from "../../src/shared/prompt";
 import type { ProviderConfig, Settings } from "../../src/shared/types";
 
 const settings: Settings = {
@@ -190,7 +192,7 @@ it("translates a multi-segment group, caches each item, and uses provider overri
   expect(sent).toContainEqual({ type: "result", requestId: "r9", items: [{ id: "p_1", text: "甲" }, { id: "p_2", text: "乙" }] });
 });
 
-it("builds the cache key from text, target lang, provider, model and prompt version", async () => {
+it("builds the cache key from text, target lang, provider, model and effective prompt version", async () => {
   const get = vi.fn<(key: string) => Promise<string | undefined>>(async () => undefined);
   const { d } = deps({ cache: { get, put: vi.fn(async () => {}) } });
   await handleTranslate(d, { type: "translate", requestId: "r10", tabId: 1, items: items(1) }, () => {});
@@ -199,9 +201,60 @@ it("builds the cache key from text, target lang, provider, model and prompt vers
     targetLang: "zh-CN",
     providerConfigId: "a",
     modelId: "m",
-    promptVersion: "v1",
+    promptVersion: await promptVersionFor("SYS"),
   });
   expect(get.mock.calls[0][0]).toBe(expected);
+});
+
+it("keys the cache by each provider's effective systemPrompt override", async () => {
+  const keys: string[] = [];
+  let override = "OVERRIDE_A";
+  const provider = (): ProviderConfig => ({
+    ...settings.providers[0],
+    overrides: { systemPrompt: override },
+  });
+  const { d } = deps({
+    getSettings: async () => ({ ...settings, providers: [provider()] }),
+    cache: {
+      get: async (key: string) => {
+        keys.push(key);
+        return undefined;
+      },
+      put: async () => {},
+    },
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "r12", tabId: 1, items: items(1) }, () => {});
+  override = "OVERRIDE_B";
+  await handleTranslate(d, { type: "translate", requestId: "r13", tabId: 1, items: items(1) }, () => {});
+
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).not.toBe(keys[1]);
+  expect(keys[0]).not.toBe(
+    await buildCacheKey({
+      sourceText: "hello 1",
+      targetLang: "zh-CN",
+      providerConfigId: "a",
+      modelId: "m",
+      promptVersion: settings.promptVersion,
+    }),
+  );
+});
+
+it("falls back to the built-in prompt when the global systemPrompt is blank", async () => {
+  const complete = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => Promise<CompletionResult>>(
+    async () => ({ text: "[1] 甲\n[2] 乙" }),
+  );
+  const { d } = deps({
+    getSettings: async () => ({ ...settings, systemPrompt: "   " }),
+    adapter: fakeAdapter({ complete }),
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "r14", tabId: 1, items: items(2) }, () => {});
+  const req = complete.mock.calls[0][1];
+  expect(req.messages[0].content).toBe(
+    DEFAULT_SETTINGS.systemPrompt.replace("{{targetLang}}", "zh-CN"),
+  );
 });
 
 it("clamps concurrency and RPS to their ranges, honoring provider overrides", async () => {

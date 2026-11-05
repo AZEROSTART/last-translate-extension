@@ -6,6 +6,18 @@
 import type { ChatMessage } from "./types";
 import { estimateTokens } from "./token-estimate";
 
+/**
+ * Lowercase SHA-256 hex of the effective system prompt. Used as the cache
+ * `promptVersion`; identical prompt text must always yield the same value.
+ */
+export async function promptVersionFor(systemPrompt: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(systemPrompt),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export interface Segment {
   id: string;
   text: string;

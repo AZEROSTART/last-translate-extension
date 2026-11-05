@@ -79,15 +79,24 @@ describe("applyProviderForm", () => {
     expect(Object.keys(result.extraHeaders ?? {})).toHaveLength(5);
     expect(result.extraHeaders?.f).toBeUndefined();
   });
+
+  it("round-trips an explicit appendV1 opt-out", () => {
+    expect(applyProviderForm({ ...base, appendV1: false }, {})).toMatchObject({
+      baseURL: "https://x",
+      appendV1: false,
+    });
+    expect(applyProviderForm({ ...base, appendV1: false }, { model: "m2" }).appendV1).toBe(false);
+  });
 });
 
 describe("promptVersionFor", () => {
-  it("is stable for identical input", () => {
-    expect(promptVersionFor("相同的提示词")).toBe(promptVersionFor("相同的提示词"));
-    expect(promptVersionFor("相同的提示词")).toMatch(/^[0-9a-f]{8}$/);
+  it("is stable for identical input and returns a 64-char SHA-256 hex", async () => {
+    const first = await promptVersionFor("相同的提示词");
+    expect(first).toBe(await promptVersionFor("相同的提示词"));
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("changes when the prompt changes", () => {
-    expect(promptVersionFor("提示词 A")).not.toBe(promptVersionFor("提示词 B"));
+  it("changes when the prompt changes", async () => {
+    expect(await promptVersionFor("提示词 A")).not.toBe(await promptVersionFor("提示词 B"));
   });
 });

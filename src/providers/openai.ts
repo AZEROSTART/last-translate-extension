@@ -243,7 +243,7 @@ function readWithTimeout(
 
 /** `GET {baseURL}/models`; a failure here must never block the settings UI. */
 export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Promise<ModelInfo[]> {
-  const url = `${normalizeBaseURL(cfg.baseURL)}/models`;
+  const url = `${normalizeBaseURL(cfg.baseURL, { appendV1: cfg.appendV1 })}/models`;
 
   try {
     const response = await fetchWithConnectTimeout(
@@ -277,7 +277,7 @@ export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Pro
 
 /** One non-streaming completion. Retry policy lives in the queue (Task 7). */
 export async function complete(cfg: ProviderConfig, req: CompletionRequest): Promise<CompletionResult> {
-  const url = `${normalizeBaseURL(cfg.baseURL)}/chat/completions`;
+  const url = `${normalizeBaseURL(cfg.baseURL, { appendV1: cfg.appendV1 })}/chat/completions`;
   const totalTimeout = AbortSignal.timeout(PROVIDER_TIMEOUTS.totalMs);
   const operationSignal = req.signal ? AbortSignal.any([req.signal, totalTimeout]) : totalTimeout;
 
@@ -342,7 +342,7 @@ function providerErrorMessage(error: unknown): string | undefined {
  * otherwise it is reported as a truncated `bad_response`.
  */
 export async function* streamCompletion(cfg: ProviderConfig, req: CompletionRequest): AsyncGenerator<string> {
-  const url = `${normalizeBaseURL(cfg.baseURL)}/chat/completions`;
+  const url = `${normalizeBaseURL(cfg.baseURL, { appendV1: cfg.appendV1 })}/chat/completions`;
   const caller = req.signal;
   if (caller?.aborted) throw new ProviderError("aborted", redact(`Request aborted for ${url}`, cfg.apiKey));
 

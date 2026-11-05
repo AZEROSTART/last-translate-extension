@@ -7,9 +7,16 @@
  */
 
 import { ProviderError } from "../shared/errors";
-import { getSettings, removeProvider, saveSettings, upsertProvider } from "../shared/storage";
+import {
+  DEFAULT_SETTINGS,
+  getSettings,
+  removeProvider,
+  saveSettings,
+  upsertProvider,
+} from "../shared/storage";
 import type { ErrorCode, ProviderConfig, Settings } from "../shared/types";
 import { complete, listModels } from "../providers";
+import { TranslationCache } from "../background/cache";
 import {
   applyProviderForm,
   errorLabel,
@@ -49,6 +56,8 @@ interface GlobalFields {
   systemPrompt: HTMLTextAreaElement;
   triggerRadios: HTMLInputElement[];
   saveButton: HTMLButtonElement;
+  clearCacheButton: HTMLButtonElement;
+  cacheMessage: HTMLElement;
   saved: HTMLElement;
 }
 
@@ -57,6 +66,7 @@ interface ProviderFormControls {
   form: HTMLFormElement;
   name: HTMLInputElement;
   baseURL: HTMLInputElement;
+  appendV1: HTMLInputElement;
   apiKey: HTMLInputElement;
   model: HTMLInputElement;
   headers: HTMLElement;
@@ -204,6 +214,10 @@ function readNumber(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readNumberOr(value: string, fallback: number): number {
+  return value.trim() === "" ? fallback : readNumber(value, fallback);
+}
+
 function numericOrBlank(value: string): number | "" {
   const parsed = Number(value);
   return value.trim() !== "" && Number.isFinite(parsed) ? parsed : "";
@@ -239,7 +253,7 @@ function buildShell(): void {
   const header = el("header", "page-header");
   header.append(
     el("h1", undefined, "翻译设置"),
-    el("p", "page-subtitle", "所有配置只保存在本机浏览器中；API Key 不会离开这台设备。"),
+    el("p", "page-subtitle", "所有配置只保存在本机浏览器中；API Key 只发送给你配置的接口地址。"),
   );
   root.appendChild(header);
 
@@ -383,7 +397,14 @@ function openForm(provider: ProviderConfig | null): void {
   baseURLInput.type = "text";
   baseURLInput.value = base.baseURL;
   baseURLInput.placeholder = "https://api.openai.com";
-  form.appendChild(field("接口地址", baseURLInput, "可省略 /v1，发送请求时会按需自动补全。"));
+  const baseURLField = field("接口地址", baseURLInput, "可省略 /v1，发送请求时会按需自动补全。");
+  const appendV1Input = el("input", "pf-appendV1");
+  appendV1Input.type = "checkbox";
+  appendV1Input.checked = base.appendV1 !== false;
+  const appendV1Label = el("label", "checkbox-row");
+  appendV1Label.append(appendV1Input, "自动补 /v1");
+  baseURLField.appendChild(appendV1Label);
+  form.appendChild(baseURLField);
 
   const apiKeyInput = el("input", "pf-apiKey");
   apiKeyInput.type = "password";
@@ -469,6 +490,7 @@ function openForm(provider: ProviderConfig | null): void {
     form,
     name: nameInput,
     baseURL: baseURLInput,
+    appendV1: appendV1Input,
     apiKey: apiKeyInput,
     model: modelInput,
     headers,
@@ -577,12 +599,13 @@ function readForm(controls: ProviderFormControls): ProviderFormState {
     headerCount += 1;
   }
 
-  const typedKey = controls.apiKey.value;
+  const typedKey = controls.apiKey.value.trim();
   return {
     id: controls.base.id,
     name: controls.name.value.trim() || controls.base.name,
     kind: "custom",
     baseURL: controls.baseURL.value.trim(),
+    appendV1: controls.appendV1.checked ? undefined : false,
     apiKey: typedKey === "" ? controls.base.apiKey : typedKey,
     model: controls.model.value.trim(),
     extraHeaders: headerCount > 0 ? headers : undefined,
@@ -811,9 +834,15 @@ function renderGlobal(): void {
   saveButton.addEventListener("click", () => {
     void saveGlobal();
   });
+  const clearCacheButton = makeButton("清空缓存", "global-clear-cache");
+  clearCacheButton.addEventListener("click", () => {
+    void clearCache();
+  });
   const saved = el("span", "global-saved", "已保存");
   saved.hidden = true;
-  actions.append(saveButton, saved);
+  const cacheMessage = el("span", "global-cache-message");
+  cacheMessage.hidden = true;
+  actions.append(saveButton, clearCacheButton, saved, cacheMessage);
   globalEl.appendChild(actions);
 
   globalFields = {
@@ -825,8 +854,31 @@ function renderGlobal(): void {
     systemPrompt,
     triggerRadios,
     saveButton,
+    clearCacheButton,
+    cacheMessage,
     saved,
   };
+}
+
+async function clearCache(): Promise<void> {
+  if (!globalFields) return;
+  const fields = globalFields;
+  if (!window.confirm("确认清空翻译缓存？")) return;
+
+  fields.clearCacheButton.disabled = true;
+  fields.cacheMessage.hidden = false;
+  fields.cacheMessage.textContent = "清空中…";
+  fields.cacheMessage.className = "global-cache-message";
+  try {
+    await new TranslationCache("ilmt").clear();
+    fields.cacheMessage.textContent = "已清空缓存";
+    fields.cacheMessage.className = "global-cache-message success";
+  } catch {
+    fields.cacheMessage.textContent = "清空失败";
+    fields.cacheMessage.className = "global-cache-message error";
+  } finally {
+    fields.clearCacheButton.disabled = false;
+  }
 }
 
 async function saveGlobal(): Promise<void> {
@@ -839,18 +891,23 @@ async function saveGlobal(): Promise<void> {
     "";
 
   const concurrency = clampInt(
-    readNumber(fields.concurrency.value, settings.concurrency),
+    readNumberOr(fields.concurrency.value, settings.concurrency),
     1,
     10,
   );
-  const maxRPS = clampInt(readNumber(fields.maxRPS.value, settings.maxRPS), 1, 20);
-  const temperature = readNumber(fields.temperature.value, settings.temperature);
+  const maxRPS = clampInt(readNumberOr(fields.maxRPS.value, settings.maxRPS), 1, 20);
+  const temperature = readNumberOr(fields.temperature.value, settings.temperature);
   const systemPrompt = fields.systemPrompt.value;
   const targetLang = fields.targetLang.value;
   const triggerMode: TriggerMode =
     fields.triggerRadios.find((radio) => radio.checked)?.value === "auto-current-site"
       ? "auto-current-site"
       : "shortcut";
+  const effectivePrompt = systemPrompt.trim() ? systemPrompt : DEFAULT_SETTINGS.systemPrompt;
+  const promptVersion =
+    systemPrompt !== settings.systemPrompt || settings.promptVersion === ""
+      ? await promptVersionFor(effectivePrompt)
+      : settings.promptVersion;
 
   const next: Settings = {
     ...settings,
@@ -860,10 +917,7 @@ async function saveGlobal(): Promise<void> {
     maxRPS,
     temperature,
     systemPrompt,
-    promptVersion:
-      systemPrompt !== settings.systemPrompt
-        ? promptVersionFor(systemPrompt)
-        : settings.promptVersion,
+    promptVersion,
     triggerMode,
   };
 

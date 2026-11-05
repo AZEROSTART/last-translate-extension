@@ -1,8 +1,10 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { ProviderConfig, Settings } from "../../src/shared/types";
 import { DEFAULT_SETTINGS, getSettings } from "../../src/shared/storage";
 import { ProviderError } from "../../src/shared/errors";
+import { buildCacheKey, TranslationCache } from "../../src/background/cache";
 import { promptVersionFor } from "../../src/options/providers";
 
 vi.mock("../../src/providers", () => ({
@@ -153,6 +155,44 @@ describe("provider list", () => {
     expect(s.providers[0].apiKey).toBe(p1.apiKey);
   });
 
+  it("trims the typed API key on save", async () => {
+    await seed();
+    await boot();
+
+    click(".provider-add");
+    setValue(".pf-name", "Trimmed");
+    setValue(".pf-baseURL", "https://trim.test");
+    setValue(".pf-apiKey", "  key-123456  ");
+    setValue(".pf-model", "trim-model");
+    click(".pf-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.providers).toHaveLength(1);
+    });
+    expect((await getSettings()).providers[0].apiKey).toBe("key-123456");
+  });
+
+  it("round-trips the 自动补 /v1 checkbox opt-out", async () => {
+    await seed({ providers: [p1], activeProviderId: p1.id });
+    await boot();
+
+    click(".provider-edit");
+    const checkbox = document.querySelector(".pf-appendV1") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+
+    checkbox.checked = false;
+    click(".pf-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.providers[0]?.appendV1).toBe(false);
+    });
+
+    click(".provider-edit");
+    expect((document.querySelector(".pf-appendV1") as HTMLInputElement).checked).toBe(false);
+  });
+
   it("copies a provider with a new id and a 副本 name", async () => {
     await seed({ providers: [p1], activeProviderId: p1.id });
     await boot();
@@ -291,11 +331,67 @@ describe("global settings", () => {
 
     await vi.waitFor(async () => {
       const updated = await getSettings();
-      expect(updated.promptVersion).toBe(promptVersionFor("新提示词"));
+      expect(updated.promptVersion).toBe(await promptVersionFor("新提示词"));
     });
 
     s = await getSettings();
     expect(s.systemPrompt).toBe("新提示词");
+  });
+
+  it("initializes an empty stored promptVersion from the effective global prompt", async () => {
+    await seed({ promptVersion: "", systemPrompt: "" });
+    await boot();
+
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.promptVersion).toBe(await promptVersionFor(DEFAULT_SETTINGS.systemPrompt));
+    });
+  });
+
+  it("keeps stored numeric values when the global fields are blank", async () => {
+    await seed({ concurrency: 2, maxRPS: 5, temperature: 0.7 });
+    await boot();
+
+    setValue(".global-concurrency", "");
+    setValue(".global-maxRPS", "");
+    setValue(".global-temperature", "");
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.concurrency).toBe(2);
+    });
+
+    const s = await getSettings();
+    expect(s.maxRPS).toBe(5);
+    expect(s.temperature).toBe(0.7);
+  });
+
+  it("clears the translation cache after confirmation", async () => {
+    const cache = new TranslationCache("ilmt");
+    const key = await buildCacheKey({
+      sourceText: "hello",
+      targetLang: "zh-CN",
+      providerConfigId: p1.id,
+      modelId: p1.model,
+      promptVersion: "v1",
+    });
+    await cache.put(key, "旧译文", { modelId: p1.model });
+    expect(await cache.get(key)).toBe("旧译文");
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await seed({ providers: [p1], activeProviderId: p1.id });
+    await boot();
+
+    click(".global-clear-cache");
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".global-cache-message")?.textContent).toBe("已清空缓存");
+    });
+    expect(confirm).toHaveBeenCalledWith("确认清空翻译缓存？");
+    expect(await cache.get(key)).toBeUndefined();
   });
 
   it("saves the selected active provider radio", async () => {

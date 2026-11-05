@@ -23,6 +23,7 @@ import {
   buildTranslateMessages,
   groupSegments,
   parseNumberedResponse,
+  promptVersionFor,
   PromptParseError,
 } from "../shared/prompt";
 import { ProviderError } from "../shared/errors";
@@ -158,7 +159,12 @@ export async function handleTranslate(
     return;
   }
 
-  const systemPrompt = provider.overrides?.systemPrompt || settings.systemPrompt;
+  const systemPrompt = provider.overrides?.systemPrompt?.trim()
+    ? provider.overrides.systemPrompt
+    : settings.systemPrompt.trim()
+      ? settings.systemPrompt
+      : DEFAULT_SETTINGS.systemPrompt;
+  const promptVersion = await promptVersionFor(systemPrompt);
   const temperature = provider.overrides?.temperature ?? settings.temperature;
 
   const keyById = new Map<string, string>();
@@ -171,7 +177,7 @@ export async function handleTranslate(
       targetLang: settings.targetLang,
       providerConfigId: provider.id,
       modelId: provider.model,
-      promptVersion: settings.promptVersion,
+      promptVersion,
     });
     const cached = await deps.cache.get(key);
     if (cached !== undefined && cached !== "") {

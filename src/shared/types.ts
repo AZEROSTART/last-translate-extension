@@ -10,6 +10,8 @@ export interface ProviderConfig {
   baseURL: string;
   apiKey: string;
   model: string;
+  /** Append `/v1` when the URL does not already end with it. Absence = true. */
+  appendV1?: boolean;
   extraHeaders?: Record<string, string>;
   overrides?: {
     concurrency?: number;

@@ -5,6 +5,8 @@
 
 import type { ErrorCode, ProviderConfig } from "../shared/types";
 
+export { promptVersionFor } from "../shared/prompt";
+
 export interface ProviderOverridesForm {
   concurrency?: number | "";
   maxRPS?: number | "";
@@ -87,15 +89,10 @@ export function applyProviderForm(
   };
 
   const result: ProviderConfig = {
-    id: merged.id,
-    name: merged.name,
-    kind: merged.kind,
-    baseURL: merged.baseURL,
-    apiKey: merged.apiKey,
-    model: merged.model,
-    createdAt: merged.createdAt,
+    ...merged,
+    overrides: undefined,
+    extraHeaders: undefined,
   };
-  if (merged.lastUsedAt !== undefined) result.lastUsedAt = merged.lastUsedAt;
 
   const headers = sanitizeHeaders(merged.extraHeaders);
   if (headers) result.extraHeaders = headers;
@@ -120,20 +117,6 @@ export function applyProviderForm(
 
   if (Object.keys(overrides).length > 0) result.overrides = overrides;
   return result;
-}
-
-/**
- * Small deterministic FNV-1a hash used as `promptVersion`. A changed global
- * system prompt must change the translation-cache key; identical text must
- * always produce the same value.
- */
-export function promptVersionFor(prompt: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < prompt.length; i += 1) {
-    hash ^= prompt.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 const ERROR_LABELS: Record<ErrorCode, string> = {
