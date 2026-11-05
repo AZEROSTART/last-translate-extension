@@ -2,7 +2,12 @@
  * In-memory `chrome.storage.local` for Vitest. Values are cloned on the way
  * in and out so callers cannot mutate the backing store directly, mirroring
  * Chrome's serialization behavior.
+ *
+ * Also provides the minimal `chrome.runtime` surface content scripts touch:
+ * the extension id, `getURL`, and an observable `onMessage` event.
  */
+
+import { vi } from "vitest";
 
 type StorageItems = Record<string, unknown>;
 type StorageGetKeys = string | string[] | StorageItems | null | undefined;
@@ -73,6 +78,13 @@ function createStorageArea() {
 const chromeMock = {
   storage: {
     local: createStorageArea(),
+  },
+  runtime: {
+    id: "test-extension-id",
+    getURL: vi.fn((path: string) => `chrome-extension://test-extension-id/${path}`),
+    onMessage: {
+      addListener: vi.fn(),
+    },
   },
 } as unknown as typeof chrome;
 
