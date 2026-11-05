@@ -7,8 +7,8 @@
  * carries `data-ilmt-for` so later deltas update it in place, and `lang` so the
  * browser applies the right font rules.
  *
- * `restoreAll` removes the spans again, leaving the page's own text exactly as
- * it was before translation started.
+ * `restoreAll` removes the spans and the paragraph marks again, leaving the
+ * page exactly as it was before translation started.
  */
 
 const TRANSLATION_CLASS = "ilmt-tr";
@@ -73,10 +73,16 @@ const BLOCK_TAGS = new Set([
  * Renders (or refreshes) the translation for `id`. An existing node is updated
  * in place so a streamed result never leaves duplicates behind.
  */
-export function renderTranslation(el: Element, id: string, text: string): HTMLElement {
+export function renderTranslation(
+  el: Element,
+  id: string,
+  text: string,
+  targetLang: string = DEFAULT_TARGET_LANG,
+): HTMLElement {
   const existing = findTranslation(el.ownerDocument, id);
   if (existing) {
     existing.textContent = text;
+    existing.setAttribute("lang", targetLang);
     return existing;
   }
 
@@ -84,7 +90,7 @@ export function renderTranslation(el: Element, id: string, text: string): HTMLEl
   const inline = isInline(el);
   node.className = `${TRANSLATION_CLASS} ${inline ? "ilmt-inline" : "ilmt-block"}`;
   node.setAttribute("data-ilmt-for", id);
-  node.setAttribute("lang", DEFAULT_TARGET_LANG);
+  node.setAttribute("lang", targetLang);
   node.textContent = text;
 
   if (inline && el.parentNode) {
@@ -103,19 +109,24 @@ export function updateTranslation(id: string, text: string): void {
 }
 
 /**
- * Removes every translation node under `root`, restoring the page's own text
- * untouched. Paragraph marks are owned by paragraph detection (`clearMarks` in
- * `paragraphs.ts`) and deliberately survive here: the brief's restore test
- * snapshots the DOM with `data-ilmt-p` already set and requires it back
- * byte-for-byte, so this function only reverses what rendering added.
+ * Removes every translation node and paragraph mark under `root`, restoring
+ * the page to its pre-translation shape (spec §8.3). The paragraph registry is
+ * the caller's responsibility (Task 12).
  */
-export function restoreAll(root: ParentNode = document): void {
+export function restoreAll(root: ParentNode = document.body): void {
   const translations: Element[] = [];
   if (root instanceof Element && root.classList.contains(TRANSLATION_CLASS)) {
     translations.push(root);
   }
   translations.push(...root.querySelectorAll(`.${TRANSLATION_CLASS}`));
   for (const node of translations) node.remove();
+
+  if (root instanceof Element && root.hasAttribute("data-ilmt-p")) {
+    root.removeAttribute("data-ilmt-p");
+  }
+  for (const el of root.querySelectorAll("[data-ilmt-p]")) {
+    el.removeAttribute("data-ilmt-p");
+  }
 }
 
 /** The element's own text with any translation spans stripped out. */

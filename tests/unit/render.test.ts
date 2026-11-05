@@ -20,6 +20,13 @@ it("inserts an inline translation as a following sibling, not a child", () => {
   expect(el.nextElementSibling).toBe(node);
 });
 
+it("uses the target language passed by the caller", () => {
+  document.body.innerHTML = `<p data-ilmt-p="p_3">Hello</p>`;
+  const el = document.querySelector("p")!;
+  const node = renderTranslation(el, "p_3", "こんにちは", "ja");
+  expect(node.getAttribute("lang")).toBe("ja");
+});
+
 it("updates in place without creating a second node", () => {
   document.body.innerHTML = `<p data-ilmt-p="p_1">Hello</p>`;
   const el = document.querySelector("p")!;
@@ -39,11 +46,14 @@ it("updates an inline translation in place without duplicating it", () => {
 });
 
 it("restores the DOM exactly", () => {
-  document.body.innerHTML = `<p data-ilmt-p="p_1">Hello</p>`;
+  document.body.innerHTML = `<p>Hello</p>`;
   const before = document.body.innerHTML;
-  renderTranslation(document.querySelector("p")!, "p_1", "你好");
+  const el = document.querySelector("p")!;
+  el.setAttribute("data-ilmt-p", "p_1");
+  renderTranslation(el, "p_1", "你好");
   restoreAll(document.body);
   expect(document.body.innerHTML).toBe(before);
+  expect(document.querySelectorAll("[data-ilmt-p]")).toHaveLength(0);
 });
 
 it("extracts source text without the existing translation", () => {
