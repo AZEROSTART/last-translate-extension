@@ -85,6 +85,32 @@ describe("target language and marks", () => {
     expect(ps.map(p => p.text.trim())).toEqual(["Keep this paragraph."]);
   });
 
+  it("marks the innermost text-bearing element when a block only wraps inline markup", async () => {
+    const root = html(`<p><a href="#">link text</a></p>`);
+    const ps = await collectParagraphs(root);
+    const p = root.querySelector("p")!;
+
+    expect(ps).toHaveLength(1);
+    expect(ps[0].el.tagName).toBe("A");
+    expect(ps[0].el.getAttribute("data-ilmt-p")).toBe(ps[0].id);
+    expect(p.hasAttribute("data-ilmt-p")).toBe(false);
+  });
+
+  it("does not merge sibling inline elements when the block has no direct text child", async () => {
+    const root = html(`<div><span>first part</span><span>second part</span></div>`);
+    const ps = await collectParagraphs(root);
+    expect(ps.map(p => p.text)).toEqual(["first part", "second part"]);
+  });
+
+  it("does not collect a block whose element child is atomic-inline", async () => {
+    const root = html(`<p>prefix <button>action</button> suffix</p>`);
+    const ps = await collectParagraphs(root);
+
+    expect(root.querySelector("p")!.hasAttribute("data-ilmt-p")).toBe(false);
+    expect(ps).toHaveLength(1);
+    expect(ps[0].el.tagName).toBe("BUTTON");
+  });
+
   it("marks paragraphs and clears marks", async () => {
     const root = html(`<p>Visible paragraph text.</p>`);
     const el = root.querySelector("p")!;

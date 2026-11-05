@@ -1,10 +1,11 @@
 /**
  * Paragraph detection for the content script.
  *
- * Traverses the page depth-first and picks the deepest block container whose
- * element children are all inline-level. A hit is marked with `data-ilmt-p`
- * so later scans and renders can find it; a miss keeps descending, so a
- * `<div>` wrapping `<p>` children never wins over the `<p>` elements.
+ * Traverses the page depth-first and picks the innermost text-bearing element:
+ * a candidate owns a non-empty direct text child and all of its element
+ * children are plain inline-level. A hit is marked with `data-ilmt-p` so later
+ * scans and renders can find it; a miss keeps descending, so a `<div>` wrapping
+ * `<p>` children never wins over the `<p>` elements.
  *
  * Page text is never mutated: apart from the marker attribute, everything here
  * is read-only.
@@ -102,6 +103,15 @@ const BLOCK_TAGS = new Set([
   "tr",
   "ul",
 ]);
+
+/**
+ * Tags that are atomic inline-level in browsers (inline-block / replaced)
+ * when no computed `display` is available. They must not make their parent a
+ * paragraph candidate; the traversal descends into them instead.
+ */
+const ATOMIC_INLINE_TAGS = new Set(["button", "img", "input", "select", "textarea"]);
+
+const TEXT_NODE = 3;
 
 const DEFAULT_MIN_LENGTH = 4;
 const DEFAULT_LANG_SKIP_RATIO = 0.8;
@@ -212,8 +222,13 @@ function shouldSkip(el: Element): boolean {
 }
 
 function isParagraphCandidate(el: Element): boolean {
-  const text = el.textContent;
-  if (!text || text.trim().length === 0) return false;
+  // Spec §8.2: the element itself must own at least one non-empty direct text
+  // child. A block wrapping only inline elements is descended into, so the
+  // innermost text-bearing element wins.
+  const hasDirectText = Array.from(el.childNodes).some(
+    (node) => node.nodeType === TEXT_NODE && (node.textContent ?? "").trim().length > 0,
+  );
+  if (!hasDirectText) return false;
   return Array.from(el.children).every(isInlineLevel);
 }
 
@@ -221,11 +236,14 @@ function isInlineLevel(el: Element): boolean {
   const display = computedStyle(el)?.display.trim().toLowerCase() ?? "";
 
   if (display.length > 0) {
-    return display.startsWith("inline") || display.startsWith("contents");
+    // Atomic inline-level boxes (inline-block/flex/grid/table) are not plain
+    // inline and must not be folded into the parent paragraph.
+    return display === "inline" || display === "contents";
   }
 
   // No layout information: infer from the tag's default display.
-  return !BLOCK_TAGS.has(el.tagName.toLowerCase());
+  const tag = el.tagName.toLowerCase();
+  return !BLOCK_TAGS.has(tag) && !ATOMIC_INLINE_TAGS.has(tag);
 }
 
 function computedStyle(el: Element): CSSStyleDeclaration | null {
