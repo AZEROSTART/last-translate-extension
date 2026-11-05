@@ -253,6 +253,62 @@ it("starts a fresh session pinned to the new page from the stale banner", async 
   expect(chat.context.recentParagraphs).toEqual([]);
 });
 
+it("treats a navigation to an unobservable URL as stale", async () => {
+  const { chrome, sent, updatedListeners } = installChrome();
+  await boot();
+
+  // e.g. chrome://settings — the extension cannot read the URL, but the tab
+  // really did navigate away from the pinned page.
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 1, title: "设置", active: true, windowId: 1 },
+  ]);
+  updatedListeners[0](
+    1,
+    { status: "complete" },
+    { id: 1, title: "设置", active: true, windowId: 1 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const banner = document.querySelector(".banner") as HTMLElement;
+  expect(banner.hidden).toBe(false);
+  expect(banner.textContent).toContain("上下文已失效");
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "还能用吗";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    context: { pageUrl: string; title: string };
+  };
+  expect(chat).toBeTruthy();
+  expect(chat.context.pageUrl).toBe("");
+  expect(chat.context.title).toBe("");
+});
+
+it("restores a persisted session when the same tab revisits the same URL", async () => {
+  installChrome({
+    tab: { id: 1, url: "https://a.test/x", title: "A" },
+    history: [
+      {
+        id: "s_saved",
+        tabId: 1,
+        pageUrl: "https://a.test/x",
+        pageTitle: "A",
+        createdAt: 1,
+        messages: [
+          { role: "user", content: "旧问题", ts: 1 },
+          { role: "assistant", content: "旧答案", ts: 2 },
+        ],
+      },
+    ],
+  });
+  await boot();
+
+  expect((globalThis as any).__ilmtPanel.session.id).toBe("s_saved");
+  expect(document.querySelector(".msg-list")?.textContent).toContain("旧问题");
+  expect(document.querySelector(".msg-list")?.textContent).toContain("旧答案");
+});
+
 it("does not switch sessions from the stale banner while a response is streaming", async () => {
   const { chrome, sent, messageListeners, updatedListeners } = installChrome();
   await boot();
@@ -273,6 +329,8 @@ it("does not switch sessions from the stale banner while a response is streaming
     { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 },
   );
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((document.querySelector(".banner") as HTMLElement).hidden).toBe(false);
+  expect((document.querySelector(".banner-action") as HTMLButtonElement).disabled).toBe(true);
   (document.querySelector(".banner-action") as HTMLButtonElement).click();
 
   // The in-flight stream keeps its session; the answer is not dropped.
@@ -302,6 +360,7 @@ it("does not re-attach a stale session after a tab round-trip", async () => {
   (chrome.tabs.query as any).mockResolvedValue([tabY]);
   activatedListeners[0]();
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((document.querySelector(".banner") as HTMLElement).hidden).toBe(false);
   (document.querySelector(".banner-action") as HTMLButtonElement).click();
   expect((globalThis as any).__ilmtPanel.session.pageUrl).toBe("https://a.test/y");
 
@@ -311,11 +370,13 @@ it("does not re-attach a stale session after a tab round-trip", async () => {
   ]);
   activatedListeners[0]();
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((document.querySelector(".banner") as HTMLElement).hidden).toBe(false);
   (document.querySelector(".banner-action") as HTMLButtonElement).click();
 
   (chrome.tabs.query as any).mockResolvedValue([tabY]);
   activatedListeners[0]();
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((document.querySelector(".banner") as HTMLElement).hidden).toBe(false);
   (document.querySelector(".banner-action") as HTMLButtonElement).click();
 
   const session = (globalThis as any).__ilmtPanel.session as { id: string; pageUrl: string };

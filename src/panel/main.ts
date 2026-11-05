@@ -301,7 +301,6 @@ function wireTabs(): void {
 function isContextStale(): boolean {
   return (
     !!activeTab &&
-    !!activeTab.url &&
     !!session &&
     session.pageUrl !== "" &&
     activeTab.id === session.tabId &&
@@ -313,6 +312,7 @@ function updateBanner(): void {
   const switched = !!activeTab && !!session && activeTab.id !== session.tabId;
   const stale = !switched && isContextStale();
   banner.hidden = !switched && !stale;
+  bannerButton.disabled = streaming;
   if (switched) {
     const label = activeTab!.title || activeTab!.url;
     bannerTitle.textContent = label ? `当前页面已切换：${label}` : "当前页面已切换";
@@ -393,6 +393,7 @@ function setInputEnabled(enabled: boolean): void {
   input.disabled = !enabled;
   sendBtn.hidden = !enabled;
   stopBtn.hidden = enabled;
+  updateBanner();
 }
 
 function showError(message: string, actionLabel: string): void {
