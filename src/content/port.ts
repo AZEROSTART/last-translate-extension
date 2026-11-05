@@ -101,6 +101,21 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     }
   }
 
+  /**
+   * Mark the current connection as healthy: reset the backoff and cancel any
+   * armed reconnect. A connection proven by a successful post (or a fresh
+   * `connect`) supersedes a pending reconnect, so its timer must never open a
+   * second, orphaned port.
+   */
+  function markHealthy(): void {
+    state = "healthy";
+    backoffIndex = 0;
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
   /** Establish a fresh connection; on failure leaves `port` null and returns false. */
   function establish(): boolean {
     if (closed) return false;
@@ -117,14 +132,23 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     port = next;
     next.onMessage.addListener(route);
     next.onDisconnect.addListener(handleDisconnect);
-    state = "healthy";
-    // A successful connection (notably one established by send() while a
-    // backoff timer is armed) supersedes any pending reconnect: cancel it so
-    // the timer cannot later open a second, orphaned connection.
-    backoffIndex = 0;
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
+    markHealthy();
+    return true;
+  }
+
+  /**
+   * Post every queued message to the current port, preserving order. On a
+   * failed post the failed message and the not-yet-sent remainder are requeued
+   * and false is returned; the caller owns the port/backoff transition.
+   */
+  function flushPending(): boolean {
+    const messages = pending;
+    pending = [];
+    for (let i = 0; i < messages.length; i++) {
+      if (!postToPort(port!, messages[i])) {
+        pending.push(...messages.slice(i));
+        return false;
+      }
     }
     return true;
   }
@@ -162,20 +186,19 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
   function reconnect(): void {
     reconnectTimer = null;
     if (closed) return;
-    if (establish()) {
-      backoffIndex = 0;
-      const messages = pending;
-      pending = [];
-      for (let i = 0; i < messages.length; i++) {
-        if (!postToPort(port!, messages[i])) {
-          // Requeue the failed message and any not-yet-sent remainder.
-          pending.push(...messages.slice(i));
-          state = "reconnecting";
-          scheduleReconnect();
-          return;
-        }
-      }
-    } else {
+    // Supersession guard: only the reconnecting state owns the backoff timer.
+    // A successful send() clears the timer and marks the connection healthy,
+    // but a timer that raced the clearTimeout may still fire; it must not open
+    // a second port.
+    if (state !== "reconnecting") return;
+    if (!establish()) {
+      scheduleReconnect();
+      return;
+    }
+    if (!flushPending()) {
+      // The fresh port rejected the queued messages; drop it and back off.
+      port = null;
+      state = "reconnecting";
       scheduleReconnect();
     }
   }
@@ -202,16 +225,25 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     if (closed) return;
     // A send after a degraded episode starts a fresh reconnect cycle.
     if (state === "degraded") backoffIndex = 0;
-    if (!port) {
-      if (!establish()) {
-        fail(message);
-        return;
-      }
+    if (!port && !establish()) {
+      fail(message);
+      return;
+    }
+    // The current connection (freshly established or already live) owns the
+    // queued messages: flush them before the new one. A fresh establish
+    // cancels the armed reconnect, so without this flush a message queued by a
+    // failed send would be stranded with no timer left to deliver it.
+    if (!flushPending()) {
+      port = null;
+      fail(message);
+      return;
     }
     if (!postToPort(port!, message)) {
       port = null;
       fail(message);
+      return;
     }
+    markHealthy();
   }
 
   function close(): void {

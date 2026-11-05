@@ -225,6 +225,143 @@ describe("createTranslatePort send during reconnecting", () => {
     expect(onDisconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("flushes a message queued by a failed send when a later send establishes the port", async () => {
+    // The first connection is established but its postMessage throws, so `ping`
+    // lands in `pending` and a reconnect timer is armed.
+    const failing = capturePort();
+    failing.port.postMessage = vi.fn(() => {
+      throw new Error("Extension context invalidated");
+    });
+    const recovered = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(failing.port)
+      .mockReturnValue(recovered.port);
+    const p = createTranslatePort({ connect, ...callbacks() });
+
+    p.send({ type: "ping" });
+    expect(p.state).toBe("reconnecting");
+
+    // A second send before the timer fires establishes the port successfully.
+    // The queued `ping` must be flushed on the new port before the new message.
+    p.send({ type: "abort", requestId: "r2" });
+    expect(p.state).toBe("healthy");
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(2);
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(1, { type: "ping" });
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(2, { type: "abort", requestId: "r2" });
+
+    // The cancelled timer must not deliver either message a second time or
+    // open a third connection.
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("flushes a message queued by a first connect failure when a later send succeeds", async () => {
+    // The simpler trigger from the finding: connect throws, then a second send
+    // succeeds while the reconnect timer is armed.
+    const recovered = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockImplementationOnce(() => {
+        throw new Error("Extension context invalidated");
+      })
+      .mockReturnValue(recovered.port);
+    const p = createTranslatePort({ connect, ...callbacks() });
+
+    p.send({ type: "ping" });
+    expect(p.state).toBe("reconnecting");
+
+    p.send({ type: "abort", requestId: "r2" });
+    expect(p.state).toBe("healthy");
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(2);
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(1, { type: "ping" });
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(2, { type: "abort", requestId: "r2" });
+
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a stale reconnect invocation after a successful send as a no-op", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValue(second.port);
+
+    // Capture the scheduled reconnect callback so the test can fire it even
+    // though establish() has already cancelled the timer (a real timer race).
+    const scheduled: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: () => void, timeout?: number) => {
+      scheduled.push(handler);
+      return originalSetTimeout(handler, timeout);
+    }) as unknown as typeof setTimeout;
+    try {
+      const p = createTranslatePort({ connect, ...callbacks() });
+      p.send({ type: "ping" });
+      first.disconnectListeners[0]();
+      expect(p.state).toBe("reconnecting");
+      expect(scheduled).toHaveLength(1);
+
+      // A send establishes connection #2 and cancels the backoff.
+      p.send({ type: "ping" });
+      expect(p.state).toBe("healthy");
+      expect(connect).toHaveBeenCalledTimes(2);
+
+      // The stale callback must not open a third port.
+      scheduled[0]();
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(second.port.postMessage).toHaveBeenCalledTimes(1);
+      expect(p.state).toBe("healthy");
+
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
+  it("does not strand a mid-batch resend failure behind a healthy send", async () => {
+    // connect #1/#2 throw, so two messages are queued. Reconnect #3 opens a
+    // port that rejects the queued `ping`, leaving a mid-batch failure.
+    const partial = capturePort();
+    partial.port.postMessage = vi.fn((message: unknown) => {
+      if ((message as { type: string }).type === "ping") {
+        throw new Error("Extension context invalidated");
+      }
+    });
+    const recovered = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockImplementationOnce(() => {
+        throw new Error("Extension context invalidated");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("Extension context invalidated");
+      })
+      .mockReturnValueOnce(partial.port)
+      .mockReturnValue(recovered.port);
+    const p = createTranslatePort({ connect, ...callbacks() });
+
+    p.send({ type: "ping" });
+    p.send({ type: "abort", requestId: "r1" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(p.state).toBe("reconnecting");
+
+    // A send succeeds immediately on a fresh connection; the queued messages
+    // must go there too, not stay behind on the half-failed port.
+    p.send({ type: "abort", requestId: "r2" });
+    expect(p.state).toBe("healthy");
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(3);
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(1, { type: "ping" });
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(2, { type: "abort", requestId: "r1" });
+    expect(recovered.port.postMessage).toHaveBeenNthCalledWith(3, { type: "abort", requestId: "r2" });
+
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(4);
+    expect(recovered.port.postMessage).toHaveBeenCalledTimes(3);
+  });
+
   it("still signals and recovers from a genuine disconnect after a send-recovery", async () => {
     const first = capturePort();
     const second = capturePort();
