@@ -446,10 +446,11 @@ export function pieceRootFor(node: Node, rule: SiteRule): Element | null {
 `paragraphs.ts` 模块级：
 
 ```ts
-const anchorCache = new Map<Node, { id: string; text: string }>();
+const anchorCache = new Map<Node, { id: string; text: string; root: Element }>();
 ```
 
 - 用 `Map` 而不是 `WeakMap`，因为失效时要按 root 遍历删除；Map 的强引用通过 `resetPieceCache` 和扫描末尾的「断开锚点清理」控制。
+- 缓存同时记录该 piece 的 root。`forgetPiecesInRoot(root)` 只删除缓存 root **正好等于** `root` 的项，不按 DOM 子树删除；这样失效祖先 piece 时，嵌套 block piece 的缓存、record、标记和译文都保留，不会重复收集。
 - 只缓存**已经处理过**的锚点：
   - 已排队/已翻译：`id` 是真实 id。
   - 因太短、纯符号、目标语言而跳过：`id === ""`，避免每次动态扫描都重新做语言检测。
@@ -485,10 +486,10 @@ const anchorCache = new Map<Node, { id: string; text: string }>();
     - 按 id 删对应 `.ilmt-tr`；
     - 删 registry 记录和 `deltaBuffers`；
     - `forgetPiece(anchor)`（从记录里拿 anchor）；
-    - `forgetPiecesInRoot(root)`（把该 root 下所有缓存项都删掉，包括被跳过的短文本/目标语言 piece）；
+    - `forgetPiecesInRoot(root)`（只删缓存 root 正好等于 `root` 的项，包括这个 root 自己被跳过的短文本/目标语言 piece；嵌套 block piece 的缓存、record、标记和 `.ilmt-tr` 保持不变）；
     - 删除 root 的 `data-ilmt-p`。
-  - 如果 root 没有 `data-ilmt-p`（只有被跳过的 piece）：只调 `forgetPiecesInRoot(root)`。这样 `"Loading"` 变成一句完整英文后，dynamic scan 会重新收集并翻译。
-  - 250ms 防抖后的 dynamic scan 重新收集。
+  - 如果 root 没有 `data-ilmt-p`（只有被跳过的 piece）：只调 `forgetPiecesInRoot(root)`。这样 `"Loading"` 变成一句完整英文后，dynamic scan 会重新收集并翻译；同 root 下已被标记的嵌套 piece 不受影响。
+  - 250ms 防抖后的 dynamic scan 重新收集。嵌套 marked piece 的锚点仍命中缓存，不会被重新分配 id 或重复插入译文。
 - `childList` 变更：dynamic scan；新锚点收集，旧锚点命中缓存跳过。
 - `registry.prune()` 同时检查 `el.isConnected` 和 `anchor.isConnected`；`pump()` 里 prune 后调用 `pruneOrphanTranslations()`，删掉 registry 里已经没有记录的 `.ilmt-tr`。
 

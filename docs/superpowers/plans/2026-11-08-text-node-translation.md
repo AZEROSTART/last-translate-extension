@@ -284,9 +284,10 @@ This is the core change. It deliberately combines the collector, anchor cache, l
 
 - Module state:
   ```ts
-  const anchorCache = new Map<Node, { id: string; text: string }>();
+  const anchorCache = new Map<Node, { id: string; text: string; root: Element }>();
   let paragraphIdCounter = 0;
   ```
+  Cache the piece root with each entry. `forgetPiecesInRoot(root)` compares this cached root, not DOM containment, so invalidating an ancestor never clears nested block pieces.
 - At the top of `collectParagraphs`, `compileRule(rule)` once into precomputed selector strings:
   ```ts
   interface RuleMatchers { allExcludes: string; contentExcludes: string; extraInline: string; extraBlock: string; }
@@ -300,7 +301,7 @@ This is the core change. It deliberately combines the collector, anchor cache, l
 - `markPiece` appends the id to `data-ilmt-p` (space-separated, no duplicates).
 - `unmarkPiece` removes only that id; removes the attribute when no ids remain.
 - `forgetPiece(anchor)` deletes one cache entry.
-- `forgetPiecesInRoot(root)` deletes every cache key contained by `root`.
+- `forgetPiecesInRoot(root)` deletes every cache entry whose cached piece root is exactly `root` (not every key contained by `root`). Nested marked/skipped pieces keep their cache, record, mark, and translation.
 - `resetPieceCache()` clears the cache.
 - `pieceRootFor(node, rule)`: start at the text node's parent (or the element itself) and walk up; return the first element for which `isBlockBoundary(el, rule)` is true.
 - Keep the existing `isAlreadyTargetLang`, `languagePrefix`, and `cjkShare` logic unchanged.
@@ -708,6 +709,10 @@ it("re-collects a skipped short piece after it grows", async () => {
   expect(translates[0].items[0].text).toBe("This text is long enough now.");
 });
 ```
+
+Also add two duplicate-regression tests from final review:
+- Editing an outer piece must not re-queue a nested inner piece; the inner `.ilmt-tr` stays single.
+- Growing a skipped sibling must not re-queue a marked sibling; the marked sibling's `.ilmt-tr` stays single.
 
 - [ ] **Step 7: Run the full suite and type check**
 
