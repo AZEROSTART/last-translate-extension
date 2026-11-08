@@ -225,7 +225,7 @@ export async function collectParagraphs(
     if (anchorCache.has(piece.anchor) || seen.has(piece.anchor)) continue;
     seen.add(piece.anchor);
 
-    if (piece.text.length < minLength) {
+    if (!isTranslatableText(piece.text, minLength)) {
       anchorCache.set(piece.anchor, { id: "", text: piece.text });
       continue;
     }
@@ -474,6 +474,40 @@ function normalizeText(text: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_SOURCE_LENGTH);
+}
+
+/**
+ * Whether a piece is worth sending to the translator. Rejects short text,
+ * text without any letter, and standalone machine-readable strings (URLs,
+ * emails, paths, handles, hashes, version numbers, dates/times, commit SHAs,
+ * and bare filenames) that would be garbled if translated. Prose that merely
+ * contains one of those tokens still passes.
+ */
+function isTranslatableText(text: string, minLength: number): boolean {
+  if (text.length < minLength) return false;
+  if (!/\p{L}/u.test(text)) return false;
+
+  const compact = text.trim();
+  if (/^(?:https?:\/\/|www\.)\S+$/i.test(compact)) return false;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(compact)) return false;
+  if (/^(?:[~./]|[A-Za-z]:[\\/])[\w./\\-]*$/.test(compact)) return false;
+  if (/^[\w.-]+(?:\/[\w.-]+)+(?:#\d+)?$/.test(compact)) return false;
+  if (/^@[\w.-]+$/.test(compact)) return false;
+  if (/^#[\w-]+$/.test(compact)) return false;
+  if (/^v?\d+(?:\.\d+)+(?:[-+][\w.-]+)?$/i.test(compact)) return false;
+  if (/^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/.test(compact)) {
+    return false;
+  }
+  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(compact)) return false;
+  if (/^[0-9a-f]{7,40}$/i.test(compact)) return false;
+  if (
+    /^[\w.-]+\.(?:js|ts|tsx|jsx|css|html|json|md|png|jpe?g|gif|svg|go|py|rs|java|c|cpp|h|sh|yml|yaml|toml)$/i.test(
+      compact,
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 async function isAlreadyTargetLang(
