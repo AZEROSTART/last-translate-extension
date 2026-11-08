@@ -37,6 +37,14 @@ it("never inserts inside a trailing button", () => {
   expect(p.lastElementChild).toBe(node);
 });
 
+it("appends after a trailing inline code node instead of splitting the prose", () => {
+  document.body.innerHTML = `<p>Use the command <code>npm test</code></p>`;
+  const p = document.querySelector("p")!;
+  const node = renderTranslation({ root: p, anchor: p.firstChild! }, "p_18", "使用命令");
+  expect(p.lastElementChild).toBe(node);
+  expect(node.previousElementSibling?.tagName).toBe("CODE");
+});
+
 it("uses the target language passed by the caller", () => {
   document.body.innerHTML = `<p>Hello</p>`;
   const p = document.querySelector("p")!;

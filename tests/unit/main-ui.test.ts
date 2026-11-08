@@ -445,3 +445,59 @@ it("removes an orphaned translation after its anchor is replaced", async () => {
   expect(translates).toHaveLength(2);
   expect(translates[1].items[0].text).toBe("Replacement paragraph text.");
 });
+
+it("preserves a nested inner piece when the outer piece is edited", async () => {
+  document.body.innerHTML =
+    `<div id="outer">Outer paragraph text.<div id="inner">Inner paragraph text.</div>` +
+    `Outer ending text.</div>`;
+  const { sent, deliver, request } = await startTranslating();
+  expect(request.items).toHaveLength(3);
+
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: request.items.map((item: any) => ({ id: item.id, text: `译-${item.id}` })),
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  const inner = document.querySelector("#inner")!;
+  expect(inner.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+
+  document.querySelector("#outer")!.firstChild!.textContent = "Edited outer paragraph text.";
+
+  await until(() => sent.filter((m) => m.type === "translate").length === 2);
+
+  const texts = sent.filter((m) => m.type === "translate")[1].items.map((item: any) => item.text);
+  expect(texts).toContain("Edited outer paragraph text.");
+  expect(texts).toContain("Outer ending text.");
+  expect(texts).not.toContain("Inner paragraph text.");
+  expect(inner.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+});
+
+it("preserves a marked sibling piece when a skipped sibling grows", async () => {
+  document.body.innerHTML = `<div id="outer"><p>Marked paragraph text.</p><span>ab</span></div>`;
+  const { sent, deliver, request } = await startTranslating();
+  expect(request.items).toHaveLength(1);
+
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: [{ id: request.items[0].id, text: "译文" }],
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  const p = document.querySelector("p")!;
+  expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+
+  // The `ab` span is a direct child of `#outer`, distinct from the `.ilmt-tr`
+  // span rendered inside the marked `<p>`.
+  document.querySelector("#outer > span")!.firstChild!.textContent =
+    "This is now a long enough sentence to translate.";
+
+  await until(() => sent.filter((m) => m.type === "translate").length === 2);
+
+  const texts = sent.filter((m) => m.type === "translate")[1].items.map((item: any) => item.text);
+  expect(texts).toEqual(["This is now a long enough sentence to translate."]);
+  expect(texts).not.toContain("Marked paragraph text.");
+  expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+});

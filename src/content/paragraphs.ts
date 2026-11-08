@@ -110,8 +110,8 @@ const MAX_SOURCE_LENGTH = 20_000;
 /** C0 control characters; stripped from the text we send. */
 const CONTROL_CHARS = /[\u0000-\u001f]/g;
 
-/** Anchor → cached piece (a real id, or `""` for skipped pieces). */
-const anchorCache = new Map<Node, { id: string; text: string }>();
+/** Anchor → cached piece (a real id, or `""` for skipped pieces), plus the piece root. */
+const anchorCache = new Map<Node, { id: string; text: string; root: Element }>();
 /** Module-global so ids never repeat across scans in one content script. */
 let paragraphIdCounter = 0;
 
@@ -147,8 +147,12 @@ export function forgetPiece(anchor: Node): void {
 }
 
 export function forgetPiecesInRoot(root: ParentNode): void {
-  for (const anchor of anchorCache.keys()) {
-    if (root.contains(anchor)) anchorCache.delete(anchor);
+  // Delete only entries whose cached root is exactly `root`, not every anchor
+  // contained by `root`. Invalidating an ancestor piece must preserve nested
+  // block pieces: their cache, record, mark and translation all stay intact so
+  // the next scan does not re-collect (and re-bill) them under a fresh id.
+  for (const [anchor, entry] of anchorCache) {
+    if (entry.root === root) anchorCache.delete(anchor);
   }
 }
 
@@ -226,16 +230,16 @@ export async function collectParagraphs(
     seen.add(piece.anchor);
 
     if (!isTranslatableText(piece.text, minLength)) {
-      anchorCache.set(piece.anchor, { id: "", text: piece.text });
+      anchorCache.set(piece.anchor, { id: "", text: piece.text, root: piece.root });
       continue;
     }
     if (await isAlreadyTargetLang(piece.text, detectLang, langSkipRatio, targetLang)) {
-      anchorCache.set(piece.anchor, { id: "", text: piece.text });
+      anchorCache.set(piece.anchor, { id: "", text: piece.text, root: piece.root });
       continue;
     }
 
     const id = `p_${++paragraphIdCounter}`;
-    anchorCache.set(piece.anchor, { id, text: piece.text });
+    anchorCache.set(piece.anchor, { id, text: piece.text, root: piece.root });
     markPiece(piece.root, id);
     nodes.push({
       id,
@@ -420,7 +424,12 @@ function displayOf(el: Element | null): string {
 
 function computedStyle(el: Element): CSSStyleDeclaration | null {
   const view = el.ownerDocument?.defaultView;
-  return view ? view.getComputedStyle(el) : null;
+  if (!view || typeof view.getComputedStyle !== "function") return null;
+  try {
+    return view.getComputedStyle(el);
+  } catch {
+    return null;
+  }
 }
 
 function matchesSelector(el: Element, selector: string): boolean {
