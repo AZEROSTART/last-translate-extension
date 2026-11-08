@@ -666,7 +666,7 @@ export interface ParagraphRecord {
   margin: 0.28em 0 0.42em !important;
   padding-left: 0.6em !important;
   border-left: 2px solid rgba(89, 99, 110, 0.38) !important;
-  border-left-color: color-mix(in srgb, currentColor 28%, transparent);
+  border-left-color: color-mix(in srgb, currentColor 28%, transparent) !important;
   opacity: 0.78 !important;
   font-size: 0.92em;
   font-weight: 400;
