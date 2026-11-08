@@ -42,6 +42,15 @@ describe("build output", () => {
     expect(css).toContain(".ilmt-bubble");
   });
 
+  it("ships style A, heading, and flex/grid break classes", () => {
+    const css = readFileSync("dist/inject.css", "utf8");
+    expect(css).toContain(".ilmt-block");
+    expect(css).toContain('[data-ilmt-heading="1"]');
+    expect(css).toContain(".ilmt-flex-break");
+    expect(css).toContain(".ilmt-grid-break");
+    expect(css).not.toContain(".ilmt-inline");
+  });
+
   it("does not inject a data-ilmt stylesheet from content_main.js", () => {
     const code = readFileSync("dist/content_main.js", "utf8");
     expect(code).not.toContain('"data-ilmt"');

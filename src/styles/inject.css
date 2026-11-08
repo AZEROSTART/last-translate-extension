@@ -1,26 +1,49 @@
 /* Translation nodes inserted by the content script. */
 
-/* Block translations sit directly under the source paragraph. */
-.ilmt-block {
-  display: block !important;
-  margin-top: 0.35em !important;
-}
-
-/* Inline translations flow right after the translated inline element. */
-.ilmt-inline {
-  display: inline !important;
-}
-
-/* Inherit the surrounding typography; let the translation read as secondary. */
+/* 译文基座：继承页面字体和颜色 */
 .ilmt-tr {
   font: inherit;
   color: inherit;
-  opacity: 0.82;
 }
 
-/* Pending translation: dim until text arrives. */
+/* 正文译文：弱化 + 左侧细线 */
+.ilmt-block {
+  display: block !important;
+  margin: 0.28em 0 0.42em !important;
+  padding-left: 0.6em !important;
+  border-left: 2px solid rgba(89, 99, 110, 0.38) !important;
+  border-left-color: color-mix(in srgb, currentColor 28%, transparent);
+  opacity: 0.78 !important;
+  font-size: 0.92em;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+/* 标题译文：更小、常规字重 */
+.ilmt-block[data-ilmt-heading="1"] {
+  font-size: 0.68em;
+  font-weight: 400;
+  line-height: 1.45;
+  margin-top: 0.18em !important;
+  margin-bottom: 0.2em !important;
+  opacity: 0.74 !important;
+}
+
+/* flex 容器内部插入时占满一行 */
+.ilmt-flex-break {
+  flex: 0 0 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* grid 容器内部插入时横跨所有列 */
+.ilmt-grid-break {
+  grid-column: 1 / -1 !important;
+}
+
+/* 待翻译状态 */
 .ilmt-tr[data-loading="1"] {
-  opacity: 0.4;
+  opacity: 0.4 !important;
 }
 
 /* "Translation on" banner with a restore action (fixed, CSP-safe styles). */
