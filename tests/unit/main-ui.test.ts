@@ -391,16 +391,12 @@ it("serializes mutation scans behind a slow initial scan", async () => {
   ]);
 });
 
-it("drops a stale translation and re-queues a paragraph edited via characterData", async () => {
+it("drops the old translation and re-queues an edited translated piece", async () => {
   document.body.innerHTML = `<p>Original paragraph text.</p>`;
-  const { deliver, request } = await startTranslating();
+  const { sent, deliver, request } = await startTranslating();
   const id = request.items[0].id;
-
-  deliver({
-    type: "result",
-    requestId: request.requestId,
-    items: [{ id, text: "译文" }],
-  });
+  deliver({ type: "result", requestId: request.requestId, items: [{ id, text: "译文" }] });
+  deliver({ type: "finish", requestId: request.requestId });
   const paragraph = document.querySelector("p")!;
   expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(1);
 
@@ -408,4 +404,24 @@ it("drops a stale translation and re-queues a paragraph edited via characterData
   await new Promise((resolve) => setTimeout(resolve, 350));
 
   expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items[0].text).toBe("Edited paragraph text.");
+});
+
+it("re-collects a skipped short piece after it grows", async () => {
+  document.body.innerHTML = `<p>abc</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(0);
+
+  document.querySelector("p")!.firstChild!.textContent = "This text is long enough now.";
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(1);
+  expect(translates[0].items[0].text).toBe("This text is long enough now.");
 });

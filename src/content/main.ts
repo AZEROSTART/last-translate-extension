@@ -12,9 +12,15 @@
 
 import {
   collectParagraphs,
+  forgetPiece,
+  forgetPiecesInRoot,
+  pieceRootFor,
+  resetPieceCache,
+  unmarkPiece,
   type LanguageDetection,
   type ParagraphNode,
 } from "./paragraphs";
+import { getSiteRule } from "./site-rules";
 import { renderTranslation, restoreAll } from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
@@ -174,6 +180,7 @@ async function rescan(): Promise<void> {
   // translation, and `collectParagraphs` would read `textContent` polluted by
   // it — producing a translation-of-translation.
   if (document.body) restoreAll(document.body);
+  resetPieceCache();
   await requestScan("full", generation);
 }
 
@@ -244,7 +251,10 @@ function reportScanError(error: unknown): void {
 
 /** Remove marks added by a scan that was invalidated before it could queue. */
 function unmarkNodes(nodes: ParagraphNode[]): void {
-  for (const node of nodes) node.el.removeAttribute("data-ilmt-p");
+  for (const node of nodes) {
+    unmarkPiece(node.el, node.id);
+    forgetPiece(node.anchor);
+  }
 }
 
 /** Collect the full page, cap at MAX_PARAGRAPHS, queue and start the first batch. */
@@ -260,6 +270,7 @@ async function collectAndQueue(generation: number): Promise<void> {
   const nodes = await collectParagraphs(body, {
     targetLang: lang,
     detectLang: detectLang,
+    url: document.location.href,
   });
 
   // A restore/rescan may have landed while detection was in flight: drop the
@@ -270,7 +281,10 @@ async function collectAndQueue(generation: number): Promise<void> {
   }
 
   const overflow = nodes.slice(MAX_PARAGRAPHS);
-  for (const node of overflow) node.el.removeAttribute("data-ilmt-p");
+  for (const node of overflow) {
+    unmarkPiece(node.el, node.id);
+    forgetPiece(node.anchor);
+  }
   if (overflow.length > 0) {
     console.warn(
       `[ilmt] page exceeds ${MAX_PARAGRAPHS} paragraphs; translating the first ${MAX_PARAGRAPHS} only`,
@@ -367,6 +381,7 @@ function restore(): void {
   lastCompletedRequestId = null;
 
   if (document.body) restoreAll(document.body);
+  resetPieceCache();
   registry = new ParagraphRegistry();
   deltaBuffers.clear();
   langCache.clear();
@@ -673,8 +688,10 @@ function handleMutations(mutations: MutationRecord[]): void {
     const target = mutation.target;
     const el = target instanceof Element ? target : target.parentElement;
     if (el?.closest(".ilmt-tr")) continue;
-    const marked = el?.closest("[data-ilmt-p]");
-    if (marked) invalidateParagraph(marked);
+    const root = pieceRootFor(target, getSiteRule(document.location.href));
+    if (!root) continue;
+    if (root.hasAttribute("data-ilmt-p")) invalidatePieceRoot(root);
+    else forgetPiecesInRoot(root);
   }
 
   const relevant = mutations.some((mutation) => {
@@ -692,16 +709,20 @@ function handleMutations(mutations: MutationRecord[]): void {
 }
 
 /**
- * An edited source paragraph is stale: drop its translation and marker and let
- * the next scan re-collect it under a fresh id.
+ * An edited piece root is stale: drop every translation it owns, its registry
+ * records and delta buffers, its marker, and every cached anchor under it so
+ * the next scan re-collects the edited text (including previously skipped
+ * short/target-language pieces) under a fresh id.
  */
-function invalidateParagraph(el: Element): void {
-  const id = el.getAttribute("data-ilmt-p");
-  if (!id) return;
-  el.ownerDocument.querySelector(`[data-ilmt-for="${id}"]`)?.remove();
-  el.removeAttribute("data-ilmt-p");
-  registry.remove(id);
-  deltaBuffers.delete(id);
+function invalidatePieceRoot(root: Element): void {
+  const ids = (root.getAttribute("data-ilmt-p") ?? "").split(/\s+/).filter(Boolean);
+  for (const id of ids) {
+    root.ownerDocument.querySelector(`[data-ilmt-for="${id}"]`)?.remove();
+    registry.remove(id);
+    deltaBuffers.delete(id);
+  }
+  root.removeAttribute("data-ilmt-p");
+  forgetPiecesInRoot(root);
 }
 
 async function enqueueNewParagraphs(generation: number): Promise<void> {
@@ -712,6 +733,7 @@ async function enqueueNewParagraphs(generation: number): Promise<void> {
   const nodes = await collectParagraphs(body, {
     targetLang,
     detectLang: detectLang,
+    url: document.location.href,
   });
 
   // Cancelled or paused mid-scan: undo exactly the marks this scan added.

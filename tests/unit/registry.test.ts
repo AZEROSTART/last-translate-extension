@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { ParagraphRegistry } from "../../src/content/registry";
 
-function add(r: ParagraphRegistry, id: string, el: Element) {
-  r.add({ id, el, text: "hello" });
+function add(r: ParagraphRegistry, id: string, el: Element, anchor: Node = el, heading = false) {
+  r.add({ id, el, anchor, text: "hello", heading });
 }
 
 describe("ParagraphRegistry", () => {
@@ -55,7 +55,7 @@ describe("ParagraphRegistry", () => {
     const r = new ParagraphRegistry();
     document.body.innerHTML = `<p></p>`;
     const el = document.querySelector("p")!;
-    r.add({ id: "p_1", el, text: "Hello world" });
+    r.add({ id: "p_1", el, anchor: el, text: "Hello world", heading: false });
 
     expect(r.get("p_1")!.sourceText).toBe("Hello world");
     r.setTranslation("p_1", "你好世界");
