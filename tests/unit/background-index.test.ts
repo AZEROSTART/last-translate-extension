@@ -14,6 +14,7 @@ function installChrome() {
   const onMessage: Listener[] = [];
   const onCommand: Listener[] = [];
   const onInstalled: Listener[] = [];
+  const onContextMenuClicked: Listener[] = [];
   const sidePanelOpen = vi.fn(async () => {});
   const setPanelBehavior = vi.fn(async () => {});
   const storageSet = vi.fn(async () => {});
@@ -38,6 +39,7 @@ function installChrome() {
     contextMenus: {
       create: contextMenusCreate,
       removeAll: contextMenusRemoveAll,
+      onClicked: { addListener: (cb: Listener) => onContextMenuClicked.push(cb) },
     },
     webNavigation: { onHistoryStateUpdated: { addListener: vi.fn() } },
     tabs: {
@@ -54,6 +56,7 @@ function installChrome() {
     onMessage,
     onCommand,
     onInstalled,
+    onContextMenuClicked,
     sidePanelOpen,
     setPanelBehavior,
     storageSet,
@@ -374,4 +377,34 @@ it("re-registers the context menu on extension update", async () => {
   onInstalled[0]({ reason: "update" });
 
   expect(contextMenusCreate).toHaveBeenCalledTimes(1);
+});
+
+it("sends activate when the translate-page menu is clicked", async () => {
+  const { onContextMenuClicked, tabsQuery, tabsSendMessage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onContextMenuClicked[0]({ menuItemId: "translate-page" }, { id: 7 });
+
+  expect(tabsQuery).not.toHaveBeenCalled();
+  expect(tabsSendMessage).toHaveBeenCalledWith(7, { type: "activate" });
+});
+
+it("ignores other context menu ids", async () => {
+  const { onContextMenuClicked, tabsSendMessage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onContextMenuClicked[0]({ menuItemId: "something-else" }, { id: 7 });
+
+  expect(tabsSendMessage).not.toHaveBeenCalled();
+});
+
+it("falls back to the active tab when a menu click has no tab", async () => {
+  const { onContextMenuClicked, tabsQuery, tabsSendMessage } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onContextMenuClicked[0]({ menuItemId: "translate-page" }, undefined);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(tabsQuery).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
+  expect(tabsSendMessage).toHaveBeenCalledWith(42, { type: "activate" });
 });

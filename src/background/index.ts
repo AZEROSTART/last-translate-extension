@@ -116,6 +116,11 @@ chrome.runtime.onInstalled.addListener(() => {
   registerTranslateContextMenu();
 });
 
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== TRANSLATE_PAGE_MENU_ID) return;
+  sendToCommandTab(tab, { type: "activate" });
+});
+
 /**
  * Open the side panel for a tab. This must run synchronously inside the
  * command listener: `sidePanel.open` requires the command's user gesture, and
