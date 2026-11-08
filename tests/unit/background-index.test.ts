@@ -365,7 +365,7 @@ it("registers the translate-page context menu on install", async () => {
 
   expect(contextMenusRemoveAll).toHaveBeenCalledTimes(1);
   expect(contextMenusCreate).toHaveBeenCalledWith(
-    { id: "translate-page", title: "翻译当前页面", contexts: ["page", "selection"] },
+    { id: "translate-page", title: "翻译当前页面", contexts: ["all"] },
     expect.any(Function),
   );
 });

@@ -17,11 +17,11 @@
 - 不修改页面原始文本节点；本功能完全复用现有内容脚本。
 - 不修改 `Alt+A` 的绑定逻辑。
 - 所有现有测试、`npx tsc --noEmit`、`npm run build` 必须保持通过。
-- 菜单项固定为：id `translate-page`，文案「翻译当前页面」，`contexts: ["page"]`。
+- 菜单项固定为：id `translate-page`，文案「翻译当前页面」，`contexts: ["all"]`。
 
 ## Review Focus
 
-- 右键点击时页面已有选区：`contexts: ["page"]` 仍应显示菜单，不能因为选区而消失。
+- 右键点击时页面已有选区或点在链接、图片、输入框上：`contexts: ["all"]` 都应显示菜单，不能因为具体上下文而消失。
 - 在 `chrome://` 等受保护页面右键：Chrome 不显示扩展菜单，不做特殊处理。
 - 扩展更新后未刷新的旧页面：没有内容脚本接收消息，必须静默失败，不能抛错。
 - 连续点击两次菜单：`translatePage` 的幂等保护应阻止重复翻译。
@@ -40,7 +40,7 @@
 - Produces:
   - 常量 `TRANSLATE_PAGE_MENU_ID = "translate-page"`（模块内）
   - 注册函数 `registerTranslateContextMenu(): void`（模块内，不导出）
-  - 菜单项 `{ id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["page"] }`
+  - 菜单项 `{ id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["all"] }`
 
 - [ ] **Step 1: 扩展测试用的 chrome mock，并写失败测试**
 
@@ -80,7 +80,7 @@ it("registers the translate-page context menu on install", async () => {
 
   expect(contextMenusRemoveAll).toHaveBeenCalledTimes(1);
   expect(contextMenusCreate).toHaveBeenCalledWith(
-    { id: "translate-page", title: "翻译当前页面", contexts: ["page"] },
+    { id: "translate-page", title: "翻译当前页面", contexts: ["all"] },
     expect.any(Function),
   );
 });
@@ -97,7 +97,7 @@ it("re-registers the context menu on extension update", async () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/unit/background-index.test.ts -t "context menu"`
+Run: `npx vitest run tests/unit/background-index.test.ts -t "menu"`
 Expected: FAIL，因为 `onInstalled` 没有被调用，`contextMenusCreate` 调用次数为 0。
 
 - [ ] **Step 3: 在 `src/background/index.ts` 实现菜单注册**
@@ -111,7 +111,7 @@ function registerTranslateContextMenu(): void {
   const create = (): void => {
     try {
       chrome.contextMenus.create(
-        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["page"] },
+        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["all"] },
         () => {
           // Duplicate ids after a reload are harmless; reading lastError keeps
           // Chrome from logging an unchecked-error warning.
@@ -137,7 +137,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/unit/background-index.test.ts -t "context menu"`
+Run: `npx vitest run tests/unit/background-index.test.ts -t "menu"`
 Expected: PASS（2 tests）。
 
 - [ ] **Step 5: 提交**
@@ -211,7 +211,7 @@ it("falls back to the active tab when a menu click has no tab", async () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/unit/background-index.test.ts -t "context menu"`
+Run: `npx vitest run tests/unit/background-index.test.ts -t "menu"`
 Expected: FAIL，`tabsSendMessage` 没有被调用。
 
 - [ ] **Step 3: 在 `src/background/index.ts` 实现点击处理**
@@ -227,7 +227,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/unit/background-index.test.ts -t "context menu"`
+Run: `npx vitest run tests/unit/background-index.test.ts -t "menu"`
 Expected: PASS（5 tests）。
 
 - [ ] **Step 5: 提交**

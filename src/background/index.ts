@@ -88,12 +88,15 @@ const TRANSLATE_PAGE_MENU_ID = "translate-page";
  * Register the translate-page context menu. Menus survive service-worker
  * restarts, so registration belongs to `onInstalled` (install and update),
  * not the top level; `removeAll` keeps a reload from failing on a duplicate id.
+ * Use `all` rather than `page`: Chrome scopes `page` to clicks where no other
+ * context applies, so right-clicking a link, image, selection or editable
+ * element would otherwise hide the item.
  */
 function registerTranslateContextMenu(): void {
   const create = (): void => {
     try {
       chrome.contextMenus.create(
-        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["page", "selection"] },
+        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["all"] },
         () => {
           // Duplicate ids after a reload are harmless; reading lastError keeps
           // Chrome from logging an unchecked-error warning.

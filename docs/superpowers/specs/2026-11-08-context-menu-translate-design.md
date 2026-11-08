@@ -29,7 +29,8 @@
 - 监听 `chrome.runtime.onInstalled`，先 `chrome.contextMenus.removeAll()`，再创建菜单项：
   - `id: "translate-page"`
   - `title: "翻译当前页面"`
-  - `contexts: ["page"]`
+  - `contexts: ["all"]`
+- 使用 `"all"` 而不是 `["page"]`：Chrome 的 `"page"` 只在“没有其他上下文”时生效，右键链接、图片、选区或输入框时菜单会消失。用户要的是“任意位置右键都能翻译当前页”，所以用 `"all"`。
 - 使用 `onInstalled` 而不是顶层创建，避免 service worker 每次启动重复注册同一个 id。
 - 创建失败只吞掉，不影响后台其他功能。
 
