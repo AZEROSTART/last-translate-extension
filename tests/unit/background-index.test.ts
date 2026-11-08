@@ -13,6 +13,7 @@ function installChrome() {
   const onConnect: Listener[] = [];
   const onMessage: Listener[] = [];
   const onCommand: Listener[] = [];
+  const onInstalled: Listener[] = [];
   const sidePanelOpen = vi.fn(async () => {});
   const setPanelBehavior = vi.fn(async () => {});
   const storageSet = vi.fn(async () => {});
@@ -20,15 +21,24 @@ function installChrome() {
   const tabsSendMessage = vi.fn(async () => undefined);
   const openOptionsPage = vi.fn(async () => {});
   const tabsCreate = vi.fn(async () => ({}));
+  const contextMenusCreate = vi.fn();
+  const contextMenusRemoveAll = vi.fn((callback?: () => void) => {
+    callback?.();
+  });
   (globalThis as any).chrome = {
     runtime: {
       id: "test-extension-id",
       onConnect: { addListener: (cb: Listener) => onConnect.push(cb) },
       onMessage: { addListener: (cb: Listener) => onMessage.push(cb) },
+      onInstalled: { addListener: (cb: Listener) => onInstalled.push(cb) },
       openOptionsPage,
       getURL: (path: string) => `chrome-extension://test-extension-id/${path}`,
     },
     commands: { onCommand: { addListener: (cb: Listener) => onCommand.push(cb) } },
+    contextMenus: {
+      create: contextMenusCreate,
+      removeAll: contextMenusRemoveAll,
+    },
     webNavigation: { onHistoryStateUpdated: { addListener: vi.fn() } },
     tabs: {
       onRemoved: { addListener: vi.fn() },
@@ -43,6 +53,7 @@ function installChrome() {
     onConnect,
     onMessage,
     onCommand,
+    onInstalled,
     sidePanelOpen,
     setPanelBehavior,
     storageSet,
@@ -50,6 +61,8 @@ function installChrome() {
     tabsSendMessage,
     openOptionsPage,
     tabsCreate,
+    contextMenusCreate,
+    contextMenusRemoveAll,
   };
 }
 
@@ -339,4 +352,26 @@ it("falls back to a tab when openOptionsPage is unavailable", async () => {
   expect(tabsCreate).toHaveBeenCalledWith({
     url: "chrome-extension://test-extension-id/options.html",
   });
+});
+
+it("registers the translate-page context menu on install", async () => {
+  const { onInstalled, contextMenusCreate, contextMenusRemoveAll } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onInstalled[0]({ reason: "install" });
+
+  expect(contextMenusRemoveAll).toHaveBeenCalledTimes(1);
+  expect(contextMenusCreate).toHaveBeenCalledWith(
+    { id: "translate-page", title: "翻译当前页面", contexts: ["page"] },
+    expect.any(Function),
+  );
+});
+
+it("re-registers the context menu on extension update", async () => {
+  const { onInstalled, contextMenusCreate } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onInstalled[0]({ reason: "update" });
+
+  expect(contextMenusCreate).toHaveBeenCalledTimes(1);
 });
