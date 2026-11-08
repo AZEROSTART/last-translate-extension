@@ -1,11 +1,14 @@
 /**
  * Translation rendering and restore for the content script.
  *
- * A translation is always a new `<span class="ilmt-tr">` node; the page's own
- * text nodes are never touched. Block-level candidates get the span appended as
- * their last child, inline candidates get it as their next sibling. Each span
- * carries `data-ilmt-for` so later deltas update it in place, and `lang` so the
- * browser applies the right font rules.
+ * A translation is always a new `<span class="ilmt-tr ilmt-block">` node; the
+ * page's own text nodes are never touched. The node is inserted at a "safe
+ * anchor" derived from the piece root and anchor text node: inside the root,
+ * after the anchor (and past trailing skipped inline nodes), or — for a row
+ * flex that is not a scope/heading/table structure — after the root itself.
+ * Headings always insert inside the heading and carry `data-ilmt-heading="1"`.
+ * Each span carries `data-ilmt-for` so later deltas update it in place, and
+ * `lang` so the browser applies the right font rules.
  *
  * `restoreAll` removes the spans and the paragraph marks again, leaving the
  * page exactly as it was before translation started.
@@ -13,6 +16,34 @@
 
 const TRANSLATION_CLASS = "ilmt-tr";
 const DEFAULT_TARGET_LANG = "zh-CN";
+
+/**
+ * Base skip selectors used to decide whether a trailing node is "skippable"
+ * when looking for the insertion point. Site-specific rules are deliberately
+ * not threaded in here: inserting before a site-specific skipped inline node is
+ * still safe, and the critical invariant — never placing a translation inside
+ * a button or other interactive element — is guaranteed by this set.
+ */
+const RENDER_SKIP_SELECTOR = [
+  "button",
+  "[role='button']",
+  "summary",
+  "label",
+  "select",
+  "input",
+  "textarea",
+  "time",
+  "relative-time",
+  "[datetime]",
+  "[contenteditable]",
+  "[aria-hidden='true']",
+  "[hidden]",
+  ".sr-only",
+  ".visually-hidden",
+  "[translate='no']",
+  ".notranslate",
+  ".ilmt-tr",
+].join(",");
 
 /**
  * Tags whose default display is block-level. Used when the environment does not
@@ -69,36 +100,87 @@ const BLOCK_TAGS = new Set([
   "ul",
 ]);
 
+/** Where to render a translation, resolved from a collected piece. */
+export interface TranslationTarget {
+  root: Element;
+  anchor: Node;
+  heading?: boolean;
+}
+
 /**
  * Renders (or refreshes) the translation for `id`. An existing node is updated
  * in place so a streamed result never leaves duplicates behind.
  */
 export function renderTranslation(
-  el: Element,
+  target: TranslationTarget,
   id: string,
   text: string,
   targetLang: string = DEFAULT_TARGET_LANG,
 ): HTMLElement {
-  const existing = findTranslation(el.ownerDocument, id);
+  const { root } = target;
+
+  const existing = findTranslation(root.ownerDocument, id);
   if (existing) {
     existing.textContent = text;
     existing.setAttribute("lang", targetLang);
     return existing;
   }
 
-  const node = el.ownerDocument.createElement("span");
-  const inline = isInline(el);
-  node.className = `${TRANSLATION_CLASS} ${inline ? "ilmt-inline" : "ilmt-block"}`;
+  const node = root.ownerDocument.createElement("span");
+  node.className = `${TRANSLATION_CLASS} ilmt-block`;
   node.setAttribute("data-ilmt-for", id);
   node.setAttribute("lang", targetLang);
   node.textContent = text;
+  if (target.heading) node.setAttribute("data-ilmt-heading", "1");
 
-  if (inline && el.parentNode) {
-    el.parentNode.insertBefore(node, el.nextSibling);
-  } else {
-    el.appendChild(node);
+  const display = displayOf(root);
+  const isFlex = display.includes("flex");
+  const isRow = isFlex && (flexDirection(root) || "row").startsWith("row");
+  const scopeLike = root.matches(
+    "body, main, article, [role='main'], #repo-content-turbo-frame, feed-container",
+  );
+  const canAfter = !root.matches(
+    "td, th, tr, tbody, thead, tfoot, table, caption, colgroup, col, option, optgroup, select, textarea",
+  );
+  const afterRoot =
+    !target.heading && isRow && !scopeLike && canAfter && root.parentElement !== null;
+
+  if (afterRoot) {
+    const parent = root.parentElement as Element;
+    parent.insertBefore(node, root.nextSibling);
+    addClass(node, breakClassFor(parent));
+    return node;
   }
 
+  // Anchor disconnected (SPA re-render): fall back to the end of the root when
+  // the root itself is still in the document, otherwise return it uninserted.
+  if (!target.anchor.isConnected) {
+    if (root.isConnected) root.appendChild(node);
+    return node;
+  }
+
+  // Walk up from the anchor to the safe insertion point: past inline wrappers
+  // (stopping at a block boundary), and past a flex/grid item whose parent is
+  // the root so the translation lands after the whole item.
+  let anchorNode: Node = target.anchor;
+  let parent: Node | null = anchorNode.parentNode;
+  while (parent && parent !== root) {
+    const parentEl = parent as Element;
+    if (parentEl.parentNode === root && isFlexOrGrid(root)) {
+      anchorNode = parentEl;
+      parent = parentEl.parentNode;
+      continue;
+    }
+    if (isBlockDisplay(parentEl)) break;
+    anchorNode = parentEl;
+    parent = parentEl.parentNode;
+  }
+  let ref: Node | null = anchorNode.nextSibling;
+  while (ref && isSkippedInline(ref)) ref = ref.nextSibling;
+
+  addClass(node, breakClassFor(root));
+  if (parent) parent.insertBefore(node, ref);
+  else root.appendChild(node);
   return node;
 }
 
@@ -111,7 +193,7 @@ export function updateTranslation(id: string, text: string): void {
 /**
  * Removes every translation node and paragraph mark under `root`, restoring
  * the page to its pre-translation shape (spec §8.3). The paragraph registry is
- * the caller's responsibility (Task 12).
+ * the caller's responsibility.
  */
 export function restoreAll(root: ParentNode = document.body): void {
   const translations: Element[] = [];
@@ -152,10 +234,93 @@ function findTranslation(scope: ParentNode, id: string): HTMLElement | null {
   return scope.querySelector(`[data-ilmt-for="${id}"]`) as HTMLElement | null;
 }
 
-/** Computed `display` wins; without layout information, fall back to the tag. */
-function isInline(el: Element): boolean {
-  const view = el.ownerDocument.defaultView;
-  const display = view ? view.getComputedStyle(el).display.trim().toLowerCase() : "";
-  if (display.length > 0) return display.startsWith("inline");
-  return !BLOCK_TAGS.has(el.tagName.toLowerCase());
+function addClass(node: HTMLElement, className: string | null): void {
+  if (className) node.classList.add(className);
+}
+
+/**
+ * Whether a trailing node can be skipped while looking for the insertion
+ * point: whitespace text, a base-skip element that is still inline-displayed,
+ * or one of our own translation nodes.
+ */
+function isSkippedInline(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? "").trim().length === 0;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return false;
+  const el = node as Element;
+  if (el.classList.contains(TRANSLATION_CLASS)) return true;
+  return !isBlockDisplay(el) && matchesRenderSkip(el);
+}
+
+function matchesRenderSkip(el: Element): boolean {
+  try {
+    return el.matches(RENDER_SKIP_SELECTOR);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The break class a translation needs given its containing layout: a grid gets
+ * `ilmt-grid-break`, a row flex gets `ilmt-flex-break`, and a column flex gets
+ * none (its block children already stack vertically).
+ */
+function breakClassFor(el: Element | null): string | null {
+  if (!el) return null;
+  const display = displayOf(el);
+  if (display.includes("grid")) return "ilmt-grid-break";
+  if (display.includes("flex")) {
+    const dir = flexDirection(el) || "row";
+    return dir.startsWith("row") ? "ilmt-flex-break" : null;
+  }
+  return null;
+}
+
+function isFlexOrGrid(el: Element): boolean {
+  const display = displayOf(el);
+  return display.includes("flex") || display.includes("grid");
+}
+
+function isBlockDisplay(el: Element): boolean {
+  const display = displayOf(el);
+  if (!display) return BLOCK_TAGS.has(el.tagName.toLowerCase());
+  if (display === "none") return false;
+  return !isInlineDisplay(display);
+}
+
+function isInlineDisplay(display: string): boolean {
+  return (
+    display === "inline" ||
+    display.startsWith("inline-") ||
+    display === "contents" ||
+    display === "ruby" ||
+    display === "ruby-base" ||
+    display === "ruby-text" ||
+    display === "math"
+  );
+}
+
+/** Computed `display`, lowercased; empty when no layout is available. */
+function displayOf(el: Element | null): string {
+  if (!el) return "";
+  const view = el.ownerDocument?.defaultView;
+  if (!view || typeof view.getComputedStyle !== "function") return "";
+  try {
+    return (view.getComputedStyle(el).display ?? "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/** Computed `flex-direction`, lowercased; empty when no layout is available. */
+function flexDirection(el: Element | null): string {
+  if (!el) return "";
+  const view = el.ownerDocument?.defaultView;
+  if (!view || typeof view.getComputedStyle !== "function") return "";
+  try {
+    return (view.getComputedStyle(el).flexDirection ?? "").trim().toLowerCase();
+  } catch {
+    return "";
+  }
 }

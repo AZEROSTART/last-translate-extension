@@ -425,3 +425,23 @@ it("re-collects a skipped short piece after it grows", async () => {
   expect(translates).toHaveLength(1);
   expect(translates[0].items[0].text).toBe("This text is long enough now.");
 });
+
+it("removes an orphaned translation after its anchor is replaced", async () => {
+  document.body.innerHTML = `<p>Original paragraph text.</p>`;
+  const { sent, deliver, request } = await startTranslating();
+  const id = request.items[0].id;
+  deliver({ type: "result", requestId: request.requestId, items: [{ id, text: "译文" }] });
+  deliver({ type: "finish", requestId: request.requestId });
+  const p = document.querySelector("p")!;
+  expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+
+  const oldText = p.firstChild!;
+  p.removeChild(oldText);
+  p.insertBefore(document.createTextNode("Replacement paragraph text."), p.firstChild);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items[0].text).toBe("Replacement paragraph text.");
+});

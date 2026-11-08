@@ -303,6 +303,20 @@ function queueNodes(nodes: ParagraphNode[]): void {
 }
 
 /**
+ * Remove translation nodes whose paragraph record no longer exists. The
+ * registry prunes records whose root or anchor was detached; the matching
+ * `.ilmt-tr` node can survive that prune (e.g. after a text node is replaced
+ * while its root stays), so this sweeps them up.
+ */
+function pruneOrphanTranslations(): void {
+  const live = new Set(registry.all().map((record) => record.id));
+  for (const node of document.querySelectorAll(".ilmt-tr[data-ilmt-for]")) {
+    const id = node.getAttribute("data-ilmt-for");
+    if (!id || !live.has(id)) node.remove();
+  }
+}
+
+/**
  * Take the next queued batch in viewport-first order and send one `translate`
  * request, if any. Ordering follows spec §8.5: paragraphs inside the viewport
  * first, then the band just below it (≤300px), then everything else by
@@ -313,6 +327,7 @@ function pump(): void {
   // in-flight request and strand its records.
   if (!active || currentRequestId !== null || rateLimitHold) return;
   registry.prune();
+  pruneOrphanTranslations();
   const batch = takeNearestQueued(BATCH_SIZE);
   if (batch.length === 0) {
     currentRequestId = null;
@@ -452,12 +467,14 @@ function sendOpenChat(text: string, mode: "explain" | "follow-up"): void {
 
 function handleDelta(msg: Extract<BackgroundToClient, { type: "delta" }>): void {
   if (msg.requestId !== currentRequestId) return;
-  const el = registry.get(msg.id)?.el.deref();
-  if (!el) return;
+  const rec = registry.get(msg.id);
+  const root = rec?.el.deref();
+  const anchor = rec?.anchor.deref();
+  if (!rec || !root || !anchor) return;
   // Providers stream chunks, not snapshots: append so the rendered text grows.
   const buffered = (deltaBuffers.get(msg.id) ?? "") + msg.text;
   deltaBuffers.set(msg.id, buffered);
-  renderTranslation(el, msg.id, buffered, targetLang);
+  renderTranslation({ root, anchor, heading: rec.heading }, msg.id, buffered, targetLang);
 }
 
 function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): void {
@@ -466,8 +483,11 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
   for (const item of msg.items) {
     const rec = registry.get(item.id);
     if (!rec) continue;
-    const el = rec.el.deref();
-    if (el) renderTranslation(el, item.id, item.text, targetLang);
+    const root = rec.el.deref();
+    const anchor = rec.anchor.deref();
+    if (root && anchor) {
+      renderTranslation({ root, anchor, heading: rec.heading }, item.id, item.text, targetLang);
+    }
     registry.setStatus(item.id, "done");
     registry.setTranslation(item.id, item.text);
     deltaBuffers.delete(item.id);
@@ -772,7 +792,10 @@ function pauseObservation(): void {
 
 function startPruneTimer(): void {
   if (pruneTimer !== null) return;
-  pruneTimer = setInterval(() => registry.prune(), PRUNE_INTERVAL_MS);
+  pruneTimer = setInterval(() => {
+    registry.prune();
+    pruneOrphanTranslations();
+  }, PRUNE_INTERVAL_MS);
 }
 
 function stopPruneTimer(): void {
