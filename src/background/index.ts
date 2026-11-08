@@ -93,7 +93,7 @@ function registerTranslateContextMenu(): void {
   const create = (): void => {
     try {
       chrome.contextMenus.create(
-        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["page"] },
+        { id: TRANSLATE_PAGE_MENU_ID, title: "翻译当前页面", contexts: ["page", "selection"] },
         () => {
           // Duplicate ids after a reload are harmless; reading lastError keeps
           // Chrome from logging an unchecked-error warning.
