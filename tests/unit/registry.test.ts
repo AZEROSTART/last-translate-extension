@@ -69,4 +69,30 @@ describe("ParagraphRegistry", () => {
     add(r, "p_1", a); add(r, "p_2", b);
     expect(r.all().map((rec) => rec.id).sort()).toEqual(["p_1", "p_2"]);
   });
+
+  it("stores the anchor and heading flag", () => {
+    const r = new ParagraphRegistry();
+    document.body.innerHTML = `<h1>Title</h1>`;
+    const h1 = document.querySelector("h1")!;
+    r.add({
+      id: "p_1",
+      el: h1,
+      anchor: h1.firstChild!,
+      text: "Title",
+      heading: true,
+    });
+    expect(r.get("p_1")!.heading).toBe(true);
+    expect(r.get("p_1")!.anchor.deref()).toBe(h1.firstChild!);
+  });
+
+  it("prunes when the anchor leaves even though the root stays", () => {
+    const r = new ParagraphRegistry();
+    document.body.innerHTML = `<p>hello</p>`;
+    const p = document.querySelector("p")!;
+    const anchor = p.firstChild!;
+    r.add({ id: "p_1", el: p, anchor, text: "hello", heading: false });
+    anchor.parentNode!.removeChild(anchor);
+    expect(r.prune()).toBe(1);
+    expect(r.get("p_1")).toBeUndefined();
+  });
 });

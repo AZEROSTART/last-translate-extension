@@ -1,11 +1,12 @@
 /**
  * Per-paragraph translation state registry for the content script.
  *
- * Holds one `ParagraphRecord` per detected paragraph. The DOM element is kept
- * as a `WeakRef` so a re-render (SPA, virtual DOM) that drops a node can be
- * garbage-collected instead of leaking through the registry (spec §8.4). The
- * record still carries a strong `sourceText`/`translation`, so callers can act
- * on a result even after the element is gone.
+ * Holds one `ParagraphRecord` per detected paragraph. The DOM element and its
+ * text-node anchor are kept as `WeakRef`s so a re-render (SPA, virtual DOM)
+ * that drops a node can be garbage-collected instead of leaking through the
+ * registry (spec §8.4). The record still carries a strong
+ * `sourceText`/`translation`, so callers can act on a result even after the
+ * element is gone.
  *
  * `WeakRef` is available in the target environments (Chrome ≥ 84, Node ≥ 14.6,
  * which jsdom runs on), so no fallback is needed. `prune()` reads `deref()` and
@@ -18,6 +19,8 @@ import type { ParagraphNode } from "./paragraphs";
 export interface ParagraphRecord {
   id: string;
   el: WeakRef<Element>;
+  anchor: WeakRef<Node>;
+  heading: boolean;
   sourceText: string;
   status: ParagraphStatus;
   translation?: string;
@@ -31,6 +34,8 @@ export class ParagraphRegistry {
     this.records.set(p.id, {
       id: p.id,
       el: new WeakRef(p.el),
+      anchor: new WeakRef(p.anchor),
+      heading: p.heading,
       sourceText: p.text,
       status: "unseen",
     });
@@ -86,12 +91,23 @@ export class ParagraphRegistry {
     return ids;
   }
 
-  /** Remove records whose element was collected or detached; returns the count. */
+  /**
+   * Remove records whose element or anchor was collected or detached; returns
+   * the count. Both must stay connected: the anchor is where Task 5 inserts the
+   * translation, so a missing anchor invalidates the piece even if its root
+   * survives.
+   */
   prune(): number {
     let removed = 0;
     for (const [id, record] of this.records) {
       const el = record.el.deref();
-      if (el === undefined || !el.isConnected) {
+      const anchor = record.anchor.deref();
+      if (
+        el === undefined ||
+        !el.isConnected ||
+        anchor === undefined ||
+        !anchor.isConnected
+      ) {
         this.records.delete(id);
         removed++;
       }
