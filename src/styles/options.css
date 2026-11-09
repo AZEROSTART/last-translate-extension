@@ -414,56 +414,134 @@ textarea {
   display: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #0d1117;
-    color: #e6edf3;
-  }
+/* --- quantum teal theme (C) --- */
 
-  .card {
-    border-color: rgba(255, 255, 255, 0.12);
-    background: #161b22;
-    box-shadow: none;
-  }
+:root[data-theme="quantum"] body {
+  background: var(--ilmt-bg);
+  color: var(--ilmt-text);
+  scrollbar-color: var(--ilmt-border) var(--ilmt-bg);
+}
 
-  .provider-card {
-    border-color: rgba(255, 255, 255, 0.1);
-    background: #1c2129;
-  }
+:root[data-theme="quantum"] .card {
+  border-color: var(--ilmt-border-soft);
+  background:
+    radial-gradient(circle at 1px 1px, rgba(103, 232, 249, 0.1) 1px, transparent 0) 0 0 / 18px 18px,
+    linear-gradient(160deg, rgba(7, 22, 21, 0.98), rgba(4, 10, 12, 0.98));
+  box-shadow: none;
+}
 
-  .provider-form {
-    border-color: rgba(9, 105, 218, 0.5);
-    background: #111a26;
-  }
+:root[data-theme="quantum"] .provider-card {
+  border-color: var(--ilmt-border-soft);
+  background: var(--ilmt-panel-2);
+}
 
-  button {
-    border-color: rgba(255, 255, 255, 0.15);
-    background: #21262d;
-    color: #e6edf3;
-  }
+:root[data-theme="quantum"] .provider-form {
+  border-color: var(--ilmt-border);
+  background: var(--ilmt-glass);
+}
 
-  button:hover:not(:disabled) {
-    background: #2d333b;
-  }
+:root[data-theme="quantum"] .empty {
+  border-color: var(--ilmt-border-soft);
+  color: var(--ilmt-muted);
+}
 
-  input[type="text"],
-  input[type="password"],
-  input[type="number"],
-  select,
-  textarea {
-    border-color: rgba(255, 255, 255, 0.18);
-    background: #0d1117;
-    color: #e6edf3;
-  }
+:root[data-theme="quantum"] button {
+  border-color: var(--ilmt-border);
+  background: rgba(7, 22, 21, 0.4);
+  color: var(--ilmt-text);
+}
 
-  .field-group {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
+:root[data-theme="quantum"] button:hover:not(:disabled) {
+  background: rgba(45, 212, 191, 0.12);
+}
 
-  .page-subtitle,
-  .meta-label,
-  .field-hint,
-  .provider-overrides {
-    color: #8b949e;
-  }
+:root[data-theme="quantum"] .provider-add,
+:root[data-theme="quantum"] .pf-save,
+:root[data-theme="quantum"] .global-save,
+:root[data-theme="quantum"] .pf-test-connection {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
+  color: #04100f;
+}
+
+:root[data-theme="quantum"] .provider-add:hover:not(:disabled),
+:root[data-theme="quantum"] .pf-save:hover:not(:disabled),
+:root[data-theme="quantum"] .global-save:hover:not(:disabled),
+:root[data-theme="quantum"] .pf-test-connection:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--ilmt-accent-2), var(--ilmt-accent));
+}
+
+:root[data-theme="quantum"] .provider-delete,
+:root[data-theme="quantum"] .pf-header-remove {
+  color: var(--ilmt-danger);
+}
+
+:root[data-theme="quantum"] .provider-delete:hover:not(:disabled),
+:root[data-theme="quantum"] .pf-header-remove:hover:not(:disabled) {
+  background: rgba(251, 113, 133, 0.12);
+}
+
+:root[data-theme="quantum"] input[type="text"],
+:root[data-theme="quantum"] input[type="password"],
+:root[data-theme="quantum"] input[type="number"],
+:root[data-theme="quantum"] select,
+:root[data-theme="quantum"] textarea {
+  border-color: var(--ilmt-border-soft);
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"] input:focus-visible,
+:root[data-theme="quantum"] select:focus-visible,
+:root[data-theme="quantum"] textarea:focus-visible,
+:root[data-theme="quantum"] button:focus-visible {
+  outline: 2px solid var(--ilmt-accent);
+  outline-offset: 2px;
+}
+
+:root[data-theme="quantum"] .field-group {
+  border-color: var(--ilmt-border-soft);
+}
+
+:root[data-theme="quantum"] .field-group legend {
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"] .page-subtitle,
+:root[data-theme="quantum"] .meta-label,
+:root[data-theme="quantum"] .field-hint,
+:root[data-theme="quantum"] .provider-overrides {
+  color: var(--ilmt-muted);
+}
+
+:root[data-theme="quantum"] .badge {
+  background: rgba(45, 212, 191, 0.12);
+  color: var(--ilmt-accent-2);
+}
+
+:root[data-theme="quantum"] .success,
+:root[data-theme="quantum"] .pf-models-status.success,
+:root[data-theme="quantum"] .global-saved,
+:root[data-theme="quantum"] .global-cache-message.success {
+  color: var(--ilmt-success);
+}
+
+:root[data-theme="quantum"] .error,
+:root[data-theme="quantum"] .pf-models-status.error,
+:root[data-theme="quantum"] .field-error,
+:root[data-theme="quantum"] .global-cache-message.error {
+  color: var(--ilmt-danger);
+}
+
+:root[data-theme="quantum"] .pf-kind-readonly {
+  padding: 8px 10px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 7px;
+  color: var(--ilmt-muted);
+  font-family: var(--ilmt-mono);
+}
+
+:root[data-theme="quantum"] input[type="radio"],
+:root[data-theme="quantum"] input[type="checkbox"] {
+  accent-color: var(--ilmt-accent);
 }

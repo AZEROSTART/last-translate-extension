@@ -26,6 +26,7 @@ import type {
   Settings,
 } from "../shared/types";
 import cssText from "../styles/panel.css?inline";
+import themeCss from "../styles/theme.css?inline";
 
 const HISTORY_KEY = "chat.history";
 const PENDING_QUOTE_KEY = "chat.pendingQuote";
@@ -123,6 +124,7 @@ export function runPanel(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  document.documentElement.dataset.theme = "quantum";
   buildDom();
   injectStyles();
   await loadPanelSettings();
@@ -229,7 +231,7 @@ function injectStyles(): void {
   if (document.querySelector("style[data-ilmt-panel]")) return;
   const style = document.createElement("style");
   style.setAttribute("data-ilmt-panel", "");
-  style.textContent = cssText;
+  style.textContent = themeCss + cssText;
   (document.head ?? document.documentElement).appendChild(style);
 }
 

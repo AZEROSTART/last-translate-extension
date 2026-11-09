@@ -98,6 +98,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   document.querySelectorAll("style[data-ilmt-options]").forEach((el) => el.remove());
   delete (globalThis as unknown as { __ilmtOptions?: unknown }).__ilmtOptions;
+  delete document.documentElement.dataset.theme;
 });
 
 describe("provider list", () => {
@@ -522,4 +523,10 @@ describe("global settings", () => {
     ) as HTMLInputElement;
     expect(checked.value).toBe("auto-current-site");
   });
+});
+
+it("activates the quantum teal theme", async () => {
+  await seed();
+  await boot();
+  expect(document.documentElement.dataset.theme).toBe("quantum");
 });

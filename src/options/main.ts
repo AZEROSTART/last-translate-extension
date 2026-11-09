@@ -27,6 +27,7 @@ import {
   type ProviderFormState,
 } from "./providers";
 import cssText from "../styles/options.css?inline";
+import themeCss from "../styles/theme.css?inline";
 
 const TARGET_LANGUAGES: Array<[string, string]> = [
   ["zh-CN", "简体中文"],
@@ -122,6 +123,7 @@ export function runOptions(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  document.documentElement.dataset.theme = "quantum";
   try {
     settings = await getSettings();
   } catch {
@@ -206,7 +208,7 @@ function injectStyles(): void {
   if (document.querySelector("style[data-ilmt-options]")) return;
   const style = document.createElement("style");
   style.setAttribute("data-ilmt-options", "");
-  style.textContent = cssText;
+  style.textContent = themeCss + cssText;
   (document.head ?? document.documentElement).appendChild(style);
 }
 

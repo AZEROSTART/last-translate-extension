@@ -126,6 +126,7 @@ afterEach(() => {
   delete (globalThis as any).__ilmtPanel;
   document.body.innerHTML = "";
   document.querySelectorAll("style[data-ilmt-panel]").forEach((el) => el.remove());
+  delete document.documentElement.dataset.theme;
 });
 
 async function boot() {
@@ -773,4 +774,10 @@ it("persists the session to chat.history after the assistant finishes", async ()
   expect(history[0].tabId).toBe(1);
   expect(history[0].messages.map((m) => m.role)).toEqual(["user", "assistant"]);
   expect(history[0].messages[1].content).toBe("答");
+});
+
+it("activates the quantum teal theme", async () => {
+  installChrome();
+  await boot();
+  expect(document.documentElement.dataset.theme).toBe("quantum");
 });

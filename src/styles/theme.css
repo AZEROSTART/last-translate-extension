@@ -1,0 +1,40 @@
+:root[data-theme="quantum"] {
+  color-scheme: dark;
+  --ilmt-bg: #04060c;
+  --ilmt-panel: #061513;
+  --ilmt-panel-2: #071615;
+  --ilmt-glass: rgba(7, 22, 21, 0.92);
+  --ilmt-accent: #2dd4bf;
+  --ilmt-accent-2: #67e8f9;
+  --ilmt-text: #dffcf7;
+  --ilmt-muted: #6e9f99;
+  --ilmt-border: rgba(45, 212, 191, 0.3);
+  --ilmt-border-soft: rgba(45, 212, 191, 0.18);
+  --ilmt-input: rgba(4, 14, 14, 0.8);
+  --ilmt-danger: #fb7185;
+  --ilmt-success: #5eead4;
+  --ilmt-glow: 0 0 18px rgba(45, 212, 191, 0.35);
+  --ilmt-radius: 10px;
+  --ilmt-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme="quantum"] body {
+  background: var(--ilmt-bg);
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"] ::selection {
+  background: var(--ilmt-accent);
+  color: #04100f;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="quantum"] *,
+  :root[data-theme="quantum"] *::before,
+  :root[data-theme="quantum"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
