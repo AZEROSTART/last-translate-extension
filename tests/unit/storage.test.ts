@@ -58,5 +58,6 @@ describe("settings storage", () => {
 
     const s = await getSettings();
     expect(s.providers.map((p) => p.kind)).toEqual(["custom", "custom", "deepseek"]);
+    expect(s.providers[2]).toMatchObject({ name: "C", baseURL: "https://api.deepseek.com" });
   });
 });

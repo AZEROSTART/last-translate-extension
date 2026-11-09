@@ -216,6 +216,12 @@ function render(): void {
   providerSelect.hidden = !hasProviders;
 
   if (hasProviders) {
+    if (isNew) {
+      const placeholder = el("option");
+      placeholder.value = "";
+      placeholder.textContent = "新增配置…";
+      providerSelect.appendChild(placeholder);
+    }
     for (const p of providers) {
       const option = el("option");
       option.value = p.id;
@@ -228,6 +234,8 @@ function render(): void {
           providers.find((p) => p.id === settings!.activeProviderId) ?? providers[0];
       }
       providerSelect.value = current?.id ?? "";
+    } else {
+      providerSelect.value = "";
     }
   }
 
@@ -280,7 +288,7 @@ function renderForm(): void {
 
   const apiKeyInput = el("input", "popup-apiKey");
   apiKeyInput.type = "password";
-  apiKeyInput.value = "";
+  apiKeyInput.value = isNew ? base.apiKey : "";
   apiKeyInput.autocomplete = "new-password";
   apiKeyInput.placeholder = isNew
     ? "必填，仅保存在本机"
@@ -409,9 +417,18 @@ function onAddProvider(): void {
 
 function onKindChange(value: string): void {
   if (!isNew) return;
-  const id = draft.id;
-  draft = value === "deepseek" ? newDeepSeekDraft() : newCustomDraft();
-  draft.id = id;
+  const form = formHost.querySelector<HTMLFormElement>(".popup-form");
+  const typedKey = form?.querySelector<HTMLInputElement>(".popup-apiKey")?.value.trim() ?? "";
+  const typedModel = form?.querySelector<HTMLInputElement>(".popup-model")?.value.trim() ?? "";
+
+  // Preserve the user's typed API key/model (and the draft id/createdAt);
+  // only the kind-specific fields switch with the selected type.
+  const next = value === "deepseek" ? newDeepSeekDraft() : newCustomDraft();
+  next.id = draft.id;
+  next.createdAt = draft.createdAt;
+  if (typedKey !== "") next.apiKey = typedKey;
+  if (typedModel !== "") next.model = typedModel;
+  draft = next;
   renderForm();
 }
 

@@ -157,6 +157,50 @@ describe("popup model configuration", () => {
     expect((document.querySelector(".popup-appendV1") as HTMLInputElement).checked).toBe(true);
   });
 
+  it("preserves typed API key and model when switching type in a new provider", async () => {
+    installChrome();
+    await seed();
+    await boot();
+
+    setValue(".popup-apiKey", "sk-ds-1234");
+    setValue(".popup-model", "my-custom-model");
+
+    let kind = document.querySelector(".popup-kind") as HTMLSelectElement;
+    kind.value = "custom";
+    kind.dispatchEvent(new Event("change"));
+
+    expect((document.querySelector(".popup-apiKey") as HTMLInputElement).value).toBe(
+      "sk-ds-1234",
+    );
+    expect((document.querySelector(".popup-model") as HTMLInputElement).value).toBe(
+      "my-custom-model",
+    );
+
+    kind = document.querySelector(".popup-kind") as HTMLSelectElement;
+    kind.value = "deepseek";
+    kind.dispatchEvent(new Event("change"));
+
+    expect((document.querySelector(".popup-apiKey") as HTMLInputElement).value).toBe(
+      "sk-ds-1234",
+    );
+    expect((document.querySelector(".popup-model") as HTMLInputElement).value).toBe(
+      "my-custom-model",
+    );
+
+    click(".popup-save");
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.providers).toHaveLength(1);
+    });
+
+    const saved = (await getSettings()).providers[0];
+    expect(saved).toMatchObject({
+      kind: "deepseek",
+      apiKey: "sk-ds-1234",
+      model: "my-custom-model",
+    });
+  });
+
   it("saves a DeepSeek provider with the preset and makes it active", async () => {
     installChrome();
     await seed();
@@ -222,6 +266,24 @@ describe("popup model configuration", () => {
     expect(saved.extraHeaders).toEqual({ "X-Token": "{{apiKey}}" });
     expect(saved.overrides).toEqual({ concurrency: 2 });
     expect(saved.model).toBe("m2");
+  });
+
+  it("shows a placeholder option and clears the provider select in new mode", async () => {
+    installChrome();
+    await seed({ providers: [p1, p2], activeProviderId: p1.id });
+    await boot();
+
+    click(".popup-add");
+
+    const select = document.querySelector(".popup-provider-select") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.querySelector('option[value=""]')?.textContent).toBe("新增配置…");
+    expect(document.querySelector(".popup-kind")).not.toBeNull();
+
+    select.value = p2.id;
+    select.dispatchEvent(new Event("change"));
+    expect(document.querySelector(".popup-kind")).toBeNull();
+    expect(select.value).toBe(p2.id);
   });
 
   it("edits an existing DeepSeek provider without exposing or replacing the key", async () => {
@@ -387,6 +449,18 @@ describe("popup model configuration", () => {
     expect(window.close).toHaveBeenCalled();
   });
 
+  it("keeps the popup open when the side-panel fallback query fails", async () => {
+    const { sidePanelOpen, tabsQuery } = installChrome();
+    sidePanelOpen.mockRejectedValueOnce(new Error("no window"));
+    tabsQuery.mockRejectedValueOnce(new Error("query failed"));
+    await boot();
+
+    (document.querySelector(".popup-open-sidepanel") as HTMLButtonElement).click();
+    await flush();
+
+    expect(window.close).not.toHaveBeenCalled();
+  });
+
   it("opens the options page and falls back to a tab", async () => {
     const { openOptionsPage, tabsCreate } = installChrome();
     openOptionsPage.mockResolvedValue(undefined);
@@ -395,6 +469,7 @@ describe("popup model configuration", () => {
     (document.querySelector(".popup-open-options") as HTMLButtonElement).click();
     await flush();
     expect(openOptionsPage).toHaveBeenCalled();
+    expect(tabsCreate).not.toHaveBeenCalled();
 
     openOptionsPage.mockRejectedValue(new Error("no options page"));
     (document.querySelector(".popup-open-options") as HTMLButtonElement).click();

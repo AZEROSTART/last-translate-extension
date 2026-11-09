@@ -540,6 +540,7 @@ function openForm(provider: ProviderConfig | null): void {
   };
 
   const syncKindFields = (): void => {
+    if (!settings) return;
     const kind: ProviderKind = kindSelect?.value === "deepseek" ? "deepseek" : base.kind;
     const isDeepSeek = kind === "deepseek";
 
@@ -557,7 +558,7 @@ function openForm(provider: ProviderConfig | null): void {
     }
 
     if (!provider && nameInput.value === DEEPSEEK_PRESET.name) {
-      nameInput.value = `自定义 ${settings!.providers.length + 1}`;
+      nameInput.value = `自定义 ${settings.providers.length + 1}`;
     }
     if (!provider && baseURLInput.value === DEEPSEEK_PRESET.baseURL) {
       baseURLInput.value = "https://api.openai.com";
