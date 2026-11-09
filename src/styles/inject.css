@@ -45,23 +45,23 @@
 /* 待翻译状态：译文位置的呼吸骨架 */
 .ilmt-tr[data-loading="1"] {
   opacity: 1 !important;
-  min-height: 1.15em;
+  min-height: 1.15em !important;
 }
 
 .ilmt-tr[data-loading="1"]::before {
-  content: "";
-  display: block;
-  width: 100%;
-  height: 0.95em;
-  border-radius: 4px;
-  background: currentColor;
-  opacity: 0.18;
-  animation: ilmt-loading-pulse 1.4s ease-in-out infinite;
+  content: "" !important;
+  display: block !important;
+  width: 100% !important;
+  height: 0.95em !important;
+  border-radius: 4px !important;
+  background: currentColor !important;
+  opacity: 0.18 !important;
+  animation: ilmt-loading-pulse 1.4s ease-in-out infinite !important;
 }
 
 .ilmt-tr[data-loading="1"][data-ilmt-heading="1"]::before {
-  height: 0.62em;
-  max-width: 8em;
+  height: 0.62em !important;
+  max-width: 8em !important;
 }
 
 @keyframes ilmt-loading-pulse {
@@ -76,8 +76,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ilmt-tr[data-loading="1"]::before {
-    animation: none;
-    opacity: 0.18;
+    animation: none !important;
+    opacity: 0.18 !important;
   }
 }
 

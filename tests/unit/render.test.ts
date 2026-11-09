@@ -253,6 +253,15 @@ it("discards an empty loading node but keeps a partial translation", () => {
   expect(node.hasAttribute("data-loading")).toBe(false);
 });
 
+it("clears stale partial text when a retry re-marks the node as loading", () => {
+  document.body.innerHTML = `<p>Hello</p>`;
+  const p = document.querySelector("p")!;
+  renderTranslation({ root: p, anchor: p.firstChild! }, "p_load_9", "你");
+  const node = renderLoading({ root: p, anchor: p.firstChild! }, "p_load_9");
+  expect(node.textContent).toBe("");
+  expect(node.getAttribute("data-loading")).toBe("1");
+});
+
 it("removes loading placeholders on restore", () => {
   document.body.innerHTML = `<p>Hello</p>`;
   const before = document.body.innerHTML;

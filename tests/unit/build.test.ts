@@ -58,6 +58,13 @@ describe("build output", () => {
     expect(css).toContain("prefers-reduced-motion");
   });
 
+  it("hardens the skeleton bar against page CSS", () => {
+    const css = readFileSync("dist/inject.css", "utf8");
+    const rule = css.match(/\.ilmt-tr\[data-loading="1"\]::?before\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule.split(";").filter(Boolean).every((decl) => decl.includes("!important"))).toBe(true);
+  });
+
   it("does not inject a data-ilmt stylesheet from content_main.js", () => {
     const code = readFileSync("dist/content_main.js", "utf8");
     expect(code).not.toContain('"data-ilmt"');

@@ -527,7 +527,29 @@ it("shows loading placeholders only for the in-flight batch", async () => {
   expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
 });
 
-it("does not insert a placeholder for a piece detached before the batch sends", async () => {
+it("moves the skeleton to the next batch after the first result", async () => {
+  document.body.innerHTML = Array.from(
+    { length: 21 },
+    (_, i) => `<p>Paragraph number ${i} here.</p>`,
+  ).join("");
+  const { sent, deliver, request } = await startTranslating();
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
+
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: request.items.map((item: any) => ({ id: item.id, text: "译" })),
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(21);
+  const translates = sent.filter((message) => message.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items).toHaveLength(1);
+});
+
+it("does not insert an orphan placeholder when a piece is detached during the scan", async () => {
   document.body.innerHTML = `<p id="gone">Hello world from the page.</p>`;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -595,4 +617,6 @@ it("removes loading placeholders on restore", async () => {
   (globalThis as any).__ilmtMain.restore();
 
   expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(0);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  expect(document.querySelector("p")!.hasAttribute("data-ilmt-p")).toBe(false);
 });

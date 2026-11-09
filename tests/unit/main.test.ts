@@ -255,6 +255,10 @@ it("pumps queued paragraphs on scroll when no request is in flight", async () =>
   runContentMain();
   await (globalThis as any).__ilmtMain.translatePage();
   expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
+  const paragraphs = Array.from(document.querySelectorAll("p"));
+  expect(paragraphs[20].querySelector(".ilmt-tr")).toBeNull();
 
   // Still in flight: a scroll must not start a second request.
   window.dispatchEvent(new Event("scroll"));
@@ -265,6 +269,9 @@ it("pumps queued paragraphs on scroll when no request is in flight", async () =>
   // through the port client's reconnect queue.
   disconnectListeners[0]();
   expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
+  // The retry reuses the same skeletons instead of stacking new ones.
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
 
   // The requeued batch is now in flight; a scroll must not preempt it.
   window.dispatchEvent(new Event("scroll"));

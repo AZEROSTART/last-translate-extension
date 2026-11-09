@@ -145,6 +145,9 @@ export function renderLoading(
 ): HTMLElement {
   const existing = findTranslation(target.root.ownerDocument, id);
   if (existing) {
+    // A requeued piece may still hold partial streamed text. Drop it so the
+    // retry shows a clean skeleton instead of a bar stacked over stale text.
+    existing.textContent = "";
     markLoading(existing);
     return existing;
   }
