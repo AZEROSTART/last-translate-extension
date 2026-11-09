@@ -6,6 +6,7 @@ import {
   promptVersionFor,
   validateProvider,
 } from "../../src/options/providers";
+import { DEEPSEEK_PRESET } from "../../src/shared/providers";
 
 const base: ProviderConfig = {
   id: "a",
@@ -23,6 +24,30 @@ describe("validateProvider", () => {
     expect(validateProvider({ ...base, apiKey: "" })).toContain("apiKey");
     expect(validateProvider({ ...base, model: "" })).toContain("model");
     expect(validateProvider(base)).toEqual([]);
+  });
+
+  it("requires only apiKey and model for DeepSeek", () => {
+    const deepseek: ProviderConfig = {
+      ...base,
+      kind: "deepseek",
+      baseURL: "",
+      apiKey: "",
+      model: "",
+    };
+    expect(validateProvider(deepseek)).toEqual(["apiKey", "model"]);
+    expect(validateProvider({ ...deepseek, apiKey: "k", model: "m" })).toEqual([]);
+  });
+});
+
+describe("DEEPSEEK_PRESET", () => {
+  it("exposes the DeepSeek preset values", () => {
+    expect(DEEPSEEK_PRESET).toEqual({
+      name: "DeepSeek",
+      baseURL: "https://api.deepseek.com",
+      appendV1: false,
+      defaultModel: "deepseek-flash",
+      fallbackModels: ["deepseek-flash", "deepseek-v4-pro"],
+    });
   });
 });
 

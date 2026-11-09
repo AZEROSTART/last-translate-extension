@@ -43,4 +43,20 @@ describe("settings storage", () => {
     expect(s.targetLang).toBe("ko");
     expect(s.futureOption).toBe(true);
   });
+
+  it("normalizes missing and unknown provider kinds to custom", async () => {
+    await chrome.storage.local.set({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        providers: [
+          { id: "a", name: "A", baseURL: "u", apiKey: "k", model: "m", createdAt: 1 },
+          { id: "b", name: "B", kind: "legacy", baseURL: "u", apiKey: "k", model: "m", createdAt: 2 },
+          { id: "c", name: "C", kind: "deepseek", baseURL: "https://api.deepseek.com", apiKey: "k", model: "deepseek-flash", createdAt: 3 },
+        ],
+      },
+    });
+
+    const s = await getSettings();
+    expect(s.providers.map((p) => p.kind)).toEqual(["custom", "custom", "deepseek"]);
+  });
 });

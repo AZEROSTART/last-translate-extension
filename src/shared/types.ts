@@ -2,11 +2,14 @@
  * Shared type vocabulary for the extension. Types only — no runtime logic here.
  */
 
+/** How a provider is configured: a native preset or a user-supplied endpoint. */
+export type ProviderKind = "custom" | "deepseek";
+
 /** A user-configured OpenAI-compatible provider (spec §8.6). */
 export interface ProviderConfig {
   id: string;
   name: string;
-  kind: "custom";
+  kind: ProviderKind;
   baseURL: string;
   apiKey: string;
   model: string;

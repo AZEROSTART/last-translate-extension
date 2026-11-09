@@ -1,4 +1,5 @@
 import type { ProviderConfig, Settings } from "./types";
+import { normalizeProviderKind } from "./providers";
 
 const SETTINGS_KEY = "settings";
 
@@ -36,6 +37,13 @@ export async function getSettings(): Promise<Settings> {
     siteRules: { ...DEFAULT_SETTINGS.siteRules },
     ...(stored ?? {}),
   };
+
+  // Legacy or unknown provider kinds normalize to "custom" on every read;
+  // an existing "deepseek" kind is preserved.
+  merged.providers = merged.providers.map((provider) => ({
+    ...provider,
+    kind: normalizeProviderKind((provider as { kind?: unknown }).kind),
+  }));
 
   // Ruling 7: the canonical value is "auto-current-site" (spec §8.10); older
   // builds stored the shorter "auto". Migrate it on every read.

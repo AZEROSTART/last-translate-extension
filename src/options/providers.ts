@@ -25,7 +25,7 @@ export interface ProviderFormState extends Omit<ProviderConfig, "overrides"> {
 /** Field codes that are required before a provider can be saved. */
 export function validateProvider(provider: ProviderConfig): string[] {
   const missing: string[] = [];
-  if (!provider.baseURL.trim()) missing.push("baseURL");
+  if (provider.kind !== "deepseek" && !provider.baseURL.trim()) missing.push("baseURL");
   if (!provider.apiKey.trim()) missing.push("apiKey");
   if (!provider.model.trim()) missing.push("model");
   return missing;
