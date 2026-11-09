@@ -62,7 +62,7 @@ async function seed(partial: Partial<Settings> = {}): Promise<void> {
 
 function installChrome() {
   const sidePanelOpen = vi.fn(async () => undefined);
-  const tabsQuery = vi.fn(async () => []);
+  const tabsQuery = vi.fn(async (): Promise<Array<{ id?: number }>> => []);
   const openOptionsPage = vi.fn(async () => undefined);
   const tabsCreate = vi.fn(async () => undefined);
 
@@ -357,5 +357,50 @@ describe("popup model configuration", () => {
     await seed();
     await boot();
     expect(document.documentElement.dataset.theme).toBe("quantum");
+  });
+
+  it("opens the side panel in the current window and closes the popup", async () => {
+    const { sidePanelOpen } = installChrome();
+    sidePanelOpen.mockResolvedValue(undefined);
+    await boot();
+
+    (document.querySelector(".popup-open-sidepanel") as HTMLButtonElement).click();
+    await flush();
+
+    expect(sidePanelOpen).toHaveBeenCalledWith({ windowId: -2 });
+    expect(window.close).toHaveBeenCalled();
+  });
+
+  it("falls back to the active tab when opening the side panel by window fails", async () => {
+    const { sidePanelOpen, tabsQuery } = installChrome();
+    sidePanelOpen
+      .mockRejectedValueOnce(new Error("no window"))
+      .mockResolvedValueOnce(undefined);
+    tabsQuery.mockResolvedValue([{ id: 7 }]);
+    await boot();
+
+    (document.querySelector(".popup-open-sidepanel") as HTMLButtonElement).click();
+    await flush();
+
+    expect(sidePanelOpen).toHaveBeenNthCalledWith(1, { windowId: -2 });
+    expect(sidePanelOpen).toHaveBeenNthCalledWith(2, { tabId: 7 });
+    expect(window.close).toHaveBeenCalled();
+  });
+
+  it("opens the options page and falls back to a tab", async () => {
+    const { openOptionsPage, tabsCreate } = installChrome();
+    openOptionsPage.mockResolvedValue(undefined);
+    await boot();
+
+    (document.querySelector(".popup-open-options") as HTMLButtonElement).click();
+    await flush();
+    expect(openOptionsPage).toHaveBeenCalled();
+
+    openOptionsPage.mockRejectedValue(new Error("no options page"));
+    (document.querySelector(".popup-open-options") as HTMLButtonElement).click();
+    await flush();
+    expect(tabsCreate).toHaveBeenCalledWith({
+      url: "chrome-extension://test-extension-id/options.html",
+    });
   });
 });

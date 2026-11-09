@@ -166,11 +166,10 @@ it("ignores open-chat from another extension", async () => {
   expect(sidePanelOpen).not.toHaveBeenCalled();
 });
 
-it("opens the side panel on toolbar action click at startup", async () => {
+it("does not install openPanelOnActionClick because the popup owns action clicks", async () => {
   const { setPanelBehavior } = installChrome();
-  await importIndexAndSpyOnQueue();
-
-  expect(setPanelBehavior).toHaveBeenCalledWith({ openPanelOnActionClick: true });
+  await import("../../src/background/index");
+  expect(setPanelBehavior).not.toHaveBeenCalled();
 });
 
 it("sends activate to the command's tab without an async active-tab lookup", async () => {

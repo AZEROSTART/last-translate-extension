@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "description": "把网页翻译成中文并插在原文下方，支持自定义 OpenAI 兼容模型与侧栏问答。",
   "minimum_chrome_version": "120",
-  "action": {},
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "翻译设置"
+  },
   "permissions": [
     "storage",
     "sidePanel",

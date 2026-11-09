@@ -24,21 +24,6 @@ const PENDING_QUOTE_KEY = "chat.pendingQuote";
 const ACTIVE_TAB_QUERY: chrome.tabs.QueryInfo = { active: true, lastFocusedWindow: true };
 
 /**
- * Toolbar clicks open the side panel without content-script help (spec §8.9).
- * Register it at startup, not only on install: a service-worker restart must
- * not lose the behavior. Failures are non-fatal in every Chrome version.
- */
-try {
-  void chrome.sidePanel
-    .setPanelBehavior({ openPanelOnActionClick: true })
-    .catch(() => {
-      // Older Chrome or a missing permission; the panel shortcut still works.
-    });
-} catch {
-  // `setPanelBehavior` may be unavailable; never break the worker import.
-}
-
-/**
  * Resolve the active tab in the last focused window. A missing tab (or a
  * rejected query) simply makes the command a no-op.
  */

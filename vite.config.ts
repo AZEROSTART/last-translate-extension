@@ -74,6 +74,7 @@ export default defineConfig({
         content_guard: resolve(import.meta.dirname, "src/content/guard.ts"),
         content_main: resolve(import.meta.dirname, "src/content/main.ts"),
         panel: resolve(import.meta.dirname, "src/panel/index.html"),
+        popup: resolve(import.meta.dirname, "src/popup/index.html"),
         options: resolve(import.meta.dirname, "src/options/index.html"),
         // Manifest `content_scripts[].css` entry: page CSP cannot block it.
         inject: resolve(import.meta.dirname, "src/styles/inject.css"),

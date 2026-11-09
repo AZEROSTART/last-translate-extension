@@ -177,9 +177,10 @@ function buildShell(): void {
 
   const header = el("header", "popup-header");
   header.append(el("span", "popup-logo"), el("h1", "popup-title", "翻译设置"));
-  const openOptions = el("button", "popup-open-options", "高级设置");
-  openOptions.type = "button";
-  header.appendChild(openOptions);
+  const openOptionsButton = el("button", "popup-open-options", "高级设置");
+  openOptionsButton.type = "button";
+  openOptionsButton.addEventListener("click", openOptions);
+  header.appendChild(openOptionsButton);
   root.appendChild(header);
 
   const providerBar = el("div", "popup-provider-bar");
@@ -198,7 +199,8 @@ function buildShell(): void {
   const footer = el("footer", "popup-footer");
   const openSidepanel = el("button", "popup-open-sidepanel", "打开翻译侧栏");
   openSidepanel.type = "button";
-  footer.append(openSidepanel, el("span", "popup-hint", "Alt+S"));
+  openSidepanel.addEventListener("click", openSidePanel);
+  footer.append(openSidepanel, el("span", "popup-hint", "Alt+S 也能打开侧栏"));
   root.appendChild(footer);
 }
 
@@ -520,6 +522,55 @@ async function onSetActive(): Promise<void> {
   await saveSettings({ ...settings, activeProviderId: current.id });
   settings = await getSettings();
   render();
+}
+
+/**
+ * Open the side panel inside the click gesture, preferring the current window.
+ * `sidePanel.open` must run while the user gesture is live; the fallback query
+ * therefore happens synchronously (no await before the first open attempt).
+ */
+function openSidePanel(): void {
+  const close = (): void => window.close();
+
+  try {
+    void chrome.sidePanel
+      .open({ windowId: chrome.windows.WINDOW_ID_CURRENT })
+      .then(close)
+      .catch(() => openSidePanelForActiveTab(close));
+  } catch {
+    openSidePanelForActiveTab(close);
+  }
+}
+
+function openSidePanelForActiveTab(close: () => void): void {
+  void chrome.tabs
+    .query({ active: true, currentWindow: true })
+    .then(([tab]) => {
+      if (tab?.id === undefined) return;
+      return chrome.sidePanel.open({ tabId: tab.id }).then(close);
+    })
+    .catch(() => {
+      // 静默失败，不把 Chrome 内部错误显示给用户。
+    });
+}
+
+function openOptions(): void {
+  try {
+    const pending = chrome.runtime.openOptionsPage();
+    void Promise.resolve(pending).catch(openOptionsInTab);
+  } catch {
+    openOptionsInTab();
+  }
+}
+
+function openOptionsInTab(): void {
+  try {
+    void chrome.tabs
+      .create({ url: chrome.runtime.getURL("options.html") })
+      .catch(() => {});
+  } catch {
+    // 静默失败。
+  }
 }
 
 // Auto-run on load.

@@ -31,9 +31,16 @@ describe("build output", () => {
   });
 
   it("emits every entry file", () => {
-    for (const f of ["background.js", "content_guard.js", "content_main.js", "inject.css", "panel.html", "options.html", "rules/dnr.json"]) {
+    for (const f of ["background.js", "content_guard.js", "content_main.js", "inject.css", "panel.html", "options.html", "popup.html", "rules/dnr.json"]) {
       expect(existsSync(`dist/${f}`), f).toBe(true);
     }
+  });
+
+  it("wires the toolbar popup", () => {
+    const m = JSON.parse(readFileSync("dist/manifest.json", "utf8"));
+    expect(m.action.default_popup).toBe("popup.html");
+    expect(m.action.default_title).toBe("翻译设置");
+    expect(existsSync("dist/popup.html")).toBe(true);
   });
 
   it("ships the injected stylesheet with translation and bubble classes", () => {

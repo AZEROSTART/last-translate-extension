@@ -60,6 +60,12 @@ if (manifest) {
     if (htmlPath) requireFile(htmlPath, "manifest page");
   }
 
+  if (!manifest.action?.default_popup) {
+    problems.push("missing action.default_popup");
+  } else {
+    requireFile(manifest.action.default_popup, "action.default_popup");
+  }
+
   for (const rule of manifest.declarative_net_request?.rule_resources ?? []) {
     const rules = readJson(rule.path);
     if (rules && !Array.isArray(rules)) {
