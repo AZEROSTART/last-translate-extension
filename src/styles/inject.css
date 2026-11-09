@@ -42,9 +42,43 @@
   grid-column: 1 / -1 !important;
 }
 
-/* 待翻译状态 */
+/* 待翻译状态：译文位置的呼吸骨架 */
 .ilmt-tr[data-loading="1"] {
-  opacity: 0.4 !important;
+  opacity: 1 !important;
+  min-height: 1.15em;
+}
+
+.ilmt-tr[data-loading="1"]::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 0.95em;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: 0.18;
+  animation: ilmt-loading-pulse 1.4s ease-in-out infinite;
+}
+
+.ilmt-tr[data-loading="1"][data-ilmt-heading="1"]::before {
+  height: 0.62em;
+  max-width: 8em;
+}
+
+@keyframes ilmt-loading-pulse {
+  0%,
+  100% {
+    opacity: 0.1;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ilmt-tr[data-loading="1"]::before {
+    animation: none;
+    opacity: 0.18;
+  }
 }
 
 /* "Translation on" banner with a restore action (fixed, CSP-safe styles). */

@@ -51,6 +51,13 @@ describe("build output", () => {
     expect(css).not.toContain(".ilmt-inline");
   });
 
+  it("ships the loading skeleton styles", () => {
+    const css = readFileSync("dist/inject.css", "utf8");
+    expect(css).toContain('[data-loading="1"]');
+    expect(css).toContain("@keyframes ilmt-loading-pulse");
+    expect(css).toContain("prefers-reduced-motion");
+  });
+
   it("does not inject a data-ilmt stylesheet from content_main.js", () => {
     const code = readFileSync("dist/content_main.js", "utf8");
     expect(code).not.toContain('"data-ilmt"');

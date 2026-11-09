@@ -1,6 +1,9 @@
 import { it, expect, beforeEach } from "vitest";
 import {
   renderTranslation,
+  renderLoading,
+  discardLoading,
+  setInlineLoader,
   updateTranslation,
   restoreAll,
   extractSourceText,
@@ -183,4 +186,79 @@ it("restores the DOM exactly", () => {
 it("extracts source text without the existing translation", () => {
   document.body.innerHTML = `<p>Hello <span class="ilmt-tr" data-ilmt-for="p_17">你好</span></p>`;
   expect(extractSourceText(document.querySelector("p")!)).toBe("Hello");
+});
+
+it("renders a loading skeleton at the translation anchor", () => {
+  document.body.innerHTML = `<p>Hello</p>`;
+  const p = document.querySelector("p")!;
+  const node = renderLoading({ root: p, anchor: p.firstChild! }, "p_load_1");
+  expect(node.classList.contains("ilmt-block")).toBe(true);
+  expect(node.getAttribute("data-loading")).toBe("1");
+  expect(node.getAttribute("aria-busy")).toBe("true");
+  expect(node.getAttribute("aria-label")).toBe("翻译中");
+  expect(p.lastElementChild).toBe(node);
+});
+
+it("never renders a loading skeleton inside a trailing button", () => {
+  document.body.innerHTML = `<p>prefix <button>action</button></p>`;
+  const p = document.querySelector("p")!;
+  const button = document.querySelector("button")!;
+  const node = renderLoading({ root: p, anchor: p.firstChild! }, "p_load_2");
+  expect(button.contains(node)).toBe(false);
+  expect(p.lastElementChild).toBe(node);
+});
+
+it("marks a heading loading skeleton as a heading", () => {
+  document.body.innerHTML = `<h1>Repository title</h1>`;
+  const h1 = document.querySelector("h1")!;
+  const node = renderLoading({ root: h1, anchor: h1.firstChild!, heading: true }, "p_load_3");
+  expect(node.getAttribute("data-ilmt-heading")).toBe("1");
+});
+
+it("reuses the loading node and clears the skeleton when the translation arrives", () => {
+  document.body.innerHTML = `<p>Hello</p>`;
+  const p = document.querySelector("p")!;
+  const loader = renderLoading({ root: p, anchor: p.firstChild! }, "p_load_4");
+  const node = renderTranslation({ root: p, anchor: p.firstChild! }, "p_load_4", "你好");
+  expect(node).toBe(loader);
+  expect(node.textContent).toBe("你好");
+  expect(node.hasAttribute("data-loading")).toBe(false);
+  expect(node.hasAttribute("aria-busy")).toBe(false);
+  expect(node.hasAttribute("aria-label")).toBe(false);
+});
+
+it("does not insert a loading node when the root is detached", () => {
+  document.body.innerHTML = `<p id="root">Hello</p>`;
+  const root = document.querySelector("#root")!;
+  const anchor = root.firstChild!;
+  root.remove();
+  const node = renderLoading({ root, anchor }, "p_load_5");
+  expect(document.querySelector(".ilmt-tr")).toBeNull();
+  expect(node.isConnected).toBe(false);
+});
+
+it("discards an empty loading node but keeps a partial translation", () => {
+  document.body.innerHTML = `<p>Hello</p>`;
+  const p = document.querySelector("p")!;
+  renderLoading({ root: p, anchor: p.firstChild! }, "p_load_6");
+  discardLoading("p_load_6");
+  expect(document.querySelector('[data-ilmt-for="p_load_6"]')).toBeNull();
+
+  renderLoading({ root: p, anchor: p.firstChild! }, "p_load_7");
+  renderTranslation({ root: p, anchor: p.firstChild! }, "p_load_7", "你");
+  setInlineLoader("p_load_7");
+  discardLoading("p_load_7");
+  const node = document.querySelector('[data-ilmt-for="p_load_7"]') as HTMLElement;
+  expect(node.textContent).toBe("你");
+  expect(node.hasAttribute("data-loading")).toBe(false);
+});
+
+it("removes loading placeholders on restore", () => {
+  document.body.innerHTML = `<p>Hello</p>`;
+  const before = document.body.innerHTML;
+  const p = document.querySelector("p")!;
+  p.setAttribute("data-ilmt-p", "p_load_8");
+  renderLoading({ root: p, anchor: p.firstChild! }, "p_load_8");
+  restoreAll(document.body);
+  expect(document.body.innerHTML).toBe(before);
 });

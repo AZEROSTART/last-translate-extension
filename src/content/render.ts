@@ -126,8 +126,53 @@ export function renderTranslation(
   if (existing) {
     existing.textContent = text;
     existing.setAttribute("lang", targetLang);
+    clearLoading(existing);
     return existing;
   }
+
+  return createTranslationNode(target, id, text, targetLang, false);
+}
+
+/**
+ * Inserts (or marks) a skeleton at the translation anchor while the request is
+ * in flight. It is the same `.ilmt-tr` node the final translation will use, so
+ * the result replaces the skeleton in place.
+ */
+export function renderLoading(
+  target: TranslationTarget,
+  id: string,
+  targetLang: string = DEFAULT_TARGET_LANG,
+): HTMLElement {
+  const existing = findTranslation(target.root.ownerDocument, id);
+  if (existing) {
+    markLoading(existing);
+    return existing;
+  }
+  return createTranslationNode(target, id, "", targetLang, true);
+}
+
+/**
+ * Removes an empty loading placeholder after a failure; a node that already
+ * received partial streamed text only loses its loading marker.
+ */
+export function discardLoading(id: string): void {
+  const node = findTranslation(document, id);
+  if (!node) return;
+  if (node.getAttribute("data-loading") === "1" && (node.textContent ?? "").trim() === "") {
+    node.remove();
+    return;
+  }
+  clearLoading(node);
+}
+
+function createTranslationNode(
+  target: TranslationTarget,
+  id: string,
+  text: string,
+  targetLang: string,
+  loading: boolean,
+): HTMLElement {
+  const { root } = target;
 
   const node = root.ownerDocument.createElement("span");
   node.className = `${TRANSLATION_CLASS} ilmt-block`;
@@ -135,6 +180,7 @@ export function renderTranslation(
   node.setAttribute("lang", targetLang);
   node.textContent = text;
   if (target.heading) node.setAttribute("data-ilmt-heading", "1");
+  if (loading) markLoading(node);
 
   const display = displayOf(root);
   const isFlex = display.includes("flex");
@@ -221,16 +267,28 @@ export function extractSourceText(el: Element): string {
   return (clone.textContent ?? "").trim();
 }
 
-/** Marks the translation as pending (CSS lowers its opacity). */
+/** Marks the translation as pending (CSS renders the skeleton). */
 export function setInlineLoader(id: string): void {
   const node = findTranslation(document, id);
-  if (node) node.setAttribute("data-loading", "1");
+  if (node) markLoading(node);
 }
 
 /** Clears the pending marker once the translation has been rendered. */
 export function clearInlineLoader(id: string): void {
   const node = findTranslation(document, id);
-  if (node) node.removeAttribute("data-loading");
+  if (node) clearLoading(node);
+}
+
+function markLoading(node: HTMLElement): void {
+  node.setAttribute("data-loading", "1");
+  node.setAttribute("aria-busy", "true");
+  node.setAttribute("aria-label", "翻译中");
+}
+
+function clearLoading(node: HTMLElement): void {
+  node.removeAttribute("data-loading");
+  node.removeAttribute("aria-busy");
+  node.removeAttribute("aria-label");
 }
 
 function findTranslation(scope: ParentNode, id: string): HTMLElement | null {
