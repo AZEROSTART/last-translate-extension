@@ -134,6 +134,12 @@ describe("listModels", () => {
     expect(fn.mock.calls[0][0]).toBe("https://api.test/models");
   });
 
+  it("uses the DeepSeek preset URL without /v1", async () => {
+    const fn = mockFetch(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await listModels({ ...cfg, kind: "deepseek", baseURL: "https://api.deepseek.com", appendV1: false });
+    expect(fn.mock.calls[0][0]).toBe("https://api.deepseek.com/models");
+  });
+
   it("maps 401 to a non-retryable auth error", async () => {
     mockFetch(async () => new Response("{}", { status: 401 }));
     await expect(listModels(cfg)).rejects.toMatchObject({ code: "auth", retryable: false, status: 401 });
@@ -231,6 +237,42 @@ describe("complete", () => {
   it("treats a missing choices array as bad_response", async () => {
     mockFetch(async () => new Response(JSON.stringify({}), { status: 200 }));
     await expect(complete(cfg, req())).rejects.toMatchObject({ code: "bad_response", retryable: false });
+  });
+
+  it("sends thinking disabled for DeepSeek by default", async () => {
+    const fn = mockFetch(
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: "甲" } }] }), { status: 200 }),
+    );
+    const deepseek = {
+      ...cfg,
+      kind: "deepseek" as const,
+      baseURL: "https://api.deepseek.com",
+      appendV1: false,
+    };
+    await complete(deepseek, req());
+    const body = JSON.parse(String((fn.mock.calls[0][1] as RequestInit).body));
+    expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("omits thinking for DeepSeek when thinking is explicitly enabled", async () => {
+    const fn = mockFetch(
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: "甲" } }] }), { status: 200 }),
+    );
+    await complete(
+      { ...cfg, kind: "deepseek", baseURL: "https://api.deepseek.com", appendV1: false },
+      req({ thinking: true }),
+    );
+    const body = JSON.parse(String((fn.mock.calls[0][1] as RequestInit).body));
+    expect(body).not.toHaveProperty("thinking");
+  });
+
+  it("never sends thinking for a custom provider", async () => {
+    const fn = mockFetch(
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: "甲" } }] }), { status: 200 }),
+    );
+    await complete(cfg, req({ thinking: true }));
+    const body = JSON.parse(String((fn.mock.calls[0][1] as RequestInit).body));
+    expect(body).not.toHaveProperty("thinking");
   });
 });
 

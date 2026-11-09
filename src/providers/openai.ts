@@ -187,6 +187,9 @@ function buildBody(cfg: ProviderConfig, req: CompletionRequest, stream: boolean)
   };
   if (req.temperature !== undefined) body.temperature = req.temperature;
   if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+  if (cfg.kind === "deepseek" && req.thinking !== true) {
+    body.thinking = { type: "disabled" };
+  }
   return body;
 }
 

@@ -431,6 +431,39 @@ it("requests no total timeout for chat and keeps the default for translation", a
   expect(translateStream.mock.calls[0][1].totalTimeoutMs).toBeUndefined();
 });
 
+it("threads the chat thinking flag into the provider request", async () => {
+  const chatStream = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(
+    async function* () {},
+  );
+  const { d, send } = deps({ adapter: fakeAdapter({ streamCompletion: chatStream }) });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "ct1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "你好" }],
+      context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+      thinking: true,
+    },
+    send,
+    1,
+  );
+
+  expect(chatStream.mock.calls[0][1].thinking).toBe(true);
+});
+
+it("leaves thinking unset for translation requests", async () => {
+  const complete = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => Promise<CompletionResult>>(
+    async () => ({ text: "[1] 甲\n[2] 乙" }),
+  );
+  const { d } = deps({ adapter: fakeAdapter({ complete }) });
+
+  await handleTranslate(d, { type: "translate", requestId: "tt1", tabId: 1, items: items(2) }, () => {});
+  expect(complete.mock.calls[0][1].thinking).toBeUndefined();
+});
+
 it("keeps page context out of the system prompt and inside the user message", async () => {
   const streamCompletion = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
     yield "好的";

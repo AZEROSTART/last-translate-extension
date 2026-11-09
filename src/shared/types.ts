@@ -141,7 +141,15 @@ export interface OpenOptionsMessage {
 
 /** Messages sent from the side panel to the background chat port. */
 export type ChatClientToBackground =
-  | { type: "chat"; requestId: string; sessionId: string; messages: ChatMessage[]; context: ChatContext }
+  | {
+      type: "chat";
+      requestId: string;
+      sessionId: string;
+      messages: ChatMessage[];
+      context: ChatContext;
+      /** DeepSeek only; true omits the thinking field. */
+      thinking?: boolean;
+    }
   | { type: "abort"; requestId: string };
 
 /** Messages sent from the background chat port back to the side panel. */

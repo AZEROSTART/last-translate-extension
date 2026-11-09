@@ -7,6 +7,8 @@ export interface CompletionRequest {
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  /** DeepSeek only: true omits the thinking field, false/undefined disables it. */
+  thinking?: boolean;
   signal?: AbortSignal;
   /**
    * Total wall-clock budget for a streaming request. `undefined` uses the

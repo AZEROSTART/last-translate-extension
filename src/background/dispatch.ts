@@ -456,7 +456,8 @@ export async function handleChat(
     .enqueue<void>({
       tabId,
       priority: "chat",
-      run: (signal) => runChat(deps, provider, messages, temperature, requestId, signal, send),
+      run: (signal) =>
+        runChat(deps, provider, messages, temperature, msg.thinking, requestId, signal, send),
     })
     .then(
       () => ({ ok: true as const }),
@@ -541,6 +542,7 @@ async function runChat(
   provider: ProviderConfig,
   messages: ChatMessage[],
   temperature: number,
+  thinking: boolean | undefined,
   requestId: string,
   signal: AbortSignal,
   send: (m: ChatBackgroundToClient) => void,
@@ -553,6 +555,7 @@ async function runChat(
       for await (const chunk of deps.adapter.streamCompletion(provider, {
         messages,
         temperature,
+        thinking,
         signal,
         // Spec §8.9 sets no total deadline for chat; connect/first-token/idle
         // still guard a dead stream.
