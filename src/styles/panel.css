@@ -68,6 +68,36 @@
   white-space: nowrap;
 }
 
+.thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 8px;
+  color: var(--ilmt-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.thinking-toggle[hidden] {
+  display: none;
+}
+
+.thinking-input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--ilmt-accent);
+}
+
+.thinking-input:focus-visible {
+  outline: 2px solid var(--ilmt-accent);
+  outline-offset: 2px;
+}
+
 /* Page-switch banner: shown when the active tab differs from the session's. */
 .banner {
   display: flex;

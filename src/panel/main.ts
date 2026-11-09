@@ -87,6 +87,7 @@ let pendingQuote: PendingQuote | null = null;
 let lastRequest: { text: string; quote?: string } | null = null;
 let panelSettings: Settings | null = null;
 let requestIdCounter = 0;
+let thinkingEnabled = false;
 
 // --- DOM refs ---
 let root: HTMLElement;
@@ -101,6 +102,8 @@ let quoteChip: HTMLElement;
 let quoteTextEl: HTMLElement;
 let providerSelect: HTMLSelectElement;
 let providerModel: HTMLElement;
+let thinkingToggle: HTMLLabelElement;
+let thinkingInput: HTMLInputElement;
 let providerSettingsBtn: HTMLButtonElement;
 let assistantEl: HTMLElement | null = null;
 
@@ -188,13 +191,31 @@ function buildDom(): void {
   providerSelect.addEventListener("change", handleProviderChange);
   providerModel = document.createElement("span");
   providerModel.className = "provider-model";
+
+  thinkingToggle = document.createElement("label");
+  thinkingToggle.className = "thinking-toggle";
+  thinkingToggle.hidden = true;
+  thinkingToggle.title = "仅影响聊天；默认关闭";
+
+  thinkingInput = document.createElement("input");
+  thinkingInput.type = "checkbox";
+  thinkingInput.className = "thinking-input";
+  thinkingInput.checked = false;
+  thinkingInput.addEventListener("change", () => {
+    thinkingEnabled = thinkingInput.checked;
+  });
+
+  const thinkingText = document.createElement("span");
+  thinkingText.textContent = "思考模式";
+  thinkingToggle.append(thinkingInput, thinkingText);
+
   providerSettingsBtn = document.createElement("button");
   providerSettingsBtn.type = "button";
   providerSettingsBtn.className = "provider-settings";
   providerSettingsBtn.textContent = "设置";
   providerSettingsBtn.hidden = true;
   providerSettingsBtn.addEventListener("click", handleOpenOptions);
-  providerBar.append(providerSelect, providerModel, providerSettingsBtn);
+  providerBar.append(providerSelect, providerModel, thinkingToggle, providerSettingsBtn);
   root.appendChild(providerBar);
 
   msgList = document.createElement("div");
@@ -281,6 +302,7 @@ function renderProviderBar(): void {
     providerSelect.hidden = true;
     providerSettingsBtn.hidden = false;
     providerModel.textContent = "尚未配置模型";
+    thinkingToggle.hidden = true;
     return;
   }
 
@@ -302,6 +324,8 @@ function renderProviderBar(): void {
 
   const active = providers.find((provider) => provider.id === activeId);
   providerModel.textContent = active?.model ?? "";
+  thinkingToggle.hidden = active?.kind !== "deepseek";
+  thinkingInput.checked = thinkingEnabled;
 }
 
 function handleProviderChange(): void {
@@ -551,7 +575,7 @@ async function sendRequest(options: SendRequestOptions): Promise<void> {
   const requestId = newRequestId();
   currentRequestId = requestId;
 
-  send({ type: "chat", requestId, sessionId: session.id, messages, context });
+  send({ type: "chat", requestId, sessionId: session.id, messages, context, thinking: thinkingEnabled });
 }
 
 /**

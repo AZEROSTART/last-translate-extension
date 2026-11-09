@@ -151,6 +151,27 @@ function settingsFixture(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
+const deepseekProvider = {
+  id: "ds",
+  name: "DeepSeek",
+  kind: "deepseek",
+  baseURL: "https://api.deepseek.com",
+  apiKey: "secret",
+  appendV1: false,
+  model: "deepseek-flash",
+  createdAt: 3,
+};
+
+const customProvider = {
+  id: "p1",
+  name: "Alpha",
+  kind: "custom",
+  baseURL: "https://a.test/v1",
+  apiKey: "secret",
+  model: "m1",
+  createdAt: 1,
+};
+
 it("renders the provider switcher with the active provider and its model", async () => {
   installChrome({ settings: settingsFixture() });
   await boot();
@@ -221,6 +242,64 @@ it("shows the empty provider state and opens the options page", async () => {
   expect(settingsButton.hidden).toBe(false);
   settingsButton.click();
   expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: "open-options" });
+});
+
+it("shows the thinking toggle for DeepSeek and hides it for custom", async () => {
+  installChrome({
+    settings: settingsFixture({
+      providers: [deepseekProvider],
+      activeProviderId: "ds",
+    }),
+  });
+  await boot();
+
+  const toggle = document.querySelector(".thinking-toggle") as HTMLElement;
+  const input = document.querySelector(".thinking-input") as HTMLInputElement;
+  expect(toggle.hidden).toBe(false);
+  expect(input.checked).toBe(false);
+
+  await chrome.storage.local.set({
+    settings: settingsFixture({
+      providers: [customProvider],
+      activeProviderId: "p1",
+    }),
+  });
+  await flush();
+
+  expect(toggle.hidden).toBe(true);
+});
+
+it("sends thinking false by default and true after enabling it", async () => {
+  const { sent, messageListeners } = installChrome({
+    settings: settingsFixture({
+      providers: [deepseekProvider],
+      activeProviderId: "ds",
+    }),
+  });
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "第一个问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const first = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    requestId: string;
+    thinking: boolean;
+  };
+  expect(first.thinking).toBe(false);
+
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+
+  (document.querySelector(".thinking-input") as HTMLInputElement).click();
+  input.value = "第二个问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    thinking: boolean;
+  }>;
+  expect(chats.at(-1)!.thinking).toBe(true);
 });
 
 it("prefills a follow-up pending quote and clears it from storage on load", async () => {
