@@ -37,6 +37,17 @@ const p2: ProviderConfig = {
   createdAt: 2,
 };
 
+const deepseek: ProviderConfig = {
+  id: "ds",
+  name: "DeepSeek",
+  kind: "deepseek",
+  baseURL: "https://api.deepseek.com",
+  apiKey: "sk-deepseek-1234",
+  appendV1: false,
+  model: "deepseek-flash",
+  createdAt: 3,
+};
+
 function settingsWith(partial: Partial<Settings>): Settings {
   return {
     ...DEFAULT_SETTINGS,
@@ -225,6 +236,94 @@ describe("provider list", () => {
       expect(s.providers.map((p) => p.id)).toEqual([p2.id]);
     });
     expect(confirm).toHaveBeenCalledWith("确认删除该配置？");
+  });
+});
+
+describe("provider kind", () => {
+  it("defaults a new options provider to custom", async () => {
+    await seed();
+    await boot();
+    click(".provider-add");
+    expect((document.querySelector(".pf-kind") as HTMLSelectElement).value).toBe("custom");
+    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("edits a DeepSeek provider with the type and preset locked", async () => {
+    await seed({ providers: [deepseek], activeProviderId: deepseek.id });
+    await boot();
+
+    click(".provider-edit");
+    expect(document.querySelector(".pf-kind")).toBeNull();
+    expect(document.querySelector(".pf-kind-readonly")?.textContent).toBe("DeepSeek");
+    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(true);
+    expect((document.querySelector(".pf-name-field") as HTMLElement).hidden).toBe(true);
+
+    setValue(".pf-model", "deepseek-v4-pro");
+    click(".pf-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.providers[0]?.model).toBe("deepseek-v4-pro");
+    });
+
+    const saved = (await getSettings()).providers[0];
+    expect(saved).toMatchObject({
+      kind: "deepseek",
+      baseURL: "https://api.deepseek.com",
+      appendV1: false,
+      name: "DeepSeek",
+      apiKey: "sk-deepseek-1234",
+    });
+  });
+
+  it("creates a DeepSeek provider from the type selector", async () => {
+    await seed();
+    await boot();
+
+    click(".provider-add");
+    const kind = document.querySelector(".pf-kind") as HTMLSelectElement;
+    kind.value = "deepseek";
+    kind.dispatchEvent(new Event("change"));
+
+    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(true);
+    expect((document.querySelector(".pf-name-field") as HTMLElement).hidden).toBe(true);
+    expect((document.querySelector(".pf-appendV1-row") as HTMLElement).hidden).toBe(true);
+
+    setValue(".pf-apiKey", "sk-new-1234");
+    setValue(".pf-model", "deepseek-flash");
+    click(".pf-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.providers).toHaveLength(1);
+    });
+
+    const saved = (await getSettings()).providers[0];
+    expect(saved).toMatchObject({
+      kind: "deepseek",
+      name: "DeepSeek",
+      baseURL: "https://api.deepseek.com",
+      appendV1: false,
+      apiKey: "sk-new-1234",
+      model: "deepseek-flash",
+    });
+  });
+
+  it("reveals custom fields when switching back from DeepSeek", async () => {
+    await seed();
+    await boot();
+    click(".provider-add");
+
+    const kind = document.querySelector(".pf-kind") as HTMLSelectElement;
+    kind.value = "deepseek";
+    kind.dispatchEvent(new Event("change"));
+    kind.value = "custom";
+    kind.dispatchEvent(new Event("change"));
+
+    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(false);
+    expect((document.querySelector(".pf-name-field") as HTMLElement).hidden).toBe(false);
+    expect((document.querySelector(".pf-baseURL") as HTMLInputElement).value).toBe("https://api.openai.com");
+    expect((document.querySelector(".pf-appendV1") as HTMLInputElement).checked).toBe(true);
   });
 });
 

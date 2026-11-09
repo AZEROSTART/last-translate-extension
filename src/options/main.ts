@@ -7,6 +7,7 @@
  */
 
 import { ProviderError } from "../shared/errors";
+import { DEEPSEEK_PRESET, PROVIDER_KIND_LABELS } from "../shared/providers";
 import {
   DEFAULT_SETTINGS,
   getSettings,
@@ -14,7 +15,7 @@ import {
   saveSettings,
   upsertProvider,
 } from "../shared/storage";
-import type { ErrorCode, ProviderConfig, Settings } from "../shared/types";
+import type { ErrorCode, ProviderConfig, ProviderKind, Settings } from "../shared/types";
 import { complete, listModels } from "../providers";
 import { TranslationCache } from "../background/cache";
 import {
@@ -64,9 +65,13 @@ interface GlobalFields {
 interface ProviderFormControls {
   base: ProviderConfig;
   form: HTMLFormElement;
+  kind: HTMLSelectElement | null;
   name: HTMLInputElement;
+  nameField: HTMLElement;
   baseURL: HTMLInputElement;
+  baseURLField: HTMLElement;
   appendV1: HTMLInputElement;
+  appendV1Row: HTMLElement;
   apiKey: HTMLInputElement;
   model: HTMLInputElement;
   headers: HTMLElement;
@@ -387,17 +392,36 @@ function openForm(provider: ProviderConfig | null): void {
   form.noValidate = true;
   form.appendChild(el("h3", "form-title", provider ? `编辑：${provider.name}` : "新增模型配置"));
 
+  let kindSelect: HTMLSelectElement | null = null;
+  if (provider) {
+    const kindLabel = el("div", "pf-kind-readonly", PROVIDER_KIND_LABELS[base.kind]);
+    kindLabel.dataset.kind = base.kind;
+    form.appendChild(field("类型", kindLabel));
+  } else {
+    kindSelect = el("select", "pf-kind");
+    const customOption = el("option", undefined, PROVIDER_KIND_LABELS.custom);
+    customOption.value = "custom";
+    const deepseekOption = el("option", undefined, PROVIDER_KIND_LABELS.deepseek);
+    deepseekOption.value = "deepseek";
+    kindSelect.append(customOption, deepseekOption);
+    kindSelect.value = base.kind;
+    form.appendChild(field("类型", kindSelect));
+  }
+
   const nameInput = el("input", "pf-name");
   nameInput.type = "text";
   nameInput.value = base.name;
   nameInput.placeholder = "例如：DeepSeek 官方";
-  form.appendChild(field("名称", nameInput));
+  const nameField = field("名称", nameInput);
+  nameField.classList.add("pf-name-field");
+  form.appendChild(nameField);
 
   const baseURLInput = el("input", "pf-baseURL");
   baseURLInput.type = "text";
   baseURLInput.value = base.baseURL;
   baseURLInput.placeholder = "https://api.openai.com";
   const baseURLField = field("接口地址", baseURLInput, "可省略 /v1，发送请求时会按需自动补全。");
+  baseURLField.classList.add("pf-baseURL-field");
   form.appendChild(baseURLField);
   const appendV1Input = el("input", "pf-appendV1");
   appendV1Input.type = "checkbox";
@@ -488,9 +512,13 @@ function openForm(provider: ProviderConfig | null): void {
   const controls: ProviderFormControls = {
     base,
     form,
+    kind: kindSelect,
     name: nameInput,
+    nameField,
     baseURL: baseURLInput,
+    baseURLField,
     appendV1: appendV1Input,
+    appendV1Row,
     apiKey: apiKeyInput,
     model: modelInput,
     headers,
@@ -508,6 +536,37 @@ function openForm(provider: ProviderConfig | null): void {
       model: modelInput,
     },
   };
+
+  const syncKindFields = (): void => {
+    const kind: ProviderKind = kindSelect?.value === "deepseek" ? "deepseek" : base.kind;
+    const isDeepSeek = kind === "deepseek";
+
+    nameField.hidden = isDeepSeek;
+    baseURLField.hidden = isDeepSeek;
+    appendV1Row.hidden = isDeepSeek;
+
+    if (isDeepSeek) {
+      baseURLInput.value = DEEPSEEK_PRESET.baseURL;
+      appendV1Input.checked = false;
+      if (!provider && (nameInput.value.trim() === "" || nameInput.value.startsWith("自定义 "))) {
+        nameInput.value = DEEPSEEK_PRESET.name;
+      }
+      return;
+    }
+
+    if (!provider && nameInput.value === DEEPSEEK_PRESET.name) {
+      nameInput.value = `自定义 ${settings!.providers.length + 1}`;
+    }
+    if (!provider && baseURLInput.value === DEEPSEEK_PRESET.baseURL) {
+      baseURLInput.value = "https://api.openai.com";
+    }
+    if (!provider) {
+      appendV1Input.checked = true;
+    }
+  };
+
+  kindSelect?.addEventListener("change", syncKindFields);
+  syncKindFields();
 
   const syncHeaderControls = (): void => {
     addHeader.disabled = headers.querySelectorAll(".pf-header-row").length >= 5;
@@ -600,12 +659,15 @@ function readForm(controls: ProviderFormControls): ProviderFormState {
   }
 
   const typedKey = controls.apiKey.value.trim();
+  const kind: ProviderKind =
+    controls.kind?.value === "deepseek" ? "deepseek" : controls.base.kind;
+  const isDeepSeek = kind === "deepseek";
   return {
     id: controls.base.id,
-    name: controls.name.value.trim() || controls.base.name,
-    kind: "custom",
-    baseURL: controls.baseURL.value.trim(),
-    appendV1: controls.appendV1.checked ? undefined : false,
+    name: controls.name.value.trim() || (isDeepSeek ? DEEPSEEK_PRESET.name : controls.base.name),
+    kind,
+    baseURL: isDeepSeek ? DEEPSEEK_PRESET.baseURL : controls.baseURL.value.trim(),
+    appendV1: isDeepSeek ? false : controls.appendV1.checked ? undefined : false,
     apiKey: typedKey === "" ? controls.base.apiKey : typedKey,
     model: controls.model.value.trim(),
     extraHeaders: headerCount > 0 ? headers : undefined,

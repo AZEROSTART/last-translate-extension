@@ -408,6 +408,12 @@ textarea {
   accent-color: #0969da;
 }
 
+/* `.field` / `.checkbox-row` set `display`, which otherwise beats [hidden]. */
+.field[hidden],
+.checkbox-row[hidden] {
+  display: none;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: #0d1117;
