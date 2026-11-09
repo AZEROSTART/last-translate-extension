@@ -21,7 +21,13 @@ import {
   type ParagraphNode,
 } from "./paragraphs";
 import { getSiteRule } from "./site-rules";
-import { renderTranslation, restoreAll } from "./render";
+import {
+  clearInlineLoader,
+  discardLoading,
+  renderLoading,
+  renderTranslation,
+  restoreAll,
+} from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
@@ -334,6 +340,15 @@ function pump(): void {
     return;
   }
 
+  // Show the skeleton immediately for every piece in this batch. The guard is
+  // defensive: `registry.prune()` above normally drops detached records first.
+  for (const rec of batch) {
+    const root = rec.el.deref();
+    const anchor = rec.anchor.deref();
+    if (!root || !anchor || !root.isConnected || !anchor.isConnected) continue;
+    renderLoading({ root, anchor, heading: rec.heading }, rec.id, targetLang);
+  }
+
   const requestId = newRequestId();
   currentRequestId = requestId;
   const items = batch.map((rec) => ({
@@ -491,6 +506,9 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
     registry.setStatus(item.id, "done");
     registry.setTranslation(item.id, item.text);
     deltaBuffers.delete(item.id);
+    // `renderTranslation` already clears the marker; this also covers a record
+    // whose root/anchor vanished between the skeleton and the result.
+    clearInlineLoader(item.id);
   }
   if (isCurrent) completeRequest(msg.requestId);
 }
@@ -559,6 +577,7 @@ function failIds(ids: string[]): void {
   for (const id of ids) {
     registry.setStatus(id, "failed");
     deltaBuffers.delete(id);
+    discardLoading(id);
   }
 }
 

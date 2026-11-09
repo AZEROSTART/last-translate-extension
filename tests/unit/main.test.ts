@@ -297,7 +297,12 @@ it("removes old translations before an SPA rescan so sources stay clean", async 
   navListeners[0]({ type: "page-navigated" }, { id: (globalThis as any).chrome.runtime.id });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  // The old translation is removed before the re-scan; the re-queued piece
+  // now shows a loading skeleton while its next request is in flight.
+  const loading = paragraph.querySelectorAll(".ilmt-tr");
+  expect(loading).toHaveLength(1);
+  expect(loading[0].getAttribute("data-loading")).toBe("1");
+  expect(loading[0].textContent).toBe("");
   const translates = sent.filter((m) => m.type === "translate");
   expect(translates).toHaveLength(2);
   expect(translates[1].items).toHaveLength(1);

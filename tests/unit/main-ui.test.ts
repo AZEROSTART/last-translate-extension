@@ -63,10 +63,13 @@ it("appends streaming deltas instead of replacing the previous chunk", async () 
   const { deliver, request } = await startTranslating();
   const id = request.items[0].id;
 
+  expect(document.querySelector(`[data-ilmt-for="${id}"]`)?.getAttribute("data-loading")).toBe("1");
+
   deliver({ type: "delta", requestId: request.requestId, id, text: "你" });
   deliver({ type: "delta", requestId: request.requestId, id, text: "好" });
 
   expect(document.querySelector(`[data-ilmt-for="${id}"]`)?.textContent).toBe("你好");
+  expect(document.querySelector(`[data-ilmt-for="${id}"]`)?.hasAttribute("data-loading")).toBe(false);
 });
 
 it("shows an auth banner with a 设置 button and keeps the failure", async () => {
@@ -175,9 +178,11 @@ it("requeues a rate-limited batch and retries it once after the delay", async ()
     "请求过于频繁，稍后自动重试",
   );
   expect(sent.filter((message) => message.type === "translate")).toHaveLength(1);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(1);
 
   vi.advanceTimersByTime(3000);
   expect(sent.filter((message) => message.type === "translate")).toHaveLength(2);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(1);
 });
 
 it("keeps one banner instance and lets the user dismiss it", async () => {
@@ -403,7 +408,11 @@ it("drops the old translation and re-queues an edited translated piece", async (
   paragraph.firstChild!.textContent = "Edited paragraph text.";
   await new Promise((resolve) => setTimeout(resolve, 350));
 
-  expect(paragraph.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  // The old translation is gone; the re-queued piece shows its skeleton.
+  const loading = paragraph.querySelectorAll(".ilmt-tr");
+  expect(loading).toHaveLength(1);
+  expect(loading[0].getAttribute("data-loading")).toBe("1");
+  expect(loading[0].textContent).toBe("");
   const translates = sent.filter((m) => m.type === "translate");
   expect(translates).toHaveLength(2);
   expect(translates[1].items[0].text).toBe("Edited paragraph text.");
@@ -440,7 +449,11 @@ it("removes an orphaned translation after its anchor is replaced", async () => {
   p.insertBefore(document.createTextNode("Replacement paragraph text."), p.firstChild);
   await new Promise((resolve) => setTimeout(resolve, 350));
 
-  expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  // The orphaned translation is gone; the replacement piece shows its skeleton.
+  const loading = p.querySelectorAll(".ilmt-tr");
+  expect(loading).toHaveLength(1);
+  expect(loading[0].getAttribute("data-loading")).toBe("1");
+  expect(loading[0].textContent).toBe("");
   const translates = sent.filter((m) => m.type === "translate");
   expect(translates).toHaveLength(2);
   expect(translates[1].items[0].text).toBe("Replacement paragraph text.");
@@ -500,4 +513,86 @@ it("preserves a marked sibling piece when a skipped sibling grows", async () => 
   expect(texts).toEqual(["This is now a long enough sentence to translate."]);
   expect(texts).not.toContain("Marked paragraph text.");
   expect(p.querySelectorAll(".ilmt-tr")).toHaveLength(1);
+});
+
+it("shows loading placeholders only for the in-flight batch", async () => {
+  document.body.innerHTML = Array.from(
+    { length: 21 },
+    (_, i) => `<p>Paragraph number ${i} here.</p>`,
+  ).join("");
+  const { request } = await startTranslating();
+
+  expect(request.items).toHaveLength(20);
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
+});
+
+it("does not insert a placeholder for a piece detached before the batch sends", async () => {
+  document.body.innerHTML = `<p id="gone">Hello world from the page.</p>`;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  (chrome as any).i18n = {
+    detectLanguage: vi.fn((_text: string, callback: (result: unknown) => void) => {
+      void gate.then(() => callback({ languages: [{ language: "en", percentage: 100 }] }));
+    }),
+  };
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (message: unknown) => sent.push(message) };
+
+  const scanning = (globalThis as any).__ilmtMain.translatePage();
+  await until(() => (chrome as any).i18n.detectLanguage.mock.calls.length > 0);
+  document.querySelector("#gone")!.remove();
+  release();
+  await scanning;
+
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  expect(sent.some((message) => message.type === "translate")).toBe(false);
+});
+
+it("replaces loading placeholders with the returned translation", async () => {
+  document.body.innerHTML = `<p>Hello world from the page.</p><p>Second paragraph here.</p>`;
+  const { deliver, request } = await startTranslating();
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(request.items.length);
+
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: request.items.map((item: any) => ({ id: item.id, text: "译" })),
+  });
+
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(0);
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(request.items.length);
+});
+
+it("removes empty loading placeholders when a batch fails", async () => {
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+  const { deliver, request } = await startTranslating();
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+
+  deliver({
+    type: "error",
+    requestId: request.requestId,
+    code: "auth",
+    message: "invalid key",
+    retryable: false,
+    ids: request.items.map((item: any) => item.id),
+  });
+  deliver({ type: "finish", requestId: request.requestId });
+
+  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+});
+
+it("removes loading placeholders on restore", async () => {
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+  await startTranslating();
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+
+  (globalThis as any).__ilmtMain.restore();
+
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(0);
 });
