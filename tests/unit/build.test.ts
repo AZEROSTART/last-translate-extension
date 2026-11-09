@@ -60,9 +60,13 @@ describe("build output", () => {
 
   it("hardens the skeleton bar against page CSS", () => {
     const css = readFileSync("dist/inject.css", "utf8");
-    const rule = css.match(/\.ilmt-tr\[data-loading="1"\]::?before\{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).not.toBe("");
-    expect(rule.split(";").filter(Boolean).every((decl) => decl.includes("!important"))).toBe(true);
+    const rules = [
+      ...css.matchAll(/\.ilmt-tr\[data-loading="1"\](?:\[[^\]]+\])?::?before\{([^}]*)\}/g),
+    ].map((match) => match[1]);
+    expect(rules.length).toBeGreaterThanOrEqual(2);
+    for (const rule of rules) {
+      expect(rule.split(";").filter(Boolean).every((decl) => decl.includes("!important"))).toBe(true);
+    }
   });
 
   it("does not inject a data-ilmt stylesheet from content_main.js", () => {
