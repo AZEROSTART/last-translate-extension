@@ -66,6 +66,13 @@ if (manifest) {
     requireFile(manifest.action.default_popup, "action.default_popup");
   }
 
+  for (const [size, path] of Object.entries(manifest.icons ?? {})) {
+    requireFile(path, `icons.${size}`);
+  }
+  for (const [size, path] of Object.entries(manifest.action?.default_icon ?? {})) {
+    requireFile(path, `action.default_icon.${size}`);
+  }
+
   for (const rule of manifest.declarative_net_request?.rule_resources ?? []) {
     const rules = readJson(rule.path);
     if (rules && !Array.isArray(rules)) {
