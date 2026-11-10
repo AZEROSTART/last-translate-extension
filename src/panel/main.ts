@@ -14,6 +14,7 @@
 
 import { appendMessage, buildChatContext, createSession } from "./session";
 import { getSettings, saveSettings } from "../shared/storage";
+import { SELECTION_CONTEXT_LIMITS } from "../shared/selection-context-limits";
 import type {
   ChatBackgroundToClient,
   ChatClientToBackground,
@@ -383,16 +384,19 @@ function parseSelectionContext(value: unknown): SelectionContext | undefined {
   const raw = value as { heading?: unknown; paragraph?: unknown; preceding?: unknown };
   if (typeof raw.paragraph !== "string") return undefined;
 
-  const paragraph = raw.paragraph.trim().slice(0, 1002);
+  const paragraph = raw.paragraph.trim().slice(0, SELECTION_CONTEXT_LIMITS.paragraph);
   if (!paragraph) return undefined;
 
-  const heading = typeof raw.heading === "string" ? raw.heading.trim().slice(0, 120) : "";
+  const heading =
+    typeof raw.heading === "string"
+      ? raw.heading.trim().slice(0, SELECTION_CONTEXT_LIMITS.heading)
+      : "";
   const preceding = Array.isArray(raw.preceding)
     ? raw.preceding
         .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim().slice(0, 500))
+        .map((item) => item.trim().slice(0, SELECTION_CONTEXT_LIMITS.preceding))
         .filter(Boolean)
-        .slice(0, 2)
+        .slice(0, SELECTION_CONTEXT_LIMITS.precedingBlocks)
     : [];
 
   return {

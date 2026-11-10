@@ -478,8 +478,17 @@ function sendOpenChat(
   mode: "explain" | "follow-up",
   range?: Range,
 ): void {
+  let context: OpenChatMessage["context"];
+  if (range) {
+    try {
+      context = buildSelectionContext(range);
+    } catch {
+      // Context extraction is best-effort; the quote itself must still send.
+      context = undefined;
+    }
+  }
+
   try {
-    const context = range ? buildSelectionContext(range) : undefined;
     const message: OpenChatMessage = {
       type: "open-chat",
       text,

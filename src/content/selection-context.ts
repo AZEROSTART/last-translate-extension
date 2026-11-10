@@ -9,7 +9,7 @@
  */
 
 import type { SelectionContext } from "../shared/types";
-import { extractSourceText } from "./render";
+import { SELECTION_CONTEXT_LIMITS as LIMITS } from "../shared/selection-context-limits";
 
 const BLOCK_SELECTOR = [
   "p",
@@ -34,11 +34,24 @@ const BLOCK_SELECTOR = [
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
 
-/** Caps chosen to keep the assistant focused without losing the local thread. */
-const MAX_PARAGRAPH = 1000;
-const MAX_PRECEDING = 500;
-const MAX_HEADING = 120;
-const MAX_PRECEDING_BLOCKS = 2;
+/**
+ * Nodes that must never become prose context: our own injected UI/translations,
+ * executable/style content, and text hidden from the user.
+ */
+const SKIP_SELECTOR = [
+  "script",
+  "style",
+  "noscript",
+  "template",
+  "svg",
+  "[hidden]",
+  "[aria-hidden='true']",
+  ".ilmt-tr",
+  ".ilmt-bubble",
+  ".ilmt-active-banner",
+  ".ilmt-error-banner",
+].join(",");
+
 /** Share of a truncated paragraph kept before the selected text. */
 const BEFORE_BUDGET = 600;
 
@@ -52,7 +65,13 @@ export function buildSelectionContext(range: Range): SelectionContext | undefine
   if (!block) return undefined;
 
   const selected = normalize(range.toString());
-  const paragraph = capParagraph(normalize(extractSourceText(block)), selected);
+  if (!selected) return undefined;
+
+  const paragraph = capParagraph(
+    normalize(sourceText(block)),
+    sourceOffset(block, range),
+    selected,
+  );
   if (!paragraph) return undefined;
 
   const heading = nearestHeading(block);
@@ -78,20 +97,50 @@ function normalize(text: string): string {
 }
 
 /** Keep the selection visible, preferring text before it, when truncating. */
-function capParagraph(text: string, selected: string): string {
-  if (text.length <= MAX_PARAGRAPH) return text;
+function capParagraph(text: string, offset: number, selected: string): string {
+  if (text.length <= LIMITS.paragraph) return text;
 
-  const index = selected ? text.indexOf(selected) : -1;
-  if (index < 0) return capText(text, MAX_PARAGRAPH);
+  const index = offset >= 0 ? Math.min(offset, text.length) : selected ? text.indexOf(selected) : -1;
+  if (index < 0) return capText(text, LIMITS.paragraph);
 
   const start = Math.max(0, index - BEFORE_BUDGET);
-  const end = Math.min(text.length, start + MAX_PARAGRAPH);
-  const excerpt = text.slice(start, end).trim();
-  return `${start > 0 ? "…" : ""}${excerpt}${end < text.length ? "…" : ""}`;
+  const end = Math.min(text.length, start + LIMITS.paragraph);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  const budget = LIMITS.paragraph - prefix.length - suffix.length;
+  const excerpt = text.slice(start, start + budget).trim();
+  return `${prefix}${excerpt}${suffix}`;
+}
+
+/**
+ * Character offset of the range start inside the block's *source-only* text.
+ * This keeps truncation anchored to the real selection even when an earlier
+ * identical phrase exists, or when the selection starts in a translation node
+ * that will be stripped from the paragraph.
+ */
+function sourceOffset(block: Element, range: Range): number {
+  try {
+    const before = document.createRange();
+    before.selectNodeContents(block);
+    before.setEnd(range.startContainer, range.startOffset);
+    const fragment = before.cloneContents();
+    for (const node of fragment.querySelectorAll(SKIP_SELECTOR)) node.remove();
+    return normalize(fragment.textContent ?? "").length;
+  } catch {
+    return -1;
+  }
+}
+
+/** Source text with our injected UI/translations and non-prose nodes removed. */
+function sourceText(element: Element): string {
+  if (element.matches(SKIP_SELECTOR)) return "";
+  const clone = element.cloneNode(true) as Element;
+  for (const node of clone.querySelectorAll(SKIP_SELECTOR)) node.remove();
+  return (clone.textContent ?? "").trim();
 }
 
 function capText(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
 /** Up to two previous sibling blocks, ordered oldest → nearest. */
@@ -99,10 +148,13 @@ function precedingBlocks(block: Element): string[] {
   const texts: string[] = [];
   let sibling = block.previousElementSibling;
 
-  while (sibling && texts.length < MAX_PRECEDING_BLOCKS) {
-    if (!sibling.matches(HEADING_SELECTOR)) {
+  while (sibling && texts.length < LIMITS.precedingBlocks) {
+    // A heading starts a new section; earlier sections are not this paragraph's
+    // immediate preceding context.
+    if (sibling.matches(HEADING_SELECTOR)) break;
+    if (!sibling.matches(SKIP_SELECTOR)) {
       const text = normalize(blockText(sibling));
-      if (text) texts.unshift(capText(text, MAX_PRECEDING));
+      if (text) texts.unshift(capText(text, LIMITS.preceding));
     }
     sibling = sibling.previousElementSibling;
   }
@@ -112,10 +164,11 @@ function precedingBlocks(block: Element): string[] {
 
 /** Text of a sibling, preferring its last block descendant for wrappers. */
 function blockText(element: Element): string {
-  if (element.matches(BLOCK_SELECTOR)) return extractSourceText(element);
+  if (element.matches(SKIP_SELECTOR)) return "";
+  if (element.matches(BLOCK_SELECTOR)) return sourceText(element);
   const blocks = element.querySelectorAll(BLOCK_SELECTOR);
-  if (blocks.length > 0) return extractSourceText(blocks[blocks.length - 1]);
-  return extractSourceText(element);
+  if (blocks.length > 0) return sourceText(blocks[blocks.length - 1]);
+  return sourceText(element);
 }
 
 /** Nearest heading in the preceding siblings, walking up through wrappers. */
@@ -126,11 +179,11 @@ function nearestHeading(block: Element): string | undefined {
     let sibling = current.previousElementSibling;
     while (sibling) {
       if (sibling.matches(HEADING_SELECTOR)) {
-        return capText(normalize(extractSourceText(sibling)), MAX_HEADING) || undefined;
+        return capText(normalize(sourceText(sibling)), LIMITS.heading) || undefined;
       }
       const headings = sibling.querySelectorAll(HEADING_SELECTOR);
       if (headings.length > 0) {
-        return capText(normalize(extractSourceText(headings[headings.length - 1])), MAX_HEADING) || undefined;
+        return capText(normalize(sourceText(headings[headings.length - 1])), LIMITS.heading) || undefined;
       }
       sibling = sibling.previousElementSibling;
     }
