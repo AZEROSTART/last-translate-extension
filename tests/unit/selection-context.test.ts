@@ -132,6 +132,21 @@ describe("buildSelectionContext", () => {
     expect(context?.preceding).toEqual([]);
   });
 
+  it("ignores inline controls and hidden prose around the current paragraph", () => {
+    document.body.innerHTML = `
+      <h2 hidden>Hidden heading</h2>
+      <button>Subscribe</button>
+      <span>Inline label</span>
+      <div hidden><p>Hidden paragraph.</p></div>
+      <p>Current paragraph.</p>
+    `;
+
+    const context = buildSelectionContext(rangeFor(document.querySelectorAll("p")[1]));
+
+    expect(context?.heading).toBeUndefined();
+    expect(context?.preceding).toEqual([]);
+  });
+
   it("windows a long paragraph around the actual range, not the first repeated phrase", () => {
     document.body.innerHTML = `<p></p>`;
     const paragraph = document.querySelector("p")!;

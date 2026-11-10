@@ -162,13 +162,16 @@ function precedingBlocks(block: Element): string[] {
   return texts;
 }
 
-/** Text of a sibling, preferring its last block descendant for wrappers. */
+/** Text of a sibling, preferring its last visible block descendant for wrappers. */
 function blockText(element: Element): string {
   if (element.matches(SKIP_SELECTOR)) return "";
   if (element.matches(BLOCK_SELECTOR)) return sourceText(element);
-  const blocks = element.querySelectorAll(BLOCK_SELECTOR);
+  const blocks = [...element.querySelectorAll(BLOCK_SELECTOR)].filter(
+    (block) => !block.matches(SKIP_SELECTOR) && !block.closest(SKIP_SELECTOR),
+  );
   if (blocks.length > 0) return sourceText(blocks[blocks.length - 1]);
-  return sourceText(element);
+  // Inline controls/labels are not paragraphs; only block containers qualify.
+  return "";
 }
 
 /** Nearest heading in the preceding siblings, walking up through wrappers. */
@@ -178,10 +181,16 @@ function nearestHeading(block: Element): string | undefined {
   while (current && current !== document.body) {
     let sibling = current.previousElementSibling;
     while (sibling) {
+      if (sibling.matches(SKIP_SELECTOR)) {
+        sibling = sibling.previousElementSibling;
+        continue;
+      }
       if (sibling.matches(HEADING_SELECTOR)) {
         return capText(normalize(sourceText(sibling)), LIMITS.heading) || undefined;
       }
-      const headings = sibling.querySelectorAll(HEADING_SELECTOR);
+      const headings = [...sibling.querySelectorAll(HEADING_SELECTOR)].filter(
+        (heading) => !heading.closest(SKIP_SELECTOR),
+      );
       if (headings.length > 0) {
         return capText(normalize(sourceText(headings[headings.length - 1])), LIMITS.heading) || undefined;
       }
