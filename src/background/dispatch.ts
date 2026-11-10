@@ -588,6 +588,18 @@ function buildPageContextBlock(ctx: ChatContext): string {
   lines.push(`标题：${ctx.title}`);
   lines.push(`URL：${ctx.pageUrl}`);
 
+  if (ctx.selectionContext) {
+    const selection = ctx.selectionContext;
+    lines.push("【选中位置上下文】");
+    if (selection.heading) lines.push(`所在标题：${selection.heading}`);
+    if (selection.preceding.length > 0) {
+      lines.push("前面段落：");
+      for (const paragraph of selection.preceding) lines.push(`- ${paragraph}`);
+    }
+    lines.push("当前段落：");
+    lines.push(selection.paragraph);
+  }
+
   const recent = ctx.recentParagraphs.slice(-5);
   if (recent.length > 0) {
     lines.push("最近段落（最多 5 段）：");

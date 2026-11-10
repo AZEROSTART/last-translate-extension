@@ -5,10 +5,11 @@
  * `session.ts` (pure, tested); this file renders the state, wires the port, and
  * persists history under `chat.history`.
  *
- * The chat context references only translated paragraphs (see the fixed note
- * "只参考已翻译的段落"). The content script answers `get-recent-translations`
- * with its last finished records; a failed/slow fetch degrades to no paragraphs
- * rather than blocking the conversation.
+ * The chat context includes the local paragraph around an explicit selection
+ * (when the content script could capture it) plus the last finished
+ * translations. The content script answers `get-recent-translations` with its
+ * last finished records; a failed/slow fetch degrades to no paragraphs rather
+ * than blocking the conversation.
  */
 
 import { appendMessage, buildChatContext, createSession } from "./session";
@@ -21,6 +22,7 @@ import type {
   ErrorCode,
   OpenOptionsMessage,
   RecentTranslationsMessage,
+  SelectionContext,
   Session,
   SessionMessage,
   Settings,
@@ -31,7 +33,7 @@ import themeCss from "../styles/theme.css?inline";
 const HISTORY_KEY = "chat.history";
 const PENDING_QUOTE_KEY = "chat.pendingQuote";
 const MAX_SESSIONS = 10;
-const CONTEXT_NOTE = "只参考已翻译的段落";
+const CONTEXT_NOTE = "参考选中段落与已翻译内容";
 
 /** Minimal port surface this module touches; defaulted to `chrome.runtime`. */
 interface ChatPort {
@@ -44,6 +46,7 @@ interface ChatPort {
 interface PendingQuote {
   text: string;
   mode: "explain" | "follow-up";
+  context?: SelectionContext;
 }
 
 interface ActiveTab {
@@ -84,7 +87,7 @@ let currentRequestId: string | null = null;
 let streaming = false;
 let activeTab: ActiveTab | null = null;
 let pendingQuote: PendingQuote | null = null;
-let lastRequest: { text: string; quote?: string } | null = null;
+let lastRequest: { text: string; quote?: string; selectionContext?: SelectionContext } | null = null;
 let panelSettings: Settings | null = null;
 let requestIdCounter = 0;
 let thinkingEnabled = false;
@@ -375,11 +378,40 @@ function clearQuoteChip(): void {
   quoteChip.hidden = true;
 }
 
+function parseSelectionContext(value: unknown): SelectionContext | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as { heading?: unknown; paragraph?: unknown; preceding?: unknown };
+  if (typeof raw.paragraph !== "string") return undefined;
+
+  const paragraph = raw.paragraph.trim().slice(0, 1002);
+  if (!paragraph) return undefined;
+
+  const heading = typeof raw.heading === "string" ? raw.heading.trim().slice(0, 120) : "";
+  const preceding = Array.isArray(raw.preceding)
+    ? raw.preceding
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim().slice(0, 500))
+        .filter(Boolean)
+        .slice(0, 2)
+    : [];
+
+  return {
+    ...(heading ? { heading } : {}),
+    paragraph,
+    preceding,
+  };
+}
+
 function parsePendingQuote(value: unknown): PendingQuote | null {
   if (!value || typeof value !== "object") return null;
-  const quote = value as { text?: unknown; mode?: unknown };
+  const quote = value as { text?: unknown; mode?: unknown; context?: unknown };
   if (typeof quote.text !== "string" || quote.text.trim() === "") return null;
-  return { text: quote.text, mode: quote.mode === "follow-up" ? "follow-up" : "explain" };
+  const context = parseSelectionContext(quote.context);
+  return {
+    text: quote.text,
+    mode: quote.mode === "follow-up" ? "follow-up" : "explain",
+    ...(context ? { context } : {}),
+  };
 }
 
 async function readPendingQuote(): Promise<PendingQuote | null> {
@@ -416,11 +448,16 @@ function applyPendingQuote(quote: PendingQuote | null): void {
   if (quote.mode === "explain" && canAutoSend) {
     clearQuoteChip();
     input.value = "";
-    void sendRequest({ text: EXPLAIN_QUESTION, quote: quote.text, appendUser: true });
+    void sendRequest({
+      text: EXPLAIN_QUESTION,
+      quote: quote.text,
+      selectionContext: quote.context,
+      appendUser: true,
+    });
     return;
   }
 
-  pendingQuote = { text: quote.text, mode: quote.mode };
+  pendingQuote = { text: quote.text, mode: quote.mode, ...(quote.context ? { context: quote.context } : {}) };
   showQuoteChip();
   input.value = quote.text;
 }
@@ -530,28 +567,30 @@ function handleNewSession(): void {
 function handleSend(): void {
   const text = input.value.trim();
   const quote = pendingQuote?.text;
+  const selectionContext = pendingQuote?.context;
   if (!text || streaming) return;
   clearQuoteChip();
   input.value = "";
-  void sendRequest({ text, quote, appendUser: true });
+  void sendRequest({ text, quote, selectionContext, appendUser: true });
 }
 
 interface SendRequestOptions {
   text: string;
   quote?: string;
+  selectionContext?: SelectionContext;
   /** Retry keeps the existing user turn; a fresh send appends one. */
   appendUser: boolean;
 }
 
 async function sendRequest(options: SendRequestOptions): Promise<void> {
-  const { text, quote, appendUser } = options;
+  const { text, quote, selectionContext, appendUser } = options;
   if (!session || streaming) return;
 
   const now = Date.now();
   // Set the guard before the first await so a double click cannot start a
   // second request while the recent-paragraph fetch is pending.
   streaming = true;
-  lastRequest = { text, quote };
+  lastRequest = { text, quote, selectionContext };
   setInputEnabled(false);
 
   if (appendUser) {
@@ -567,7 +606,7 @@ async function sendRequest(options: SendRequestOptions): Promise<void> {
   const messages: ChatMessage[] = session.messages.map((m) => ({ role: m.role, content: m.content }));
   const context: ChatContext = isContextStale()
     ? { pageUrl: "", title: "", quotes: quote ? [quote] : [], recentParagraphs: [] }
-    : buildChatContext(session, quote ? [quote] : [], recentParagraphs);
+    : buildChatContext(session, quote ? [quote] : [], recentParagraphs, selectionContext);
   session = appendMessage(session, { role: "assistant", content: "", ts: now + 1 });
   renderAll();
   persistHistory();
@@ -657,7 +696,12 @@ function handleRetry(): void {
   renderAll();
   persistHistory();
 
-  void sendRequest({ text: request.text, quote: request.quote, appendUser: false });
+  void sendRequest({
+    text: request.text,
+    quote: request.quote,
+    selectionContext: request.selectionContext,
+    appendUser: false,
+  });
 }
 
 function setInputEnabled(enabled: boolean): void {

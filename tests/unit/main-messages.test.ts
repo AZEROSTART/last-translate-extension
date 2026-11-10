@@ -118,6 +118,10 @@ it("asks the background to explain the current selection", async () => {
     type: "open-chat",
     text: "Hello world",
     mode: "explain",
+    context: {
+      paragraph: "Hello world",
+      preceding: [],
+    },
   });
 });
 
@@ -140,6 +144,10 @@ it("exposes askSelection for the guard's post-load dispatch", async () => {
     type: "open-chat",
     text: "Hello world",
     mode: "explain",
+    context: {
+      paragraph: "Hello world",
+      preceding: [],
+    },
   });
 });
 

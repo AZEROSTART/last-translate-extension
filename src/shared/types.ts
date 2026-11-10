@@ -73,12 +73,26 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * Local context around the text the user selected. Source text only; injected
+ * translations are stripped before this reaches the chat request.
+ */
+export interface SelectionContext {
+  /** Nearest heading above the selection, capped by the content script. */
+  heading?: string;
+  /** Source text of the block containing the selection, capped and possibly windowed. */
+  paragraph: string;
+  /** Up to two preceding blocks, ordered oldest → nearest. */
+  preceding: string[];
+}
+
 /** Page context supplied to side-panel chat (spec §8.9). */
 export interface ChatContext {
   pageUrl: string;
   title: string;
   quotes: string[];
   recentParagraphs: Array<{ source: string; translation: string }>;
+  selectionContext?: SelectionContext;
 }
 
 /** A persisted side-panel message (spec §9). */
@@ -174,4 +188,5 @@ export interface OpenChatMessage {
   type: "open-chat";
   text: string;
   mode: "explain" | "follow-up";
+  context?: SelectionContext;
 }

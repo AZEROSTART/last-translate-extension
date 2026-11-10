@@ -4,8 +4,8 @@ import { initSelectionBubble, showSelectionBubble } from "../../src/content/sele
 /** Debounce documented by the task brief; kept local so the test fails if it drifts. */
 const DEBOUNCE_MS = 50;
 
-let onExplain: ReturnType<typeof vi.fn<(text: string) => void>>;
-let onFollowUp: ReturnType<typeof vi.fn<(text: string) => void>>;
+let onExplain: ReturnType<typeof vi.fn<(text: string, range: Range) => void>>;
+let onFollowUp: ReturnType<typeof vi.fn<(text: string, range: Range) => void>>;
 
 const select = (node: Node): void => {
   const r = document.createRange();
@@ -73,14 +73,21 @@ describe("selection bubble actions", () => {
 
   it("calls onExplain with the trimmed selection and removes the bubble", () => {
     document.querySelector<HTMLButtonElement>(".ilmt-bubble-explain")!.click();
-    expect(onExplain).toHaveBeenCalledWith("Hello world");
+    expect(onExplain).toHaveBeenCalledWith("Hello world", expect.any(Range));
     expect(onFollowUp).not.toHaveBeenCalled();
     expect(document.querySelector(".ilmt-bubble")).toBeNull();
   });
 
+  it("passes a range snapshot that still describes the selection", () => {
+    document.querySelector<HTMLButtonElement>(".ilmt-bubble-explain")!.click();
+    const [, range] = onExplain.mock.calls[0];
+    expect(range.toString().trim()).toBe("Hello world");
+    expect(range.startContainer).toBe(document.querySelector("p"));
+  });
+
   it("calls onFollowUp with the trimmed selection and removes the bubble", () => {
     document.querySelector<HTMLButtonElement>(".ilmt-bubble-follow")!.click();
-    expect(onFollowUp).toHaveBeenCalledWith("Hello world");
+    expect(onFollowUp).toHaveBeenCalledWith("Hello world", expect.any(Range));
     expect(onExplain).not.toHaveBeenCalled();
     expect(document.querySelector(".ilmt-bubble")).toBeNull();
   });

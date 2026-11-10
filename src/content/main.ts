@@ -31,9 +31,11 @@ import {
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
+import { buildSelectionContext } from "./selection-context";
 import type {
   BackgroundToClient,
   ClientToBackground,
+  OpenChatMessage,
   RecentTranslationsResponse,
 } from "../shared/types";
 
@@ -142,8 +144,8 @@ export function runContentMain(): void {
   scope.__ilmtMain = { translatePage, restore, isActive, askSelection, showSelectionBubble };
 
   initSelectionBubble({
-    onExplain: (text) => sendOpenChat(text, "explain"),
-    onFollowUp: (text) => sendOpenChat(text, "follow-up"),
+    onExplain: (text, range) => sendOpenChat(text, "explain", range),
+    onFollowUp: (text, range) => sendOpenChat(text, "follow-up", range),
   });
 }
 
@@ -471,9 +473,20 @@ function send(message: ClientToBackground): void {
  * `open-chat` handler; until then — and in unit tests — there may be no
  * receiver, so a rejected send is deliberately ignored.
  */
-function sendOpenChat(text: string, mode: "explain" | "follow-up"): void {
+function sendOpenChat(
+  text: string,
+  mode: "explain" | "follow-up",
+  range?: Range,
+): void {
   try {
-    const pending = chrome.runtime.sendMessage({ type: "open-chat", text, mode });
+    const context = range ? buildSelectionContext(range) : undefined;
+    const message: OpenChatMessage = {
+      type: "open-chat",
+      text,
+      mode,
+      ...(context ? { context } : {}),
+    };
+    const pending = chrome.runtime.sendMessage(message);
     void Promise.resolve(pending).catch(() => {});
   } catch {
     // No `sendMessage` in the test mock / no listener registered yet.
@@ -663,8 +676,11 @@ function recentTranslations(): RecentTranslationsResponse["paragraphs"] {
  * loaded.
  */
 function askSelection(): void {
-  const text = window.getSelection()?.toString().trim() ?? "";
-  if (text.length >= 2) sendOpenChat(text, "explain");
+  const selection = window.getSelection();
+  const text = selection?.toString().trim() ?? "";
+  if (text.length < 2) return;
+  const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : undefined;
+  sendOpenChat(text, "explain", range);
 }
 
 function handleVisibilityChange(): void {

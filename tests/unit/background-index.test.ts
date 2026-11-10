@@ -153,6 +153,39 @@ it("stashes the quote and opens the side panel on open-chat from this extension"
   expect(sidePanelOpen).toHaveBeenCalledWith({ tabId: 9 });
 });
 
+it("keeps the selection-local context in the pending quote", async () => {
+  const { onMessage, storageSet } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onMessage[0](
+    {
+      type: "open-chat",
+      text: "选中文字",
+      mode: "follow-up",
+      context: {
+        heading: "章节",
+        paragraph: "当前段落",
+        preceding: ["上一段"],
+      },
+    },
+    { id: "test-extension-id", tab: { id: 9 } },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(storageSet).toHaveBeenCalledWith({
+    "chat.pendingQuote": expect.objectContaining({
+      text: "选中文字",
+      mode: "follow-up",
+      tabId: 9,
+      context: {
+        heading: "章节",
+        paragraph: "当前段落",
+        preceding: ["上一段"],
+      },
+    }),
+  });
+});
+
 it("ignores open-chat from another extension", async () => {
   const { onMessage, sidePanelOpen, storageSet } = installChrome();
   await importIndexAndSpyOnQueue();

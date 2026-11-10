@@ -137,7 +137,7 @@ async function boot() {
 it("renders the fixed context note", async () => {
   installChrome();
   await boot();
-  expect(document.querySelector(".context-note")?.textContent).toBe("只参考已翻译的段落");
+  expect(document.querySelector(".context-note")?.textContent).toBe("参考选中段落与已翻译内容");
 });
 
 function settingsFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -302,9 +302,15 @@ it("sends thinking false by default and true after enabling it", async () => {
   expect(chats.at(-1)!.thinking).toBe(true);
 });
 
-it("prefills a follow-up pending quote and clears it from storage on load", async () => {
+it("prefills a follow-up pending quote and keeps its selection context when sent", async () => {
   const { storage, sent } = installChrome({
-    pendingQuote: { text: "选中的文字", mode: "follow-up", tabId: 1, ts: 1 },
+    pendingQuote: {
+      text: "选中的文字",
+      mode: "follow-up",
+      tabId: 1,
+      ts: 1,
+      context: { paragraph: "选中的文字所在的段落。", preceding: [] },
+    },
   });
   await boot();
 
@@ -314,22 +320,45 @@ it("prefills a follow-up pending quote and clears it from storage on load", asyn
   expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("选中的文字");
   expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
   expect(storage._store.has("chat.pendingQuote")).toBe(false);
+
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    context: { quotes: string[]; selectionContext?: unknown };
+  };
+  expect(chat.context.quotes).toEqual(["选中的文字"]);
+  expect(chat.context.selectionContext).toEqual({
+    paragraph: "选中的文字所在的段落。",
+    preceding: [],
+  });
 });
 
 it("auto-sends an explain pending quote on load without duplicating the user turn", async () => {
   const { storage, sent } = installChrome({
-    pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 },
+    pendingQuote: {
+      text: "选中的文字",
+      mode: "explain",
+      tabId: 1,
+      ts: 1,
+      context: { heading: "章节", paragraph: "选中的文字所在的段落。", preceding: ["上一段。"] },
+    },
   });
   await boot();
   await flush();
 
   const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
     messages: Array<{ role: string; content: string }>;
-    context: { quotes: string[] };
+    context: { quotes: string[]; selectionContext?: unknown };
   }>;
   expect(chats).toHaveLength(1);
   expect(chats[0].messages).toEqual([{ role: "user", content: "这是什么意思？" }]);
   expect(chats[0].context.quotes).toEqual(["选中的文字"]);
+  expect(chats[0].context.selectionContext).toEqual({
+    heading: "章节",
+    paragraph: "选中的文字所在的段落。",
+    preceding: ["上一段。"],
+  });
   expect(document.querySelectorAll(".msg--user")).toHaveLength(1);
   expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
   expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(true);
@@ -503,9 +532,15 @@ it("aborts an in-flight request and keeps the partial answer with a resend actio
   expect(document.querySelector(".error-block")?.textContent).toContain("重新发送");
 });
 
-it("retries with one user turn and no stale assistant answer", async () => {
+it("retries with one user turn, no stale assistant answer, and the selection context", async () => {
   const { sent, messageListeners } = installChrome({
-    pendingQuote: { text: "引用文字", mode: "follow-up", tabId: 1, ts: 1 },
+    pendingQuote: {
+      text: "引用文字",
+      mode: "follow-up",
+      tabId: 1,
+      ts: 1,
+      context: { paragraph: "引用文字所在的段落。", preceding: ["上一段。"] },
+    },
   });
   await boot();
 
@@ -517,9 +552,13 @@ it("retries with one user turn and no stale assistant answer", async () => {
   const first = sent.find((m) => (m as { type?: string }).type === "chat") as {
     requestId: string;
     messages: Array<{ role: string; content: string }>;
-    context: { quotes: string[] };
+    context: { quotes: string[]; selectionContext?: unknown };
   };
   expect(first.context.quotes).toEqual(["引用文字"]);
+  expect(first.context.selectionContext).toEqual({
+    paragraph: "引用文字所在的段落。",
+    preceding: ["上一段。"],
+  });
   messageListeners[0]({ type: "delta", requestId: first.requestId, text: "半截答案" });
   messageListeners[0]({
     type: "error",
@@ -535,13 +574,17 @@ it("retries with one user turn and no stale assistant answer", async () => {
 
   const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
     messages: Array<{ role: string; content: string; quote?: string }>;
-    context: { quotes: string[] };
+    context: { quotes: string[]; selectionContext?: unknown };
   }>;
   expect(chats).toHaveLength(2);
   const retried = chats[1];
   expect(retried.messages.filter((m) => m.role === "user")).toHaveLength(1);
   expect(retried.messages.at(-1)).toMatchObject({ role: "user", content: "原问题" });
   expect(retried.context.quotes).toEqual(["引用文字"]);
+  expect(retried.context.selectionContext).toEqual({
+    paragraph: "引用文字所在的段落。",
+    preceding: ["上一段。"],
+  });
   const sessionUser = (globalThis as any).__ilmtPanel.session.messages.find(
     (message: { role: string }) => message.role === "user",
   );
@@ -614,6 +657,42 @@ it("invalidates the pinned context when the same tab navigates to a new URL", as
   expect(chat.context.pageUrl).toBe("");
   expect(chat.context.title).toBe("");
   expect(chat.context.recentParagraphs).toEqual([]);
+});
+
+it("drops the selection context when the pinned page has navigated", async () => {
+  const { chrome, sent, updatedListeners } = installChrome({
+    pendingQuote: {
+      text: "旧页面的引用",
+      mode: "follow-up",
+      tabId: 1,
+      ts: 1,
+      context: { paragraph: "旧页面的段落。", preceding: [] },
+    },
+  });
+  await boot();
+
+  (chrome.tabs.query as any).mockResolvedValue([
+    { id: 1, url: "https://a.test/y", title: "B", windowId: 1 },
+  ]);
+  updatedListeners[0](
+    1,
+    { url: "https://a.test/y" },
+    { id: 1, url: "https://a.test/y", title: "B", active: true, windowId: 1 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "新页面的问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    context: { pageUrl: string; title: string; recentParagraphs: unknown[]; selectionContext?: unknown };
+  };
+  expect(chat.context.pageUrl).toBe("");
+  expect(chat.context.title).toBe("");
+  expect(chat.context.recentParagraphs).toEqual([]);
+  expect(chat.context.selectionContext).toBeUndefined();
 });
 
 it("starts a fresh session pinned to the new page from the stale banner", async () => {

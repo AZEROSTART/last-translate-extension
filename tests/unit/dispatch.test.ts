@@ -508,6 +508,55 @@ it("keeps page context out of the system prompt and inside the user message", as
   expect(user.content.match(/请解释这句话/g)).toHaveLength(1);
 });
 
+it("renders selection-local context before recent paragraphs, never in the system prompt", async () => {
+  const streamCompletion = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
+    yield "好的";
+  });
+  const { d, send } = deps({ adapter: fakeAdapter({ streamCompletion }) });
+
+  await handleChat(
+    d,
+    {
+      type: "chat",
+      requestId: "cp-sel1",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "请解释这句话" }],
+      context: {
+        pageUrl: "https://example.com/page",
+        title: "示例页面标题",
+        quotes: ["选中文字"],
+        recentParagraphs: [{ source: "最近原文", translation: "最近译文" }],
+        selectionContext: {
+          heading: "章节标题",
+          paragraph: "这是选中句所在的当前段落。",
+          preceding: ["上一段第一句。", "上一段第二句。"],
+        },
+      },
+    },
+    send,
+    1,
+  );
+
+  const request = streamCompletion.mock.calls[0][1];
+  const system = request.messages[0];
+  const user = request.messages[1];
+
+  expect(system.role).toBe("system");
+  for (const secret of ["章节标题", "这是选中句所在的当前段落。", "上一段第一句。", "上一段第二句。"]) {
+    expect(system.content).not.toContain(secret);
+  }
+
+  expect(user.content).toContain("【选中位置上下文】");
+  expect(user.content).toContain("所在标题：章节标题");
+  expect(user.content).toContain("前面段落：");
+  expect(user.content).toContain("- 上一段第一句。");
+  expect(user.content).toContain("- 上一段第二句。");
+  expect(user.content).toContain("当前段落：");
+  expect(user.content).toContain("这是选中句所在的当前段落。");
+  expect(user.content.indexOf("【选中位置上下文】")).toBeLessThan(user.content.indexOf("最近段落"));
+  expect(user.content.match(/这是选中句所在的当前段落。/g)).toHaveLength(1);
+});
+
 it("attaches page context to the latest user turn without touching earlier turns", async () => {
   const streamCompletion = vi.fn<(cfg: ProviderConfig, req: CompletionRequest) => AsyncGenerator<string>>(async function* () {
     yield "好";

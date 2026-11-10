@@ -4,7 +4,7 @@
  * stays trivially testable. `main.ts` owns rendering and the port wiring.
  */
 
-import type { ChatContext, Session, SessionMessage } from "../shared/types";
+import type { ChatContext, SelectionContext, Session, SessionMessage } from "../shared/types";
 
 /** Messages kept per session; the oldest are dropped past this (spec §9). */
 const MAX_MESSAGES = 50;
@@ -39,11 +39,13 @@ export function buildChatContext(
   s: Session,
   quotes: string[],
   recentParagraphs: Array<{ source: string; translation: string }>,
+  selectionContext?: SelectionContext,
 ): ChatContext {
   return {
     pageUrl: s.pageUrl,
     title: s.pageTitle,
     quotes: [...quotes],
     recentParagraphs: recentParagraphs.slice(-MAX_RECENT_PARAGRAPHS),
+    ...(selectionContext ? { selectionContext } : {}),
   };
 }

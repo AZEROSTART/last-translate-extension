@@ -212,7 +212,15 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
   if (tabId === undefined) return;
 
   void chrome.storage.local
-    .set({ [PENDING_QUOTE_KEY]: { text: openChat.text, mode: openChat.mode, tabId, ts: Date.now() } })
+    .set({
+      [PENDING_QUOTE_KEY]: {
+        text: openChat.text,
+        mode: openChat.mode,
+        tabId,
+        ts: Date.now(),
+        ...(openChat.context ? { context: openChat.context } : {}),
+      },
+    })
     .catch(() => {
       // Storage write failed; the panel just opens without a pre-filled quote.
     });

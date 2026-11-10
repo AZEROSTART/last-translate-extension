@@ -53,4 +53,16 @@ describe("panel session", () => {
     const ctx = buildChatContext(createSession("u", "t", 1), [], paragraphs);
     expect(ctx.recentParagraphs).toHaveLength(2);
   });
+
+  it("includes selection-local context only when it is available", () => {
+    const selectionContext = {
+      heading: "章节",
+      paragraph: "当前段落",
+      preceding: ["上一段"],
+    };
+    const s = createSession("u", "t", 1);
+
+    expect(buildChatContext(s, [], [], selectionContext).selectionContext).toEqual(selectionContext);
+    expect(buildChatContext(s, [], []).selectionContext).toBeUndefined();
+  });
 });

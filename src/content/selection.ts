@@ -9,8 +9,8 @@
  */
 
 export interface SelectionBubbleOptions {
-  onExplain(text: string): void;
-  onFollowUp(text: string): void;
+  onExplain(text: string, range: Range): void;
+  onFollowUp(text: string, range: Range): void;
 }
 
 /** Settle time after `mouseup` so dragging a selection does not flash a bubble. */
@@ -82,12 +82,18 @@ function checkSelection(): void {
   const selection = window.getSelection();
   const text = selection?.toString().trim() ?? "";
 
-  if (text.length < MIN_SELECTION_LENGTH || !selection || isEditable(selection.anchorNode)) {
+  if (
+    text.length < MIN_SELECTION_LENGTH ||
+    !selection ||
+    selection.rangeCount === 0 ||
+    isEditable(selection.anchorNode)
+  ) {
     dismiss();
     return;
   }
 
-  showBubble(text, getSelectionRect(selection));
+  const range = selection.getRangeAt(0).cloneRange();
+  showBubble(text, getSelectionRect(range), range);
 }
 
 /** Inputs and contenteditable hosts manage their own selection; never cover them. */
@@ -97,9 +103,7 @@ function isEditable(node: Node | null): boolean {
   return el ? el.closest("input, textarea, [contenteditable]") !== null : false;
 }
 
-function getSelectionRect(selection: Selection): SelectionRect {
-  if (selection.rangeCount === 0) return EMPTY_RECT;
-  const range = selection.getRangeAt(0);
+function getSelectionRect(range: Range): SelectionRect {
   if (typeof range.getBoundingClientRect !== "function") return EMPTY_RECT;
 
   const rect = range.getBoundingClientRect();
@@ -116,7 +120,7 @@ function finiteOrZero(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function showBubble(text: string, rect: SelectionRect): void {
+function showBubble(text: string, rect: SelectionRect, range: Range): void {
   removeBubble();
 
   const el = document.createElement("div");
@@ -124,10 +128,10 @@ function showBubble(text: string, rect: SelectionRect): void {
   el.setAttribute("data-ilmt-bubble", "");
   el.append(
     createButton("解释", "ilmt-bubble-explain", "explain", () => {
-      runAction(options?.onExplain, text);
+      runAction(options?.onExplain, text, range);
     }),
     createButton("追问", "ilmt-bubble-follow", "follow", () => {
-      runAction(options?.onFollowUp, text);
+      runAction(options?.onFollowUp, text, range);
     }),
   );
 
@@ -151,9 +155,13 @@ function createButton(
   return button;
 }
 
-function runAction(callback: ((selectedText: string) => void) | undefined, text: string): void {
+function runAction(
+  callback: ((selectedText: string, range: Range) => void) | undefined,
+  text: string,
+  range: Range,
+): void {
   try {
-    callback?.(text);
+    callback?.(text, range);
   } finally {
     // Also cancel the mouseup check that follows the button mousedown, so a
     // still-present selection cannot immediately reopen the bubble.
