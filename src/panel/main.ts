@@ -47,6 +47,8 @@ interface ChatPort {
 interface PendingQuote {
   text: string;
   mode: "explain" | "follow-up";
+  /** Tab that requested the panel; used when the initial active-tab query races. */
+  tabId?: number;
   context?: SelectionContext;
 }
 
@@ -138,6 +140,12 @@ async function start(): Promise<void> {
   sessions = await loadSessions();
   const quote = await readPendingQuote();
   await refreshActiveTab();
+  // Opening the side panel can race the first `tabs.query`: the panel may not
+  // be attached to the window yet, so the query returns no active tab. The
+  // background already recorded the requesting tab alongside the quote, so
+  // resolve that tab directly instead of losing the explain request.
+  const quoteTab = quote?.tabId !== undefined ? await getTab(quote.tabId) : null;
+  if (quoteTab) activeTab = quoteTab;
   const tab = activeTab;
   session = findSession(sessions, tab?.id, tab?.url ?? "") ?? (tab ? createSession(tab.url, tab.title, tab.id) : createSession("", "", 0));
   renderAll();
@@ -408,12 +416,17 @@ function parseSelectionContext(value: unknown): SelectionContext | undefined {
 
 function parsePendingQuote(value: unknown): PendingQuote | null {
   if (!value || typeof value !== "object") return null;
-  const quote = value as { text?: unknown; mode?: unknown; context?: unknown };
+  const quote = value as { text?: unknown; mode?: unknown; tabId?: unknown; context?: unknown };
   if (typeof quote.text !== "string" || quote.text.trim() === "") return null;
+  const tabId =
+    typeof quote.tabId === "number" && Number.isInteger(quote.tabId) && quote.tabId > 0
+      ? quote.tabId
+      : undefined;
   const context = parseSelectionContext(quote.context);
   return {
     text: quote.text,
     mode: quote.mode === "follow-up" ? "follow-up" : "explain",
+    ...(tabId !== undefined ? { tabId } : {}),
     ...(context ? { context } : {}),
   };
 }
@@ -447,6 +460,7 @@ function applyPendingQuote(quote: PendingQuote | null): void {
     !!activeTab &&
     session.tabId > 0 &&
     activeTab.id === session.tabId &&
+    (quote.tabId === undefined || quote.tabId === session.tabId) &&
     !streaming;
 
   if (quote.mode === "explain" && canAutoSend) {
@@ -461,7 +475,12 @@ function applyPendingQuote(quote: PendingQuote | null): void {
     return;
   }
 
-  pendingQuote = { text: quote.text, mode: quote.mode, ...(quote.context ? { context: quote.context } : {}) };
+  pendingQuote = {
+    text: quote.text,
+    mode: quote.mode,
+    ...(quote.tabId !== undefined ? { tabId: quote.tabId } : {}),
+    ...(quote.context ? { context: quote.context } : {}),
+  };
   showQuoteChip();
   input.value = quote.text;
 }
@@ -499,6 +518,17 @@ async function refreshActiveTab(): Promise<void> {
     }
   } catch {
     // No active tab accessible: leave the banner state unchanged.
+  }
+}
+
+/** Resolve the tab recorded with a pending quote; a closed tab is null. */
+async function getTab(tabId: number): Promise<ActiveTab | null> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab?.id === undefined) return null;
+    return { id: tab.id, url: tab.url ?? "", title: tab.title ?? "" };
+  } catch {
+    return null;
   }
 }
 

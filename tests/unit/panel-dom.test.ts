@@ -64,6 +64,8 @@ interface ChromeOpts {
   settings?: unknown;
   /** `null` makes `tabs.query` return no active tab. */
   tab?: { id: number; url: string; title: string } | null;
+  /** `null` makes `tabs.get` reject, as if the quote's tab was closed. */
+  tabGet?: { id: number; url: string; title: string } | null;
 }
 
 function installChrome(opts: ChromeOpts = {}) {
@@ -98,6 +100,12 @@ function installChrome(opts: ChromeOpts = {}) {
           ? []
           : [opts.tab ?? { id: 1, url: "https://a.test/x", title: "A", windowId: 1 }],
       ),
+      get: vi.fn(async (tabId: number) => {
+        if (opts.tabGet === null) throw new Error("No tab with id");
+        if (opts.tabGet !== undefined) return opts.tabGet;
+        if (opts.tab === null) throw new Error("No tab with id");
+        return opts.tab ?? { id: tabId, url: "https://a.test/x", title: "A", windowId: 1 };
+      }),
       sendMessage: vi.fn(async () => ({ paragraphs: [] })),
       onActivated: { addListener: (cb: Listener) => activatedListeners.push(cb) },
       onUpdated: { addListener: (cb: Listener) => updatedListeners.push(cb) },
@@ -365,15 +373,35 @@ it("auto-sends an explain pending quote on load without duplicating the user tur
   expect(storage._store.has("chat.pendingQuote")).toBe(false);
 });
 
-it("does not auto-send an explain quote when there is no active tab", async () => {
+it("auto-sends an explain quote using its tab when the initial active-tab query is empty", async () => {
   const { sent } = installChrome({
     tab: null,
+    tabGet: { id: 1, url: "https://a.test/x", title: "A" },
+    pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 },
+  });
+  await boot();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string }>;
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(1);
+  expect(chats[0].messages).toEqual([{ role: "user", content: "这是什么意思？" }]);
+  expect(chats[0].context.quotes).toEqual(["选中的文字"]);
+});
+
+it("prefills an explain quote when its tab can no longer be resolved", async () => {
+  const { sent } = installChrome({
+    tab: null,
+    tabGet: null,
     pendingQuote: { text: "选中的文字", mode: "explain", tabId: 1, ts: 1 },
   });
   await boot();
   await flush();
 
   expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("选中的文字");
 });
 
 it("applies an explain quote pushed while the panel is already open", async () => {
