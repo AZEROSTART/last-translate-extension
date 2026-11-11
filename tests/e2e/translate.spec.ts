@@ -96,6 +96,7 @@ async function seedSettings(worker: Worker, baseURL: string): Promise<void> {
         triggerMode: "shortcut",
         siteRules: {},
         theme: "system",
+        glossaryEnabled: true,
       },
     });
   }, baseURL);
@@ -261,6 +262,75 @@ test.describe("loaded extension", () => {
 
       await expectNoProviderRequests(page, server);
       await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("shows a glossary card on hover and clears it on restore", async () => {
+    try {
+      server = await startMockServer({
+        glossary: (index) =>
+          index === 1
+            ? [
+                {
+                  surface: "outlive",
+                  pos: "v.",
+                  meaning: "比……存在得更久",
+                  example: "Small tools often outlive their larger competitors.",
+                },
+              ]
+            : undefined,
+      });
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
+        ),
+      ).toBeGreaterThan(0);
+
+      const rect = await page.evaluate(() => {
+        const p = document.querySelector("#article-p1")!;
+        const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const text = node as Text;
+          const index = text.data.indexOf("outlive");
+          if (index < 0) continue;
+          const range = document.createRange();
+          range.setStart(text, index);
+          range.setEnd(text, index + "outlive".length);
+          const box = range.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        }
+        return null;
+      });
+      expect(rect).not.toBeNull();
+
+      await page.mouse.move(rect!.x, rect!.y);
+      await expect(page.locator("[role=tooltip]")).toContainText("outlive");
+      await expect(page.locator("[role=tooltip]")).toContainText("比……存在得更久");
+
+      await page.mouse.move(0, 0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+
+      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
+        ),
+      ).toBe(0);
     } finally {
       await cleanup();
     }

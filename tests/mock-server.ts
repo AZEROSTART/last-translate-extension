@@ -27,9 +27,18 @@ export interface MockServer {
   close(): Promise<void>;
 }
 
+export interface MockGlossaryNote {
+  surface: string;
+  pos?: string;
+  meaning: string;
+  example?: string;
+}
+
 export interface MockServerOptions {
   /** Translated text for segment `index`; the `[index] ` prefix is added. */
   reply?: (index: number, sourceText: string) => string;
+  /** Optional glossary notes for segment `index`. */
+  glossary?: (index: number, sourceText: string) => MockGlossaryNote[] | undefined;
   /** Directory containing the HTML fixtures (defaults to `tests/fixtures`). */
   fixtureDir?: string;
 }
@@ -69,7 +78,11 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** Extract `[n] text` lines from the user message and number the reply. */
-function buildTranslationReply(body: unknown, reply: NonNullable<MockServerOptions["reply"]>): string {
+function buildTranslationReply(
+  body: unknown,
+  reply: NonNullable<MockServerOptions["reply"]>,
+  glossary?: NonNullable<MockServerOptions["glossary"]>,
+): string {
   const messages = (body as { messages?: unknown })?.messages;
   if (!Array.isArray(messages)) return "[1] 译文";
 
@@ -81,13 +94,20 @@ function buildTranslationReply(body: unknown, reply: NonNullable<MockServerOptio
   const content = typeof user?.content === "string" ? user.content : "";
 
   const lines: string[] = [];
+  const notes: Record<string, MockGlossaryNote[]> = {};
   for (const line of content.split("\n")) {
     const match = /^\[(\d+)\]\s*(.*)$/.exec(line.trim());
     if (!match) continue;
     const index = Number(match[1]);
-    lines.push(`[${index}] ${reply(index, match[2])}`);
+    const sourceText = match[2];
+    lines.push(`[${index}] ${reply(index, sourceText)}`);
+    const segmentNotes = glossary?.(index, sourceText);
+    if (segmentNotes && segmentNotes.length > 0) notes[String(index)] = segmentNotes;
   }
-  return lines.length > 0 ? lines.join("\n") : "[1] 译文";
+
+  if (lines.length === 0) return "[1] 译文";
+  if (Object.keys(notes).length === 0) return lines.join("\n");
+  return `${lines.join("\n")}\n<<<ILMT_GLOSSARY>>>\n${JSON.stringify(notes)}`;
 }
 
 function sse(res: ServerResponse, text: string): void {
@@ -160,7 +180,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
       if (method === "POST" && pathname === "/v1/chat/completions") {
         const body = await readBody(req);
         requests.push({ method, url, body });
-        const text = buildTranslationReply(body, reply);
+        const text = buildTranslationReply(body, reply, options.glossary);
 
         if ((body as { stream?: unknown })?.stream === true) {
           sse(res, text);
