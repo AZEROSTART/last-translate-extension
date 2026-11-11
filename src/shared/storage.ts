@@ -21,6 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
   siteRules: {},
   theme: "system",
   glossaryEnabled: true,
+  minParagraphLength: 10,
+  contentOnly: true,
 };
 
 /**
@@ -56,6 +58,21 @@ export async function getSettings(): Promise<Settings> {
   // never disable them by accident.
   if (typeof merged.glossaryEnabled !== "boolean") {
     merged.glossaryEnabled = true;
+  }
+
+  // Granularity is on by default. Malformed stored values must not turn all
+  // page text back on, and a missing min length should use the same default
+  // users see in the options page.
+  if (
+    typeof merged.minParagraphLength !== "number" ||
+    !Number.isFinite(merged.minParagraphLength)
+  ) {
+    merged.minParagraphLength = 10;
+  } else {
+    merged.minParagraphLength = Math.min(100, Math.max(1, Math.trunc(merged.minParagraphLength)));
+  }
+  if (typeof merged.contentOnly !== "boolean") {
+    merged.contentOnly = true;
   }
 
   return merged;

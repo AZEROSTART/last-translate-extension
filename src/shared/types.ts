@@ -53,6 +53,10 @@ export interface Settings {
   theme: "system" | "light" | "dark";
   /** Show model-annotated words and their hover definitions. Defaults to true. */
   glossaryEnabled: boolean;
+  /** Minimum trimmed paragraph length; shorter pieces are skipped. */
+  minParagraphLength: number;
+  /** Skip secondary page regions (asides, captions, metadata, breadcrumbs). */
+  contentOnly: boolean;
 }
 
 /** Per-paragraph translation state machine (spec §8.4). */

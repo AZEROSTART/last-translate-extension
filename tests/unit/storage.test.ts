@@ -14,6 +14,42 @@ describe("settings storage", () => {
     expect(s.glossaryEnabled).toBe(true);
   });
 
+  it("defaults to a 10-character minimum and content-only translation", async () => {
+    const s = await getSettings();
+    expect(s.minParagraphLength).toBe(10);
+    expect(s.contentOnly).toBe(true);
+  });
+
+  it("preserves valid granularity settings", async () => {
+    await chrome.storage.local.set({
+      settings: { ...DEFAULT_SETTINGS, minParagraphLength: 4, contentOnly: false },
+    });
+    const s = await getSettings();
+    expect(s.minParagraphLength).toBe(4);
+    expect(s.contentOnly).toBe(false);
+  });
+
+  it("normalizes invalid granularity settings", async () => {
+    await chrome.storage.local.set({
+      settings: { ...DEFAULT_SETTINGS, minParagraphLength: "20", contentOnly: "yes" },
+    });
+    let s = await getSettings();
+    expect(s.minParagraphLength).toBe(10);
+    expect(s.contentOnly).toBe(true);
+
+    await chrome.storage.local.set({
+      settings: { ...DEFAULT_SETTINGS, minParagraphLength: 0, contentOnly: false },
+    });
+    s = await getSettings();
+    expect(s.minParagraphLength).toBe(1);
+
+    await chrome.storage.local.set({
+      settings: { ...DEFAULT_SETTINGS, minParagraphLength: 250 },
+    });
+    s = await getSettings();
+    expect(s.minParagraphLength).toBe(100);
+  });
+
   it("preserves an explicit glossaryEnabled false", async () => {
     await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, glossaryEnabled: false } });
     expect((await getSettings()).glossaryEnabled).toBe(false);
