@@ -5,7 +5,7 @@
 - 目标：新增 `minParagraphLength`（默认 10）和 `contentOnly`（默认 true），减少小字、标签、元信息被翻译。
 - 原则：TDD；每个任务先写失败测试，再实现，再跑测试；小步提交。
 
-## 任务 1：设置类型、默认值与校验
+## Task 1: 设置类型、默认值与校验
 
 **文件**
 
@@ -115,7 +115,7 @@ git add src/shared/types.ts src/shared/storage.ts tests/unit/storage.test.ts
 git commit -m "feat: add translation granularity settings"
 ```
 
-## 任务 2：段落收集支持 contentOnly 和可配置最小长度
+## Task 2: 段落收集支持 contentOnly 和可配置最小长度
 
 **文件**
 
@@ -266,7 +266,7 @@ git add src/content/paragraphs.ts tests/unit/paragraphs.test.ts tests/unit/parag
 git commit -m "feat: filter secondary content during paragraph collection"
 ```
 
-## 任务 3：内容脚本把设置传给全量和动态扫描
+## Task 3: 内容脚本把设置传给全量和动态扫描
 
 **文件**
 
@@ -447,7 +447,7 @@ git add src/content/main.ts tests/unit/main.test.ts
 git commit -m "feat: apply granularity settings to page scans"
 ```
 
-## 任务 4：设置页字段与保存
+## Task 4: 设置页字段与保存
 
 **文件**
 
@@ -586,7 +586,7 @@ git add src/options/main.ts tests/unit/options-dom.test.ts
 git commit -m "feat: expose granularity controls in options"
 ```
 
-## 任务 5：完整验证
+## Task 5: 完整验证
 
 **第 1 步：全量单测、类型检查、构建**
 
