@@ -5,6 +5,21 @@
 
 import { it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const mocks = vi.hoisted(() => ({
+  gloss: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    setParagraph: vi.fn(),
+    removeParagraph: vi.fn(),
+    prune: vi.fn(),
+    clear: vi.fn(),
+  },
+}));
+
+vi.mock("../../src/content/glossary", () => ({
+  createGlossController: () => mocks.gloss,
+}));
+
 function captureConnectPort() {
   const sent: any[] = [];
   const messageListeners: Array<(message: unknown) => void> = [];
@@ -33,6 +48,7 @@ async function startTranslating(): Promise<{
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.resetModules();
   document.body.innerHTML = "";
   (globalThis as any).chrome.runtime.sendMessage = vi.fn(async () => ({}));
@@ -70,6 +86,66 @@ it("appends streaming deltas instead of replacing the previous chunk", async () 
 
   expect(document.querySelector(`[data-ilmt-for="${id}"]`)?.textContent).toBe("你好");
   expect(document.querySelector(`[data-ilmt-for="${id}"]`)?.hasAttribute("data-loading")).toBe(false);
+});
+
+it("starts the glossary controller and sets paragraph notes from a result", async () => {
+  document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+  const { deliver, request } = await startTranslating();
+  const id = request.items[0].id;
+  expect(mocks.gloss.start).toHaveBeenCalledTimes(1);
+  expect(mocks.gloss.prune).toHaveBeenCalled();
+
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: [
+      {
+        id,
+        text: "小工具比制造者存在得更久。",
+        glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+      },
+    ],
+  });
+
+  expect(mocks.gloss.setParagraph).toHaveBeenCalled();
+  const call = mocks.gloss.setParagraph.mock.calls.at(-1)!;
+  expect(call[0]).toBe(id);
+  expect(call[1].map((node: Node) => node.textContent)).toEqual([
+    "Small tools often outlive their makers.",
+  ]);
+  expect(call[2]).toEqual([{ surface: "outlive", meaning: "比……存在得更久" }]);
+});
+
+it("stops the glossary controller on restore", async () => {
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+  await startTranslating();
+
+  (globalThis as any).__ilmtMain.restore();
+
+  expect(mocks.gloss.stop).toHaveBeenCalledTimes(1);
+});
+
+it("clears glossary state when a page-navigated rescan starts", async () => {
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+  await startTranslating();
+  const listener = (chrome.runtime.onMessage.addListener as any).mock.calls.at(-1)[0];
+
+  listener({ type: "page-navigated" }, { id: "test-extension-id" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(mocks.gloss.clear).toHaveBeenCalled();
+});
+
+it("removes a paragraph's glossary when its piece root is invalidated", async () => {
+  document.body.innerHTML = `<p>Original paragraph text.</p>`;
+  const { deliver, request } = await startTranslating();
+  const id = request.items[0].id;
+  deliver({ type: "result", requestId: request.requestId, items: [{ id, text: "译文" }] });
+
+  document.querySelector("p")!.firstChild!.textContent = "Edited paragraph text.";
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(mocks.gloss.removeParagraph).toHaveBeenCalledWith(id);
 });
 
 it("shows an auth banner with a 设置 button and keeps the failure", async () => {

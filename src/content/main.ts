@@ -30,6 +30,7 @@ import {
 } from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
+import { createGlossController } from "./glossary";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
 import { buildSelectionContext } from "./selection-context";
 import type {
@@ -87,6 +88,7 @@ let started = false;
 let active = false;
 let targetLang = DEFAULT_TARGET_LANG;
 let registry = new ParagraphRegistry();
+const gloss = createGlossController();
 let portClient: TranslatePortClient | null = null;
 let currentRequestId: string | null = null;
 /** Lets a late `result` for a request that errored first still render. */
@@ -155,6 +157,7 @@ async function translatePage(): Promise<void> {
   scanGeneration += 1;
 
   try {
+    gloss.start();
     showActiveBanner();
     startPruneTimer();
     startScrollListener();
@@ -183,6 +186,7 @@ async function rescan(): Promise<void> {
   // full scan; the coordinator queues it behind any still-running scan.
   const generation = ++scanGeneration;
   registry = new ParagraphRegistry();
+  gloss.clear();
   // `restoreAll` removes both injected translation spans and `data-ilmt-p`
   // marks. Without it a surviving SPA paragraph would keep its previous
   // translation, and `collectParagraphs` would read `textContent` polluted by
@@ -318,6 +322,7 @@ function queueNodes(nodes: ParagraphNode[]): void {
  */
 function pruneOrphanTranslations(): void {
   const live = new Set(registry.all().map((record) => record.id));
+  gloss.prune(live);
   for (const node of document.querySelectorAll(".ilmt-tr[data-ilmt-for]")) {
     const id = node.getAttribute("data-ilmt-for");
     if (!id || !live.has(id)) node.remove();
@@ -412,6 +417,7 @@ function restore(): void {
   }
   lastCompletedRequestId = null;
 
+  gloss.stop();
   if (document.body) restoreAll(document.body);
   resetPieceCache();
   registry = new ParagraphRegistry();
@@ -525,6 +531,12 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
     if (root && anchor) {
       renderTranslation({ root, anchor, heading: rec.heading }, item.id, item.text, targetLang);
     }
+    const notes = item.glossary ?? [];
+    const textNodes = rec.textNodes
+      .map((ref) => ref.deref())
+      .filter((node): node is Node => node !== undefined && node.isConnected);
+    gloss.setParagraph(item.id, textNodes, notes);
+    registry.setGlossary(item.id, notes);
     registry.setStatus(item.id, "done");
     registry.setTranslation(item.id, item.text);
     deltaBuffers.delete(item.id);
@@ -783,6 +795,7 @@ function invalidatePieceRoot(root: Element): void {
   for (const id of ids) {
     root.ownerDocument.querySelector(`[data-ilmt-for="${id}"]`)?.remove();
     registry.remove(id);
+    gloss.removeParagraph(id);
     deltaBuffers.delete(id);
   }
   root.removeAttribute("data-ilmt-p");
