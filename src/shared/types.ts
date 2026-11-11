@@ -26,6 +26,18 @@ export interface ProviderConfig {
   lastUsedAt?: number;
 }
 
+/** One contextual word or phrase annotation returned with a translation. */
+export interface GlossaryNote {
+  /** Exact source substring; validated against the source paragraph. */
+  surface: string;
+  /** Optional part of speech, e.g. `v.` or `n.`. */
+  pos?: string;
+  /** Context-specific meaning in the target language. */
+  meaning: string;
+  /** Optional short source example. */
+  example?: string;
+}
+
 /** Persisted global settings (spec §9). */
 export interface Settings {
   providers: ProviderConfig[];
@@ -39,6 +51,8 @@ export interface Settings {
   triggerMode: "shortcut" | "auto-current-site";
   siteRules: Record<string, "auto" | "never">;
   theme: "system" | "light" | "dark";
+  /** Show model-annotated words and their hover definitions. Defaults to true. */
+  glossaryEnabled: boolean;
 }
 
 /** Per-paragraph translation state machine (spec §8.4). */
@@ -122,7 +136,11 @@ export type ClientToBackground =
 /** Messages sent from the background translate port back to the content script. */
 export type BackgroundToClient =
   | { type: "delta"; requestId: string; id: string; text: string }
-  | { type: "result"; requestId: string; items: Array<{ id: string; text: string }> }
+  | {
+      type: "result";
+      requestId: string;
+      items: Array<{ id: string; text: string; glossary?: GlossaryNote[] }>;
+    }
   | { type: "error"; requestId: string; code: ErrorCode; message: string; retryable: boolean; ids: string[] }
   | { type: "finish"; requestId: string }
   | { type: "pong" }

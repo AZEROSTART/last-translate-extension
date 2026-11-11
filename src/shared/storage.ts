@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
   triggerMode: "shortcut",
   siteRules: {},
   theme: "system",
+  glossaryEnabled: true,
 };
 
 /**
@@ -49,6 +50,12 @@ export async function getSettings(): Promise<Settings> {
   // builds stored the shorter "auto". Migrate it on every read.
   if ((merged.triggerMode as string) === "auto") {
     merged.triggerMode = "auto-current-site";
+  }
+
+  // Glossary annotations are on by default; a missing or malformed value must
+  // never disable them by accident.
+  if (typeof merged.glossaryEnabled !== "boolean") {
+    merged.glossaryEnabled = true;
   }
 
   return merged;

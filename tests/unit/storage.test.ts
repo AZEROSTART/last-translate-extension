@@ -11,6 +11,17 @@ describe("settings storage", () => {
     expect(s.maxRPS).toBe(5);
     expect(s.providers).toEqual([]);
     expect(s.triggerMode).toBe("shortcut");
+    expect(s.glossaryEnabled).toBe(true);
+  });
+
+  it("preserves an explicit glossaryEnabled false", async () => {
+    await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, glossaryEnabled: false } });
+    expect((await getSettings()).glossaryEnabled).toBe(false);
+  });
+
+  it("normalizes a non-boolean glossaryEnabled to the default", async () => {
+    await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, glossaryEnabled: "yes" } });
+    expect((await getSettings()).glossaryEnabled).toBe(true);
   });
 
   it("round-trips providers and keeps the active one", async () => {

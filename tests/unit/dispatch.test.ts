@@ -26,6 +26,7 @@ const settings: Settings = {
   promptVersion: "v1",
   triggerMode: "shortcut",
   siteRules: {},
+  glossaryEnabled: false,
   theme: "system",
 };
 

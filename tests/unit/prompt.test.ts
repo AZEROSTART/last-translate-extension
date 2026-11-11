@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { estimateTokens } from "../../src/shared/token-estimate";
-import { groupSegments, buildTranslateMessages, parseNumberedResponse, PromptParseError } from "../../src/shared/prompt";
+import {
+  GLOSSARY_INSTRUCTIONS,
+  GLOSSARY_MARKER,
+  buildEffectiveSystemPrompt,
+  buildTranslateMessages,
+  groupSegments,
+  parseAnnotatedResponse,
+  parseGlossaryNotes,
+  parseNumberedResponse,
+  PromptParseError,
+} from "../../src/shared/prompt";
 
 describe("estimateTokens", () => {
   it("counts CJK denser than latin", () => {
@@ -113,5 +123,144 @@ describe("parseNumberedResponse", () => {
     const m = parseNumberedResponse("[1] 第一行\n第二行\n[2] 乙", ["p_1", "p_2"]);
     expect(m.get("p_1")).toBe("第一行\n第二行");
     expect(m.get("p_2")).toBe("乙");
+  });
+});
+
+describe("buildEffectiveSystemPrompt", () => {
+  it("appends the glossary protocol once when enabled", () => {
+    const on = buildEffectiveSystemPrompt("SYS", true);
+    expect(on).toContain("SYS");
+    expect(on).toContain(GLOSSARY_INSTRUCTIONS);
+    expect(on).toContain(GLOSSARY_MARKER);
+    expect(on).toContain("0～3");
+    expect(buildEffectiveSystemPrompt(on, true)).toBe(on);
+  });
+
+  it("returns the base prompt unchanged when disabled", () => {
+    expect(buildEffectiveSystemPrompt("SYS", false)).toBe("SYS");
+  });
+});
+
+describe("parseGlossaryNotes", () => {
+  const items = [
+    { id: "p_1", text: "Small tools often outlive their makers. Outlive is a verb." },
+    { id: "p_2", text: "Alpha beta." },
+  ];
+
+  it("maps valid notes to their segment ids", () => {
+    const raw = JSON.stringify({
+      "1": [
+        { surface: "Outlive", pos: "v.", meaning: "比……存在得更久", example: "Small tools outlive." },
+      ],
+      "2": [{ surface: "Alpha", meaning: "阿尔法" }],
+    });
+    const notes = parseGlossaryNotes(raw, items);
+    expect(notes.get("p_1")).toEqual([
+      { surface: "Outlive", pos: "v.", meaning: "比……存在得更久", example: "Small tools outlive." },
+    ]);
+    expect(notes.get("p_2")).toEqual([{ surface: "Alpha", meaning: "阿尔法" }]);
+  });
+
+  it("drops unknown surfaces, duplicate surfaces, and malformed entries", () => {
+    const raw = JSON.stringify({
+      "1": [
+        { surface: "missing", meaning: "不在原文" },
+        { surface: "outlive", meaning: "第一次" },
+        { surface: "Outlive", meaning: "重复" },
+        { surface: "the", meaning: "嵌在词里" },
+        { surface: "tools", meaning: 42 },
+        { surface: "makers", meaning: "制造者", pos: 7, example: 8 },
+      ],
+    });
+    expect(parseGlossaryNotes(raw, items).get("p_1")).toEqual([
+      { surface: "outlive", meaning: "第一次" },
+      { surface: "makers", meaning: "制造者" },
+    ]);
+  });
+
+  it("keeps at most three valid notes per segment", () => {
+    const raw = JSON.stringify({
+      "1": [
+        { surface: "Small", meaning: "小的" },
+        { surface: "tools", meaning: "工具" },
+        { surface: "makers", meaning: "制造者" },
+        { surface: "outlive", meaning: "比……存在得更久" },
+      ],
+    });
+    expect(parseGlossaryNotes(raw, items).get("p_1")?.map((n) => n.surface)).toEqual([
+      "Small",
+      "tools",
+      "makers",
+    ]);
+  });
+
+  it("accepts only whole-word ASCII surfaces", () => {
+    const raw = JSON.stringify({
+      "1": [
+        { surface: "art", meaning: "艺术" },
+        { surface: "he", meaning: "他" },
+      ],
+    });
+    const notes = parseGlossaryNotes(raw, [{ id: "p_1", text: "Article and art." }]);
+    expect(notes.get("p_1")?.map((n) => n.surface)).toEqual(["art"]);
+  });
+
+  it("returns an empty map for malformed JSON or a non-object", () => {
+    expect(parseGlossaryNotes("{broken", items).size).toBe(0);
+    expect(parseGlossaryNotes("[]", items).size).toBe(0);
+    expect(parseGlossaryNotes(JSON.stringify({ "9": [{ surface: "Alpha", meaning: "x" }] }), items).size).toBe(0);
+  });
+});
+
+describe("parseAnnotatedResponse", () => {
+  const items = [
+    { id: "p_1", text: "Small tools outlive their makers." },
+    { id: "p_2", text: "Alpha beta." },
+  ];
+
+  it("parses translations and glossary after the marker", () => {
+    const raw = [
+      "[1] 小工具比制造者存在得更久。",
+      "[2] 阿尔法贝塔。",
+      GLOSSARY_MARKER,
+      JSON.stringify({ "1": [{ surface: "outlive", meaning: "比……存在得更久" }] }),
+    ].join("\n");
+    const parsed = parseAnnotatedResponse(raw, items);
+    expect(parsed.translations.get("p_1")).toBe("小工具比制造者存在得更久。");
+    expect(parsed.translations.get("p_2")).toBe("阿尔法贝塔。");
+    expect(parsed.glossary.get("p_1")).toEqual([
+      { surface: "outlive", meaning: "比……存在得更久" },
+    ]);
+    expect(parsed.glossary.has("p_2")).toBe(false);
+  });
+
+  it("keeps translations when the glossary JSON is broken", () => {
+    const raw = "[1] 甲\n[2] 乙\n" + GLOSSARY_MARKER + "\n{broken";
+    const parsed = parseAnnotatedResponse(raw, items);
+    expect(parsed.translations.get("p_1")).toBe("甲");
+    expect(parsed.translations.get("p_2")).toBe("乙");
+    expect(parsed.glossary.size).toBe(0);
+  });
+
+  it("still parses translations when the marker is missing", () => {
+    const parsed = parseAnnotatedResponse("[1] 甲\n[2] 乙", items);
+    expect(parsed.translations.get("p_1")).toBe("甲");
+    expect(parsed.glossary.size).toBe(0);
+  });
+
+  it("recovers a trailing glossary JSON object even without the marker", () => {
+    const raw =
+      "[1] 甲\n[2] 乙\n" +
+      JSON.stringify({ "2": [{ surface: "Alpha", meaning: "阿尔法" }] });
+    const parsed = parseAnnotatedResponse(raw, items);
+    expect(parsed.translations.get("p_1")).toBe("甲");
+    expect(parsed.translations.get("p_2")).toBe("乙");
+    expect(parsed.glossary.get("p_2")).toEqual([{ surface: "Alpha", meaning: "阿尔法" }]);
+  });
+
+  it("throws PromptParseError when the translation part is unusable", () => {
+    expect(() => parseAnnotatedResponse("[1] 甲\n" + GLOSSARY_MARKER, items)).toThrow(
+      PromptParseError,
+    );
   });
 });
