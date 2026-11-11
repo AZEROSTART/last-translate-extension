@@ -574,6 +574,40 @@ describe("global settings", () => {
     ) as HTMLInputElement;
     expect(checked.value).toBe("auto-current-site");
   });
+
+  it("renders and saves granularity settings", async () => {
+    await seed();
+    await boot();
+
+    const minLength = document.querySelector(".global-minParagraphLength") as HTMLInputElement;
+    const contentOnly = document.querySelector(".global-contentOnly") as HTMLInputElement;
+    expect(minLength.value).toBe("10");
+    expect(contentOnly.checked).toBe(true);
+
+    setValue(".global-minParagraphLength", "50");
+    contentOnly.checked = false;
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.minParagraphLength).toBe(50);
+    });
+
+    const s = await getSettings();
+    expect(s.contentOnly).toBe(false);
+  });
+
+  it("clamps out-of-range minimum length on save", async () => {
+    await seed();
+    await boot();
+
+    setValue(".global-minParagraphLength", "2");
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      expect((await getSettings()).minParagraphLength).toBe(4);
+    });
+  });
 });
 
 it("activates the quantum teal theme", async () => {

@@ -58,6 +58,8 @@ interface GlobalFields {
   temperature: HTMLInputElement;
   systemPrompt: HTMLTextAreaElement;
   glossaryEnabled: HTMLInputElement;
+  minParagraphLength: HTMLInputElement;
+  contentOnly: HTMLInputElement;
   triggerRadios: HTMLInputElement[];
   saveButton: HTMLButtonElement;
   clearCacheButton: HTMLButtonElement;
@@ -832,6 +834,29 @@ function renderGlobal(): void {
   targetField.appendChild(targetLang);
   globalEl.appendChild(targetField);
 
+  const scopeField = el("fieldset", "field-group");
+  scopeField.appendChild(el("legend", undefined, "翻译范围"));
+  const minParagraphLength = makeNumberControl(
+    "最小翻译长度",
+    "global-minParagraphLength",
+    s.minParagraphLength,
+    4,
+    100,
+    1,
+    "少于这个字符数的文本不翻译",
+  );
+  const contentOnlyRow = el("label", "checkbox-row");
+  const contentOnly = el("input", "global-contentOnly");
+  contentOnly.type = "checkbox";
+  contentOnly.checked = s.contentOnly !== false;
+  contentOnlyRow.append(contentOnly, document.createTextNode("只翻译正文"));
+  scopeField.append(
+    minParagraphLength.wrap,
+    contentOnlyRow,
+    el("span", "field-hint", "跳过侧栏、小字、图注、面包屑和常见元信息。"),
+  );
+  globalEl.appendChild(scopeField);
+
   const numericGrid = el("div", "field-grid");
   const concurrency = makeNumberControl(
     "并发上限",
@@ -933,6 +958,8 @@ function renderGlobal(): void {
     temperature: temperature.input,
     systemPrompt,
     glossaryEnabled,
+    minParagraphLength: minParagraphLength.input,
+    contentOnly,
     triggerRadios,
     saveButton,
     clearCacheButton,
@@ -980,6 +1007,12 @@ async function saveGlobal(): Promise<void> {
   const temperature = readNumberOr(fields.temperature.value, settings.temperature);
   const systemPrompt = fields.systemPrompt.value;
   const glossaryEnabled = fields.glossaryEnabled.checked;
+  const minParagraphLength = clampInt(
+    readNumberOr(fields.minParagraphLength.value, settings.minParagraphLength),
+    4,
+    100,
+  );
+  const contentOnly = fields.contentOnly.checked;
   const targetLang = fields.targetLang.value;
   const triggerMode: TriggerMode =
     fields.triggerRadios.find((radio) => radio.checked)?.value === "auto-current-site"
@@ -1006,6 +1039,8 @@ async function saveGlobal(): Promise<void> {
     systemPrompt,
     promptVersion,
     glossaryEnabled,
+    minParagraphLength,
+    contentOnly,
     triggerMode,
   };
 
@@ -1015,6 +1050,7 @@ async function saveGlobal(): Promise<void> {
     fields.concurrency.value = String(concurrency);
     fields.maxRPS.value = String(maxRPS);
     fields.temperature.value = String(temperature);
+    fields.minParagraphLength.value = String(minParagraphLength);
     renderProviderList();
     fields.saved.textContent = "已保存";
   } catch {
