@@ -5,6 +5,7 @@ import type { ProviderConfig, Settings } from "../../src/shared/types";
 import { DEFAULT_SETTINGS, getSettings } from "../../src/shared/storage";
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey, TranslationCache } from "../../src/background/cache";
+import { buildEffectiveSystemPrompt } from "../../src/shared/prompt";
 import { promptVersionFor } from "../../src/options/providers";
 
 vi.mock("../../src/providers", () => ({
@@ -431,11 +432,59 @@ describe("global settings", () => {
 
     await vi.waitFor(async () => {
       const updated = await getSettings();
-      expect(updated.promptVersion).toBe(await promptVersionFor("新提示词"));
+      expect(updated.promptVersion).toBe(
+        await promptVersionFor(buildEffectiveSystemPrompt("新提示词", true)),
+      );
     });
 
     s = await getSettings();
     expect(s.systemPrompt).toBe("新提示词");
+  });
+
+  it("renders the glossary toggle and saves false with a fresh prompt version", async () => {
+    await seed({
+      glossaryEnabled: true,
+      systemPrompt: "旧提示词",
+      promptVersion: "keep-me",
+    });
+    await boot();
+
+    const checkbox = document.querySelector<HTMLInputElement>(".global-glossaryEnabled")!;
+    expect(checkbox.checked).toBe(true);
+    checkbox.checked = false;
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      expect((await getSettings()).glossaryEnabled).toBe(false);
+    });
+
+    const s = await getSettings();
+    expect(s.promptVersion).toBe(
+      await promptVersionFor(buildEffectiveSystemPrompt("旧提示词", false)),
+    );
+  });
+
+  it("recomputes the prompt version when the glossary toggle turns on", async () => {
+    await seed({
+      glossaryEnabled: false,
+      systemPrompt: "旧提示词",
+      promptVersion: "keep-me",
+    });
+    await boot();
+
+    const checkbox = document.querySelector<HTMLInputElement>(".global-glossaryEnabled")!;
+    expect(checkbox.checked).toBe(false);
+    checkbox.checked = true;
+    click(".global-save");
+
+    await vi.waitFor(async () => {
+      expect((await getSettings()).glossaryEnabled).toBe(true);
+    });
+
+    const s = await getSettings();
+    expect(s.promptVersion).toBe(
+      await promptVersionFor(buildEffectiveSystemPrompt("旧提示词", true)),
+    );
   });
 
   it("initializes an empty stored promptVersion from the effective global prompt", async () => {
@@ -446,7 +495,9 @@ describe("global settings", () => {
 
     await vi.waitFor(async () => {
       const s = await getSettings();
-      expect(s.promptVersion).toBe(await promptVersionFor(DEFAULT_SETTINGS.systemPrompt));
+      expect(s.promptVersion).toBe(
+        await promptVersionFor(buildEffectiveSystemPrompt(DEFAULT_SETTINGS.systemPrompt, true)),
+      );
     });
   });
 

@@ -18,6 +18,7 @@ import {
 import type { ErrorCode, ProviderConfig, ProviderKind, Settings } from "../shared/types";
 import { complete, listModels } from "../providers";
 import { TranslationCache } from "../background/cache";
+import { buildEffectiveSystemPrompt } from "../shared/prompt";
 import {
   applyProviderForm,
   errorLabel,
@@ -56,6 +57,7 @@ interface GlobalFields {
   maxRPS: HTMLInputElement;
   temperature: HTMLInputElement;
   systemPrompt: HTMLTextAreaElement;
+  glossaryEnabled: HTMLInputElement;
   triggerRadios: HTMLInputElement[];
   saveButton: HTMLButtonElement;
   clearCacheButton: HTMLButtonElement;
@@ -872,6 +874,19 @@ function renderGlobal(): void {
   );
   globalEl.appendChild(promptField);
 
+  const glossaryField = el("fieldset", "field-group");
+  glossaryField.appendChild(el("legend", undefined, "学习注释"));
+  const glossaryRow = el("label", "checkbox-row");
+  const glossaryEnabled = el("input", "global-glossaryEnabled");
+  glossaryEnabled.type = "checkbox";
+  glossaryEnabled.checked = s.glossaryEnabled !== false;
+  glossaryRow.append(glossaryEnabled, document.createTextNode("翻译时标出值得学的词"));
+  glossaryField.appendChild(glossaryRow);
+  glossaryField.appendChild(
+    el("span", "field-hint", "每段最多 3 个；悬停查看释义。关闭后只翻译。"),
+  );
+  globalEl.appendChild(glossaryField);
+
   const triggerField = el("fieldset", "field-group");
   triggerField.appendChild(el("legend", undefined, "翻译触发方式"));
   const triggerRow = el("div", "radio-row");
@@ -917,6 +932,7 @@ function renderGlobal(): void {
     maxRPS: maxRPS.input,
     temperature: temperature.input,
     systemPrompt,
+    glossaryEnabled,
     triggerRadios,
     saveButton,
     clearCacheButton,
@@ -963,14 +979,20 @@ async function saveGlobal(): Promise<void> {
   const maxRPS = clampInt(readNumberOr(fields.maxRPS.value, settings.maxRPS), 1, 20);
   const temperature = readNumberOr(fields.temperature.value, settings.temperature);
   const systemPrompt = fields.systemPrompt.value;
+  const glossaryEnabled = fields.glossaryEnabled.checked;
   const targetLang = fields.targetLang.value;
   const triggerMode: TriggerMode =
     fields.triggerRadios.find((radio) => radio.checked)?.value === "auto-current-site"
       ? "auto-current-site"
       : "shortcut";
-  const effectivePrompt = systemPrompt.trim() ? systemPrompt : DEFAULT_SETTINGS.systemPrompt;
+  const effectivePrompt = buildEffectiveSystemPrompt(
+    systemPrompt.trim() ? systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+    glossaryEnabled,
+  );
   const promptVersion =
-    systemPrompt !== settings.systemPrompt || settings.promptVersion === ""
+    systemPrompt !== settings.systemPrompt ||
+    glossaryEnabled !== settings.glossaryEnabled ||
+    settings.promptVersion === ""
       ? await promptVersionFor(effectivePrompt)
       : settings.promptVersion;
 
@@ -983,6 +1005,7 @@ async function saveGlobal(): Promise<void> {
     temperature,
     systemPrompt,
     promptVersion,
+    glossaryEnabled,
     triggerMode,
   };
 
