@@ -29,6 +29,8 @@ const settings: Settings = {
   triggerMode: "shortcut",
   siteRules: {},
   glossaryEnabled: false,
+  minParagraphLength: 10,
+  contentOnly: true,
   theme: "system",
 };
 
