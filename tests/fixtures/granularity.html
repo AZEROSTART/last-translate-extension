@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>E2E granularity fixture</title>
+  </head>
+  <body>
+    <main id="article">
+      <h1>An Article About Translation Scope</h1>
+      <p id="main-p1">
+        This is a long main paragraph that should be translated by the extension.
+      </p>
+      <p id="short-label">Short</p>
+      <ul>
+        <li>This list item should be translated.</li>
+      </ul>
+      <table>
+        <tr>
+          <td>This table cell should be translated.</td>
+        </tr>
+      </table>
+      <aside>
+        This aside is long enough but should stay untranslated.
+      </aside>
+      <small>This small print should stay untranslated.</small>
+      <figure>
+        <figcaption>This caption should stay untranslated.</figcaption>
+      </figure>
+      <div class="breadcrumb">Home / Docs / Granularity</div>
+      <div class="post-meta">By Test Author, published today</div>
+    </main>
+  </body>
+</html>

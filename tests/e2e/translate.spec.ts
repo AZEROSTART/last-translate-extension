@@ -25,6 +25,7 @@ const EXTENSION_PATH = resolve("dist");
 const ARTICLES = {
   english: "article.html",
   chinese: "chinese.html",
+  granularity: "granularity.html",
 } as const;
 
 interface Extension {
@@ -37,16 +38,18 @@ async function launchExtension(): Promise<Extension> {
   const userDataDir = await mkdtemp(join(tmpdir(), "ilmt-e2e-"));
   // Escape hatch for machines that cannot download Playwright's Chromium but
   // do have a branded Chrome installed: ILMT_E2E_CHANNEL=chrome.
+  // Set ILMT_E2E_HEADLESS=1 to verify without taking focus; new headless needs
+  // the full Chromium build, not Playwright's separate headless shell.
   const channel = process.env.ILMT_E2E_CHANNEL;
+  const headless = process.env.ILMT_E2E_HEADLESS === "1";
 
   let context: BrowserContext;
   try {
     context = await chromium.launchPersistentContext(userDataDir, {
-      // MV3 extensions need a persistent context. Headed also matches the
-      // spec's note that old headless cannot load extensions; new headless
-      // would need `channel: "chromium"`.
-      headless: false,
-      ...(channel ? { channel } : {}),
+      // MV3 extensions need a persistent context. Old headless cannot load
+      // extensions; new headless plus the full Chromium build can.
+      headless,
+      ...(channel ? { channel } : headless ? { channel: "chromium" } : {}),
       args: [
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
@@ -216,6 +219,55 @@ test.describe("loaded extension", () => {
 
       await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
       await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("skips secondary regions and short labels by default", async () => {
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.granularity}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+
+      await expect(page.locator(".ilmt-tr")).toHaveCount(4);
+      await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
+      expect(
+        await page.locator(".ilmt-tr").evaluateAll((nodes) =>
+          nodes.map((node) => node.parentElement?.tagName ?? "").sort(),
+        ),
+      ).toEqual(["H1", "LI", "P", "TD"]);
+      await expect(page.locator("aside .ilmt-tr, small .ilmt-tr, figcaption .ilmt-tr")).toHaveCount(0);
+      await expect(page.locator(".breadcrumb .ilmt-tr, .post-meta .ilmt-tr")).toHaveCount(0);
+      await expect(page.locator("#short-label .ilmt-tr")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("shows granularity defaults in options and the active provider in popup", async () => {
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+      const extensionId = new URL(extension.worker.url()).host;
+
+      const optionsPage = await extension.context.newPage();
+      await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+      await expect(optionsPage.locator(".global-minParagraphLength")).toHaveValue("10");
+      await expect(optionsPage.locator(".global-contentOnly")).toBeChecked();
+
+      const popupPage = await extension.context.newPage();
+      await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+      await expect(popupPage.locator(".popup-title")).toHaveText("翻译设置");
+      await expect(popupPage.locator(".popup-provider-select")).toContainText("E2E");
+      await expect(popupPage.locator(".popup-model")).toHaveValue("mock-model");
     } finally {
       await cleanup();
     }
