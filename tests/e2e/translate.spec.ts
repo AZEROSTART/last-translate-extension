@@ -321,6 +321,10 @@ test.describe("loaded extension", () => {
       const content = await findContentMainContext(page);
       await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
       await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      // Loading skeletons also use `.ilmt-tr`; wait for the result (and its
+      // banner hint) before checking the highlight registry.
+      await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
+      await expect(page.locator(".ilmt-active-banner")).toContainText("1 个词可悬停");
       expect(
         await evaluateInContent<number>(
           content,

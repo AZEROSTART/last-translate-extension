@@ -141,7 +141,7 @@ it("tells the user how many annotated words can be hovered", async () => {
   expect(document.querySelector(".ilmt-active-text")?.textContent).toContain("2 个词可悬停");
 });
 
-it("says when the model returned no hover annotations", async () => {
+it("says when there are no hover annotations", async () => {
   document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
   const { deliver, request } = await startTranslating();
   const id = request.items[0].id;
@@ -153,7 +153,7 @@ it("says when the model returned no hover annotations", async () => {
     items: [{ id, text: "小工具比制造者存在得更久。" }],
   });
 
-  expect(document.querySelector(".ilmt-active-text")?.textContent).toContain("本次模型未返回注释");
+  expect(document.querySelector(".ilmt-active-text")?.textContent).toContain("本次没有可悬停的注释");
 });
 
 it("stops the glossary controller on restore", async () => {

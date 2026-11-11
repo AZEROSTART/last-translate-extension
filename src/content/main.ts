@@ -932,7 +932,7 @@ function updateActiveBannerHint(): void {
   text.textContent =
     count > 0
       ? `翻译已开启 · ${count} 个词可悬停（带虚线的词）`
-      : "翻译已开启 · 本次模型未返回注释";
+      : "翻译已开启 · 本次没有可悬停的注释";
 }
 
 function removeActiveBanner(): void {
