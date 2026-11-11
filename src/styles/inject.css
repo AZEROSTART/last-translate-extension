@@ -182,3 +182,54 @@
 .ilmt-bubble-explain {
   font-weight: 600;
 }
+
+/* Hover glossary (学习注释): only annotated source terms are underlined. */
+::highlight(ilmt-gloss) {
+  background-color: rgba(255, 214, 102, 0.28);
+  text-decoration: underline dotted rgba(154, 103, 0, 0.9);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.ilmt-gloss-card {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2328;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
+.ilmt-gloss-word {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ilmt-gloss-surface {
+  font-weight: 600;
+}
+
+.ilmt-gloss-pos {
+  color: #6e7781;
+  font-size: 12px;
+}
+
+.ilmt-gloss-meaning {
+  margin-top: 4px;
+}
+
+.ilmt-gloss-example {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  color: #57606a;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
