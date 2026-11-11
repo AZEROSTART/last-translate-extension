@@ -42,6 +42,8 @@ export type LanguageDetectorResult = string | LanguageDetection | null;
 interface CollectOptions {
   /** Minimum trimmed text length; shorter candidates are skipped. */
   minLength?: number;
+  /** Skip asides, captions, small print, breadcrumbs and common metadata. */
+  contentOnly?: boolean;
   /** Minimum target-language share (0–1) required before skipping. */
   langSkipRatio?: number;
   /** Optional language detector; a `null` result falls back to the CJK heuristic. */
@@ -102,6 +104,21 @@ const BLOCK_TAGS = new Set([
   "tr",
   "ul",
 ]);
+
+/** Extra exclusions applied when the user enables "只翻译正文". */
+const CONTENT_ONLY_EXCLUDES: string[] = [
+  "aside",
+  "small",
+  "figcaption",
+  "[role='complementary']",
+  "[role='contentinfo']",
+  "[role='banner']",
+  "[aria-label*='breadcrumb' i]",
+  "[class*='breadcrumb' i]",
+  "[class*='byline' i]",
+  "[class*='post-meta' i]",
+  "[class*='article-meta' i]",
+];
 
 const DEFAULT_MIN_LENGTH = 4;
 const DEFAULT_LANG_SKIP_RATIO = 0.8;
@@ -195,6 +212,7 @@ export async function collectParagraphs(
 ): Promise<ParagraphNode[]> {
   const {
     minLength = DEFAULT_MIN_LENGTH,
+    contentOnly = false,
     langSkipRatio = DEFAULT_LANG_SKIP_RATIO,
     detectLang,
     targetLang = DEFAULT_TARGET_LANG,
@@ -204,7 +222,7 @@ export async function collectParagraphs(
   const rule = getSiteRule(url ?? document.location.href);
   if (rule.disabled) return [];
 
-  const matchers = compileRule(rule);
+  const matchers = compileRule(rule, contentOnly);
 
   const scanRoot = root instanceof Document ? (root.body ?? root.documentElement) : root;
   if (!scanRoot) return [];
@@ -349,10 +367,13 @@ function collectScopeElements(scanRoot: ParentNode, scopeSelector: string): Elem
   return scopes;
 }
 
-function compileRule(rule: SiteRule): RuleMatchers {
+function compileRule(rule: SiteRule, contentOnly = false): RuleMatchers {
+  const excludes = contentOnly
+    ? [...rule.excludeSelectors, ...CONTENT_ONLY_EXCLUDES]
+    : rule.excludeSelectors;
   return {
-    allExcludes: [...rule.excludeSelectors, ...(rule.scopeExcludeSelectors ?? [])].join(","),
-    contentExcludes: rule.excludeSelectors.join(","),
+    allExcludes: [...excludes, ...(rule.scopeExcludeSelectors ?? [])].join(","),
+    contentExcludes: excludes.join(","),
     extraInline: (rule.extraInlineSelectors ?? []).join(","),
     extraBlock: (rule.extraBlockSelectors ?? []).join(","),
   };

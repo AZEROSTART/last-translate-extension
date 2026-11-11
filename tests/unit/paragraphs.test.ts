@@ -269,6 +269,49 @@ it("skips text shorter than minLength and caches it", async () => {
   expect(detect).not.toHaveBeenCalled();
 });
 
+it("honors a larger minLength and caches short pieces", async () => {
+  const root = html(`<p>short</p><p>This paragraph is long enough.</p>`);
+  const detect = vi.fn(async () => "en");
+  expect(await collectParagraphs(root, { minLength: 10, detectLang: detect })).toHaveLength(1);
+  expect(detect).toHaveBeenCalledTimes(1);
+});
+
+it("skips secondary regions when contentOnly is on", async () => {
+  const root = html(`
+    <main>
+      <h1>Article title here</h1>
+      <p>This is the main article paragraph.</p>
+      <ul><li>This is a list item.</li></ul>
+      <table><tr><td>This is a table cell.</td></tr></table>
+      <aside><p>This aside should not be translated.</p></aside>
+      <small>This small print should not be translated.</small>
+      <figcaption>This caption should not be translated.</figcaption>
+      <div class="breadcrumb">Home / Docs / Guide</div>
+      <div class="post-meta">By someone, published today</div>
+    </main>`);
+
+  const ps = await collectParagraphs(root, { contentOnly: true, minLength: 4 });
+  expect(texts(ps)).toEqual([
+    "Article title here",
+    "This is the main article paragraph.",
+    "This is a list item.",
+    "This is a table cell.",
+  ]);
+});
+
+it("keeps old behavior when contentOnly is off", async () => {
+  const root = html(`
+    <main>
+      <p>This is the main article paragraph.</p>
+      <aside><p>This aside is still translated.</p></aside>
+      <figcaption>This caption is still translated.</figcaption>
+    </main>`);
+
+  const ps = await collectParagraphs(root, { contentOnly: false });
+  expect(texts(ps)).toContain("This aside is still translated.");
+  expect(texts(ps)).toContain("This caption is still translated.");
+});
+
 it("skips pieces already in the target language", async () => {
   const root = html(`<p>这是一段中文内容，不需要翻译。</p><p>This is English content.</p>`);
   const detect = async (text: string) => (/[\u4e00-\u9fa5]/.test(text) ? "zh" : "en");
