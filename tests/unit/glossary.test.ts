@@ -85,6 +85,22 @@ describe("createGlossController", () => {
     expect(card.textContent).toContain("Small tools often outlive their makers.");
   });
 
+  it("reports how many annotated ranges are currently highlighted", () => {
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document);
+    controller.start();
+    controller.setParagraph("p_1", [text], [
+      { surface: "outlive", meaning: "比……存在得更久" },
+    ]);
+    expect(controller.count()).toBe(1);
+
+    controller.removeParagraph("p_1");
+    expect(controller.count()).toBe(0);
+  });
+
   it("renders model text literally instead of injecting HTML", () => {
     stubFrame();
     stubHighlights();

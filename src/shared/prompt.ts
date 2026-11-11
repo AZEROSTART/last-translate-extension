@@ -14,7 +14,8 @@ export const GLOSSARY_MARKER = "<<<ILMT_GLOSSARY>>>";
  * The marker and JSON shape are a contract with the response parser; changing
  * either requires a prompt-version bump (the prompt hash handles that).
  */
-export const GLOSSARY_INSTRUCTIONS = `另外，从每段原文中挑出 0～3 个最值得学习的词或短语，给出它在当前句子里的 {{targetLang}} 释义。宁少勿多；没有合适内容就留空。
+export const GLOSSARY_INSTRUCTIONS = `注意：启用学习注释时，最终输出由两部分组成：先输出全部 [编号] 译文，再输出下面的注释块。上面的“只输出译文”只约束译文部分；注释块是必须输出的第二部分，不要省略。
+从每段原文中挑出 0～3 个最值得学习的词或短语（每段尽量给 1～2 个），给出它在当前句子里的 {{targetLang}} 释义。确实没有合适内容才留空。
 在全部译文之后另起一行输出 ${GLOSSARY_MARKER}，下一行只输出一个 JSON 对象，键是译文里的段号（字符串），值是该段的注释数组：
 {"1":[{"surface":"原文中的词或短语","pos":"词性，可省略","meaning":"当前语境下的释义","example":"原文中的短例句，可省略"}]}
 规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
@@ -287,29 +288,30 @@ function splitTrailingGlossaryJson(raw: string): { text: string; notesRaw: strin
 
 /**
  * Remove the marker and a JSON object that follows it, keeping numbered lines
- * on both sides. Used only by the translation-only fallback.
+ * on both sides and returning the extracted JSON for the glossary parser.
  */
-function removeGlossaryBlock(raw: string): string {
+function extractGlossaryBlock(raw: string): { text: string; notesRaw: string } {
   const markerIndex = raw.indexOf(GLOSSARY_MARKER);
-  if (markerIndex < 0) return raw;
+  if (markerIndex < 0) return { text: raw, notesRaw: "" };
 
   const before = raw.slice(0, markerIndex);
   const after = raw.slice(markerIndex + GLOSSARY_MARKER.length);
   const start = after.indexOf("{");
-  if (start < 0) return `${before}${after}`;
+  if (start < 0) return { text: `${before}${after}`, notesRaw: "" };
 
   for (let end = start + 1; end < after.length; end += 1) {
     if (after[end] !== "}") continue;
+    const candidate = after.slice(start, end + 1);
     try {
-      const value: unknown = JSON.parse(after.slice(start, end + 1));
+      const value: unknown = JSON.parse(candidate);
       if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-        return `${before}${after.slice(end + 1)}`;
+        return { text: `${before}${after.slice(end + 1)}`, notesRaw: candidate };
       }
     } catch {
       // Keep scanning; a `}` inside a string is not the end of the object.
     }
   }
-  return `${before}${after}`;
+  return { text: `${before}${after}`, notesRaw: "" };
 }
 
 /**
@@ -334,24 +336,24 @@ export function parseAnnotatedResponse(raw: string, items: Segment[]): Annotated
   }
 
   let translations: Map<string, string>;
-  let keepAnnotations = true;
   try {
     translations = parseNumberedResponse(translationRaw, ids);
   } catch (translationError) {
     // The annotation marker occasionally lands between numbered lines. Retry
-    // the whole response for translations only; malformed annotations must
-    // never turn a usable translation into a format error.
+    // the whole response with the block removed; malformed annotations must
+    // never turn a usable translation into a format error, but a valid block
+    // should still produce hover notes.
+    const extracted = extractGlossaryBlock(raw);
     try {
-      translations = parseNumberedResponse(removeGlossaryBlock(raw), ids);
+      translations = parseNumberedResponse(extracted.text, ids);
     } catch {
       throw translationError;
     }
-    keepAnnotations = false;
+    if (extracted.notesRaw) notesRaw = extracted.notesRaw;
   }
 
-  const glossary =
-    keepAnnotations && notesRaw.trim()
-      ? parseGlossaryNotes(notesRaw, items)
-      : new Map<string, GlossaryNote[]>();
+  const glossary = notesRaw.trim()
+    ? parseGlossaryNotes(notesRaw, items)
+    : new Map<string, GlossaryNote[]>();
   return { translations, glossary };
 }

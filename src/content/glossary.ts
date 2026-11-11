@@ -33,6 +33,8 @@ export interface GlossController {
   removeParagraph(id: string): void;
   prune(liveIds: Set<string>): void;
   clear(): void;
+  /** Number of annotated ranges currently registered for hover. */
+  count(): number;
 }
 
 type HighlightCtor = new (...ranges: Range[]) => unknown;
@@ -336,5 +338,9 @@ export function createGlossController(doc: Document = document): GlossController
     },
 
     clear,
+
+    count(): number {
+      return entries.length;
+    },
   };
 }

@@ -39,6 +39,8 @@ export interface MockServerOptions {
   reply?: (index: number, sourceText: string) => string;
   /** Optional glossary notes for segment `index`. */
   glossary?: (index: number, sourceText: string) => MockGlossaryNote[] | undefined;
+  /** Emit the glossary block between numbered lines, as some models do. */
+  splitGlossary?: boolean;
   /** Directory containing the HTML fixtures (defaults to `tests/fixtures`). */
   fixtureDir?: string;
 }
@@ -82,6 +84,7 @@ function buildTranslationReply(
   body: unknown,
   reply: NonNullable<MockServerOptions["reply"]>,
   glossary?: NonNullable<MockServerOptions["glossary"]>,
+  splitGlossary = false,
 ): string {
   const messages = (body as { messages?: unknown })?.messages;
   if (!Array.isArray(messages)) return "[1] 译文";
@@ -107,7 +110,11 @@ function buildTranslationReply(
 
   if (lines.length === 0) return "[1] 译文";
   if (Object.keys(notes).length === 0) return lines.join("\n");
-  return `${lines.join("\n")}\n<<<ILMT_GLOSSARY>>>\n${JSON.stringify(notes)}`;
+  const block = `<<<ILMT_GLOSSARY>>>\n${JSON.stringify(notes)}`;
+  if (splitGlossary && lines.length > 1) {
+    return `${lines[0]}\n${block}\n${lines.slice(1).join("\n")}`;
+  }
+  return `${lines.join("\n")}\n${block}`;
 }
 
 function sse(res: ServerResponse, text: string): void {
@@ -180,7 +187,12 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
       if (method === "POST" && pathname === "/v1/chat/completions") {
         const body = await readBody(req);
         requests.push({ method, url, body });
-        const text = buildTranslationReply(body, reply, options.glossary);
+        const text = buildTranslationReply(
+          body,
+          reply,
+          options.glossary,
+          options.splitGlossary,
+        );
 
         if ((body as { stream?: unknown })?.stream === true) {
           sse(res, text);

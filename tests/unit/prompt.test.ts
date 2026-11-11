@@ -133,6 +133,7 @@ describe("buildEffectiveSystemPrompt", () => {
     expect(on).toContain(GLOSSARY_INSTRUCTIONS);
     expect(on).toContain(GLOSSARY_MARKER);
     expect(on).toContain("0～3");
+    expect(on).toContain("注释块是必须输出的第二部分");
     expect(buildEffectiveSystemPrompt(on, true)).toBe(on);
   });
 
@@ -258,17 +259,17 @@ describe("parseAnnotatedResponse", () => {
     expect(parsed.glossary.get("p_2")).toEqual([{ surface: "Alpha", meaning: "阿尔法" }]);
   });
 
-  it("falls back to translation-only when annotations split the numbered lines", () => {
+  it("keeps glossary notes when annotations split the numbered lines", () => {
     const raw = [
       "[1] 甲",
       GLOSSARY_MARKER,
-      JSON.stringify({ "1": [{ surface: "Alpha", meaning: "阿尔法" }] }),
+      JSON.stringify({ "1": [{ surface: "outlive", meaning: "比……存在得更久" }] }),
       "[2] 乙",
     ].join("\n");
     const parsed = parseAnnotatedResponse(raw, items);
     expect(parsed.translations.get("p_1")).toBe("甲");
     expect(parsed.translations.get("p_2")).toBe("乙");
-    expect(parsed.glossary.size).toBe(0);
+    expect(parsed.glossary.get("p_1")).toEqual([{ surface: "outlive", meaning: "比……存在得更久" }]);
   });
 
   it("throws PromptParseError when the translation part is unusable", () => {

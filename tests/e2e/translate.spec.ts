@@ -267,6 +267,36 @@ test.describe("loaded extension", () => {
     }
   });
 
+  test("keeps hover notes when the glossary block splits the numbered lines", async () => {
+    try {
+      server = await startMockServer({
+        splitGlossary: true,
+        glossary: (index) =>
+          index === 1
+            ? [{ surface: "outlive", meaning: "比……存在得更久" }]
+            : undefined,
+      });
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect(page.locator(".ilmt-active-banner")).toContainText("1 个词可悬停");
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
+        ),
+      ).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("shows a glossary card on hover and clears it on restore", async () => {
     try {
       server = await startMockServer({

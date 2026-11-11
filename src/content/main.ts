@@ -544,6 +544,7 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
     // whose root/anchor vanished between the skeleton and the result.
     clearInlineLoader(item.id);
   }
+  updateActiveBannerHint();
   if (isCurrent) completeRequest(msg.requestId);
 }
 
@@ -917,6 +918,21 @@ function showActiveBanner(): void {
   el.append(text, restoreButton);
   (document.body ?? document.documentElement).appendChild(el);
   activeBanner = el;
+}
+
+/**
+ * Make the hover affordance discoverable: a bare dotted underline is easy to
+ * miss, and "no annotations this time" is otherwise indistinguishable from a
+ * broken feature.
+ */
+function updateActiveBannerHint(): void {
+  const text = activeBanner?.querySelector(".ilmt-active-text");
+  if (!text) return;
+  const count = gloss.count();
+  text.textContent =
+    count > 0
+      ? `翻译已开启 · ${count} 个词可悬停（带虚线的词）`
+      : "翻译已开启 · 本次模型未返回注释";
 }
 
 function removeActiveBanner(): void {
