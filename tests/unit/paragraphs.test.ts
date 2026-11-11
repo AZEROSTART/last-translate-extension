@@ -340,3 +340,9 @@ describe("target language and CJK fallback", () => {
     expect(ps).toHaveLength(1);
   });
 });
+
+it("records the text nodes that make up a piece", async () => {
+  const root = html(`<p>Hello <em>world</em>.</p>`);
+  const [piece] = await collectParagraphs(root);
+  expect(piece.textNodes?.map((node) => node.textContent)).toEqual(["Hello ", "world", "."]);
+});

@@ -96,3 +96,21 @@ describe("ParagraphRegistry", () => {
     expect(r.get("p_1")).toBeUndefined();
   });
 });
+
+it("stores text-node refs and glossary notes", () => {
+  const r = new ParagraphRegistry();
+  document.body.innerHTML = `<p>Hello world.</p>`;
+  const p = document.querySelector("p")!;
+  const text = p.firstChild!;
+  r.add({
+    id: "p_1",
+    el: p,
+    anchor: text,
+    text: "Hello world.",
+    heading: false,
+    textNodes: [text],
+  });
+  expect(r.get("p_1")!.textNodes.map((ref) => ref.deref())).toEqual([text]);
+  r.setGlossary("p_1", [{ surface: "Hello", meaning: "你好" }]);
+  expect(r.get("p_1")!.glossary).toEqual([{ surface: "Hello", meaning: "你好" }]);
+});

@@ -13,7 +13,7 @@
  * `isConnected` defensively and never throws.
  */
 
-import type { ParagraphStatus } from "../shared/types";
+import type { GlossaryNote, ParagraphStatus } from "../shared/types";
 import type { ParagraphNode } from "./paragraphs";
 
 export interface ParagraphRecord {
@@ -24,6 +24,10 @@ export interface ParagraphRecord {
   sourceText: string;
   status: ParagraphStatus;
   translation?: string;
+  /** Source text nodes in reading order, held weakly like the anchor. */
+  textNodes: WeakRef<Node>[];
+  /** Validated hover annotations for this paragraph, if any. */
+  glossary?: GlossaryNote[];
 }
 
 export class ParagraphRegistry {
@@ -38,6 +42,7 @@ export class ParagraphRegistry {
       heading: p.heading,
       sourceText: p.text,
       status: "unseen",
+      textNodes: (p.textNodes ?? []).map((node) => new WeakRef(node)),
     });
   }
 
@@ -53,6 +58,11 @@ export class ParagraphRegistry {
   setTranslation(id: string, translation: string): void {
     const record = this.records.get(id);
     if (record) record.translation = translation;
+  }
+
+  setGlossary(id: string, glossary: GlossaryNote[]): void {
+    const record = this.records.get(id);
+    if (record) record.glossary = glossary;
   }
 
   /** Drop one record (an edited paragraph must be re-collected under a fresh id). */

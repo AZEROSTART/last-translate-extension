@@ -23,6 +23,8 @@ export interface ParagraphNode {
   anchor: Node;
   text: string;
   heading: boolean;
+  /** Source text nodes in reading order; used for glossary highlighting. */
+  textNodes?: Node[];
 }
 
 /** A detector verdict: the language and its normalized share (0–1). */
@@ -129,6 +131,7 @@ interface RawPiece {
   anchor: Node;
   text: string;
   heading: boolean;
+  textNodes: Node[];
 }
 
 interface WalkContext {
@@ -136,6 +139,7 @@ interface WalkContext {
   heading: boolean;
   parts: string[];
   lastText: Node | null;
+  textNodes: Node[];
 }
 
 export function resetPieceCache(): void {
@@ -247,6 +251,7 @@ export async function collectParagraphs(
       anchor: piece.anchor,
       text: piece.text,
       heading: piece.heading,
+      textNodes: piece.textNodes,
     });
   }
 
@@ -265,6 +270,7 @@ function walkScope(scopeEl: Element, matchers: RuleMatchers, pieces: RawPiece[])
     heading: isHeading(scopeEl),
     parts: [],
     lastText: null,
+    textNodes: [],
   };
   for (const child of scopeEl.childNodes) {
     walkNode(child, ctx, matchers, pieces);
@@ -283,6 +289,7 @@ function walkNode(
     if (raw.trim().length > 0) {
       ctx.parts.push(raw);
       ctx.lastText = node;
+      ctx.textNodes.push(node);
     }
     return;
   }
@@ -304,6 +311,7 @@ function walkNode(
       heading: ctx.heading || isHeading(el),
       parts: [],
       lastText: null,
+      textNodes: [],
     };
     for (const child of el.childNodes) walkNode(child, childCtx, matchers, pieces);
     flush(childCtx, pieces);
@@ -317,10 +325,12 @@ function flush(ctx: WalkContext, pieces: RawPiece[]): void {
   if (ctx.lastText === null) return;
   const anchor = ctx.lastText;
   const text = normalizeText(joinTextParts(ctx.parts));
+  const textNodes = ctx.textNodes;
   ctx.parts = [];
   ctx.lastText = null;
+  ctx.textNodes = [];
   if (text.length === 0) return;
-  pieces.push({ root: ctx.root, anchor, text, heading: ctx.heading });
+  pieces.push({ root: ctx.root, anchor, text, heading: ctx.heading, textNodes });
 }
 
 /** Collect all scope elements under `scanRoot`, falling back to the root itself. */
