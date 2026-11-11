@@ -183,13 +183,11 @@
   font-weight: 600;
 }
 
-/* Hover glossary (学习注释): only annotated source terms are underlined. */
-/* 中性灰、低透明度：与任意页面背景轻微区分，不抢正文；alpha 会和页面底色自然混合 */
+/* Hover glossary (学习注释): only the annotated word changes, with no background box. */
+/* 中性灰 + 很淡的阴影：让词轻微“浮”在正文上，不铺底色、不画下划线 */
 ::highlight(ilmt-gloss) {
-  background-color: rgba(128, 128, 128, 0.16);
-  text-decoration: underline dotted rgba(128, 128, 128, 0.55);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
+  color: #7a7a7a;
+  text-shadow: 0 1px 1px rgba(128, 128, 128, 0.55), 0 2px 6px rgba(128, 128, 128, 0.28);
 }
 
 .ilmt-gloss-card {
