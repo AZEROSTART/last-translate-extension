@@ -33,6 +33,7 @@ import { createTranslatePort, type PortError, type TranslatePortClient } from ".
 import { createGlossController } from "./glossary";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
 import { buildSelectionContext } from "./selection-context";
+import { DEFAULT_SETTINGS, getSettings } from "../shared/storage";
 import type {
   BackgroundToClient,
   ClientToBackground,
@@ -87,6 +88,8 @@ const scope = globalThis as typeof globalThis & {
 let started = false;
 let active = false;
 let targetLang = DEFAULT_TARGET_LANG;
+let minParagraphLength = DEFAULT_SETTINGS.minParagraphLength;
+let contentOnly = DEFAULT_SETTINGS.contentOnly;
 let registry = new ParagraphRegistry();
 const gloss = createGlossController();
 let portClient: TranslatePortClient | null = null;
@@ -275,12 +278,16 @@ async function collectAndQueue(generation: number): Promise<void> {
   const body = document.body;
   if (!body) return;
 
-  const lang = await readTargetLang();
+  const prefs = await readCollectPrefs();
   if (!active || generation !== scanGeneration) return;
-  targetLang = lang;
+  targetLang = prefs.targetLang;
+  minParagraphLength = prefs.minParagraphLength;
+  contentOnly = prefs.contentOnly;
 
   const nodes = await collectParagraphs(body, {
-    targetLang: lang,
+    targetLang,
+    minLength: minParagraphLength,
+    contentOnly,
     detectLang: detectLang,
     url: document.location.href,
   });
@@ -810,6 +817,8 @@ async function enqueueNewParagraphs(generation: number): Promise<void> {
 
   const nodes = await collectParagraphs(body, {
     targetLang,
+    minLength: minParagraphLength,
+    contentOnly,
     detectLang: detectLang,
     url: document.location.href,
   });
@@ -1046,17 +1055,31 @@ function resetRateLimitAttempts(): void {
   rateLimitExhaustedRequestId = null;
 }
 
-async function readTargetLang(): Promise<string> {
+interface CollectPrefs {
+  targetLang: string;
+  minParagraphLength: number;
+  contentOnly: boolean;
+}
+
+async function readCollectPrefs(): Promise<CollectPrefs> {
   try {
-    const stored = (await chrome.storage.local.get("settings")) as {
-      settings?: { targetLang?: unknown };
+    const s = await getSettings();
+    return {
+      targetLang:
+        typeof s.targetLang === "string" && s.targetLang.length > 0
+          ? s.targetLang
+          : DEFAULT_TARGET_LANG,
+      minParagraphLength: s.minParagraphLength,
+      contentOnly: s.contentOnly,
     };
-    const value = stored?.settings?.targetLang;
-    if (typeof value === "string" && value.length > 0) return value;
   } catch {
-    // Missing or unreadable storage: fall through to the default.
+    // Missing or unreadable storage: keep the documented defaults.
+    return {
+      targetLang: DEFAULT_TARGET_LANG,
+      minParagraphLength: DEFAULT_SETTINGS.minParagraphLength,
+      contentOnly: DEFAULT_SETTINGS.contentOnly,
+    };
   }
-  return DEFAULT_TARGET_LANG;
 }
 
 /**

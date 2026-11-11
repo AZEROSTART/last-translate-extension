@@ -316,6 +316,47 @@ it("removes old translations before an SPA rescan so sources stay clean", async 
   expect(translates[1].items[0].text).toBe("First paragraph here.");
 });
 
+it("applies the saved minimum length during a full scan", async () => {
+  await chrome.storage.local.clear();
+  await chrome.storage.local.set({ settings: { minParagraphLength: 30, contentOnly: false } });
+  document.body.innerHTML = `<p>Short label</p><p>This paragraph is long enough to translate.</p>`;
+
+  const { runContentMain } = await import("../../src/content/main");
+  runContentMain();
+  const sent: any[] = [];
+  (globalThis as any).__ilmtTestPort = { send: (m: any) => sent.push(m) };
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  const translate = sent.find((m) => m.type === "translate");
+  expect(translate.items.map((item: any) => item.text)).toEqual([
+    "This paragraph is long enough to translate.",
+  ]);
+});
+
+it("keeps secondary content out of dynamic scans when contentOnly is on", async () => {
+  await chrome.storage.local.clear();
+  await chrome.storage.local.set({ settings: { minParagraphLength: 10, contentOnly: true } });
+  document.body.innerHTML = `<main><p>This is the first long paragraph.</p></main>`;
+
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  const first = sent.find((m) => m.type === "translate");
+  expect(first).toBeTruthy();
+
+  document.querySelector("main")!.insertAdjacentHTML(
+    "beforeend",
+    `<aside>This aside is long enough but should stay untranslated.</aside>`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+});
+
 it("defers closing the port until after the abort message is posted", async () => {
   document.body.innerHTML = `<p>First paragraph here.</p>`;
   const { runContentMain } = await import("../../src/content/main");
