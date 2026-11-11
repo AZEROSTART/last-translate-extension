@@ -258,6 +258,19 @@ describe("parseAnnotatedResponse", () => {
     expect(parsed.glossary.get("p_2")).toEqual([{ surface: "Alpha", meaning: "阿尔法" }]);
   });
 
+  it("falls back to translation-only when annotations split the numbered lines", () => {
+    const raw = [
+      "[1] 甲",
+      GLOSSARY_MARKER,
+      JSON.stringify({ "1": [{ surface: "Alpha", meaning: "阿尔法" }] }),
+      "[2] 乙",
+    ].join("\n");
+    const parsed = parseAnnotatedResponse(raw, items);
+    expect(parsed.translations.get("p_1")).toBe("甲");
+    expect(parsed.translations.get("p_2")).toBe("乙");
+    expect(parsed.glossary.size).toBe(0);
+  });
+
   it("throws PromptParseError when the translation part is unusable", () => {
     expect(() => parseAnnotatedResponse("[1] 甲\n" + GLOSSARY_MARKER, items)).toThrow(
       PromptParseError,

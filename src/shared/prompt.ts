@@ -286,6 +286,33 @@ function splitTrailingGlossaryJson(raw: string): { text: string; notesRaw: strin
 }
 
 /**
+ * Remove the marker and a JSON object that follows it, keeping numbered lines
+ * on both sides. Used only by the translation-only fallback.
+ */
+function removeGlossaryBlock(raw: string): string {
+  const markerIndex = raw.indexOf(GLOSSARY_MARKER);
+  if (markerIndex < 0) return raw;
+
+  const before = raw.slice(0, markerIndex);
+  const after = raw.slice(markerIndex + GLOSSARY_MARKER.length);
+  const start = after.indexOf("{");
+  if (start < 0) return `${before}${after}`;
+
+  for (let end = start + 1; end < after.length; end += 1) {
+    if (after[end] !== "}") continue;
+    try {
+      const value: unknown = JSON.parse(after.slice(start, end + 1));
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        return `${before}${after.slice(end + 1)}`;
+      }
+    } catch {
+      // Keep scanning; a `}` inside a string is not the end of the object.
+    }
+  }
+  return `${before}${after}`;
+}
+
+/**
  * Parse translations plus optional annotations. Translation parsing remains
  * strict; any glossary failure degrades to an empty map.
  */
@@ -306,7 +333,25 @@ export function parseAnnotatedResponse(raw: string, items: Segment[]): Annotated
     }
   }
 
-  const translations = parseNumberedResponse(translationRaw, ids);
-  const glossary = notesRaw.trim() ? parseGlossaryNotes(notesRaw, items) : new Map<string, GlossaryNote[]>();
+  let translations: Map<string, string>;
+  let keepAnnotations = true;
+  try {
+    translations = parseNumberedResponse(translationRaw, ids);
+  } catch (translationError) {
+    // The annotation marker occasionally lands between numbered lines. Retry
+    // the whole response for translations only; malformed annotations must
+    // never turn a usable translation into a format error.
+    try {
+      translations = parseNumberedResponse(removeGlossaryBlock(raw), ids);
+    } catch {
+      throw translationError;
+    }
+    keepAnnotations = false;
+  }
+
+  const glossary =
+    keepAnnotations && notesRaw.trim()
+      ? parseGlossaryNotes(notesRaw, items)
+      : new Map<string, GlossaryNote[]>();
   return { translations, glossary };
 }
