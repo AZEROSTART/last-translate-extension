@@ -214,6 +214,14 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     // `closed` is set before `port.disconnect()` in close(), so a
     // caller-initiated close never reaches onDisconnect.
     if (closed) return;
+    // A bfcache-evicted page closes the port and sets runtime.lastError.
+    // Read it so Chrome does not log an unchecked-error entry for an expected
+    // disconnect. The extension context may already be invalidated.
+    try {
+      void chrome.runtime.lastError;
+    } catch {
+      // Extension context invalidated; the reconnect path will fail closed.
+    }
     port = null;
     if (state === "degraded") return;
     state = "reconnecting";

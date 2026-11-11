@@ -161,6 +161,15 @@ function isTrustedSender(sender: chrome.runtime.MessageSender | undefined): bool
   return true;
 }
 
+/**
+ * Chrome reports a port closed by a page entering back/forward cache through
+ * `runtime.lastError`. The disconnect is expected, but Chrome logs an
+ * "Unchecked runtime.lastError" entry unless the callback reads it.
+ */
+function consumePortLastError(): void {
+  void chrome.runtime.lastError;
+}
+
 /** Open the options page, falling back to a normal tab if that is unavailable. */
 function openOptionsPage(): void {
   try {
@@ -269,6 +278,7 @@ chrome.runtime.onConnect.addListener((port) => {
     // `abort` never arrived (tab close, reload, service-worker teardown). The
     // content side also defers `close()` one macrotask so `abort` wins first.
     port.onDisconnect.addListener(() => {
+      consumePortLastError();
       if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
     });
   } else if (port.name === "ilmt-chat") {
@@ -289,6 +299,7 @@ chrome.runtime.onConnect.addListener((port) => {
     });
 
     port.onDisconnect.addListener(() => {
+      consumePortLastError();
       if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
     });
   }

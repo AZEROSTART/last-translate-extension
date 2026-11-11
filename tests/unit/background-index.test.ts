@@ -26,9 +26,20 @@ function installChrome() {
   const contextMenusRemoveAll = vi.fn((callback?: () => void) => {
     callback?.();
   });
+  let lastErrorValue: unknown;
+  let lastErrorReadCount = 0;
   (globalThis as any).chrome = {
     runtime: {
       id: "test-extension-id",
+      get lastError() {
+        lastErrorReadCount += 1;
+        const value = lastErrorValue;
+        lastErrorValue = undefined;
+        return value;
+      },
+      set lastError(value: unknown) {
+        lastErrorValue = value;
+      },
       onConnect: { addListener: (cb: Listener) => onConnect.push(cb) },
       onMessage: { addListener: (cb: Listener) => onMessage.push(cb) },
       onInstalled: { addListener: (cb: Listener) => onInstalled.push(cb) },
@@ -66,6 +77,10 @@ function installChrome() {
     tabsCreate,
     contextMenusCreate,
     contextMenusRemoveAll,
+    setLastError: (value: unknown) => {
+      lastErrorValue = value;
+    },
+    lastErrorReadCount: () => lastErrorReadCount,
   };
 }
 
@@ -125,6 +140,22 @@ it("cancels the tab's work when the chat port disconnects", async () => {
   port.disconnectListeners[0]();
   expect(cancelTab).toHaveBeenCalledWith(7);
 });
+
+it.each(["ilmt-translate", "ilmt-chat"] as const)(
+  "consumes the bfcache lastError when the %s port disconnects",
+  async (name) => {
+    const { onConnect, setLastError, lastErrorReadCount } = installChrome();
+    await importIndexAndSpyOnQueue();
+
+    const port = fakePort(name, 42);
+    onConnect[0](port);
+    setLastError({ message: "The page keeping the extension port is moved into back/forward cache" });
+
+    port.disconnectListeners[0]();
+
+    expect(lastErrorReadCount()).toBeGreaterThan(0);
+  },
+);
 
 it("does not cancel when the sender has no tab id", async () => {
   const { onConnect } = installChrome();

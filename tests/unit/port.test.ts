@@ -125,6 +125,33 @@ describe("createTranslatePort", () => {
 });
 
 describe("createTranslatePort disconnect signaling", () => {
+  it("consumes runtime.lastError when the page's port disconnects into bfcache", () => {
+    const runtime = (globalThis as any).chrome.runtime;
+    let reads = 0;
+    const original = Object.getOwnPropertyDescriptor(runtime, "lastError");
+    Object.defineProperty(runtime, "lastError", {
+      configurable: true,
+      get() {
+        reads += 1;
+        return { message: "The page keeping the extension port is moved into back/forward cache" };
+      },
+    });
+
+    try {
+      const { port, disconnectListeners } = capturePort();
+      const p = createTranslatePort({ connect: () => port, ...callbacks() });
+      p.send({ type: "ping" });
+
+      disconnectListeners[0]();
+
+      expect(reads).toBeGreaterThan(0);
+      p.close();
+    } finally {
+      if (original) Object.defineProperty(runtime, "lastError", original);
+      else delete runtime.lastError;
+    }
+  });
+
   it("fires onDisconnect exactly once per server disconnect and enters reconnecting", () => {
     const { port, disconnectListeners } = capturePort();
     const onDisconnect = vi.fn();
