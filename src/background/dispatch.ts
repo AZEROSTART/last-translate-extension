@@ -14,20 +14,26 @@ import type {
   ChatMessage,
   ClientToBackground,
   ErrorCode,
+  GlossaryNote,
   ProviderConfig,
   Settings,
   TranslateItem,
 } from "../shared/types";
 import { getActiveProvider, getSettings, DEFAULT_SETTINGS } from "../shared/storage";
 import {
+  buildEffectiveSystemPrompt,
   buildTranslateMessages,
+  GLOSSARY_MARKER,
   groupSegments,
+  parseAnnotatedResponse,
+  parseGlossaryNotes,
   parseNumberedResponse,
   promptVersionFor,
   PromptParseError,
 } from "../shared/prompt";
 import { ProviderError } from "../shared/errors";
 import { buildCacheKey, TranslationCache } from "./cache";
+import type { CachedTranslation } from "./cache";
 import { RequestQueue } from "./queue";
 import { getAdapter, type ProviderAdapter } from "../providers";
 
@@ -207,6 +213,80 @@ export function createSingleSegmentPrefixStripper(): SingleSegmentPrefixStripper
   return { push, finish };
 }
 
+/** Translation plus the optional annotations returned with it. */
+export interface TranslationOutput {
+  text: string;
+  glossary: GlossaryNote[];
+}
+
+export interface AnnotatedStreamFilter {
+  /** Feed one raw chunk; returns text safe to emit now (possibly ""). */
+  push(chunk: string): string;
+  /** Finish the stream and return the complete translation plus note JSON. */
+  finish(): { text: string; notesRaw: string };
+}
+
+/**
+ * Streaming filter for a one-item annotated response. It strips `[1] `, emits
+ * ordinary text immediately, and holds back only a suffix that could still be
+ * the beginning of the glossary marker. Once the full marker arrives, all
+ * following characters are collected as raw notes JSON.
+ */
+export function createAnnotatedStreamFilter(): AnnotatedStreamFilter {
+  const prefix = createSingleSegmentPrefixStripper();
+  let text = "";
+  let pending = "";
+  let notesRaw = "";
+  let inNotes = false;
+
+  function markerPrefixLength(value: string): number {
+    const max = Math.min(GLOSSARY_MARKER.length - 1, value.length);
+    for (let length = max; length > 0; length -= 1) {
+      if (value.endsWith(GLOSSARY_MARKER.slice(0, length))) return length;
+    }
+    return 0;
+  }
+
+  function consume(chunk: string): string {
+    if (inNotes) {
+      notesRaw += chunk;
+      return "";
+    }
+
+    pending += chunk;
+    const markerIndex = pending.indexOf(GLOSSARY_MARKER);
+    if (markerIndex >= 0) {
+      const emit = pending.slice(0, markerIndex);
+      text += emit;
+      notesRaw = pending.slice(markerIndex + GLOSSARY_MARKER.length);
+      pending = "";
+      inNotes = true;
+      return emit;
+    }
+
+    const hold = markerPrefixLength(pending);
+    const emit = pending.slice(0, pending.length - hold);
+    pending = pending.slice(pending.length - hold);
+    text += emit;
+    return emit;
+  }
+
+  function push(chunk: string): string {
+    return consume(prefix.push(chunk));
+  }
+
+  function finish(): { text: string; notesRaw: string } {
+    consume(prefix.finish());
+    if (!inNotes) {
+      text += pending;
+      pending = "";
+    }
+    return { text, notesRaw: notesRaw.trim() };
+  }
+
+  return { push, finish };
+}
+
 /**
  * Route one translate request: look up the cache, group the misses, run each
  * group through the shared queue (with the global retry policy), and report
@@ -247,16 +327,18 @@ export async function handleTranslate(
     return;
   }
 
-  const systemPrompt = provider.overrides?.systemPrompt?.trim()
+  const glossaryEnabled = settings.glossaryEnabled !== false;
+  const baseSystemPrompt = provider.overrides?.systemPrompt?.trim()
     ? provider.overrides.systemPrompt
     : settings.systemPrompt.trim()
       ? settings.systemPrompt
       : DEFAULT_SETTINGS.systemPrompt;
+  const systemPrompt = buildEffectiveSystemPrompt(baseSystemPrompt, glossaryEnabled);
   const promptVersion = await promptVersionFor(systemPrompt);
   const temperature = provider.overrides?.temperature ?? settings.temperature;
 
   const keyById = new Map<string, string>();
-  const resultMap = new Map<string, string>();
+  const resultMap = new Map<string, TranslationOutput>();
   const misses: TranslateItem[] = [];
 
   for (const item of msg.items) {
@@ -267,15 +349,15 @@ export async function handleTranslate(
       modelId: provider.model,
       promptVersion,
     });
-    let cached: string | undefined;
+    let cached: CachedTranslation | undefined;
     try {
       cached = await deps.cache.get(key);
     } catch {
       // A cache read failure is simply a miss; the provider can still answer.
       cached = undefined;
     }
-    if (cached !== undefined && cached !== "") {
-      resultMap.set(item.id, cached);
+    if (cached !== undefined && cached.text !== "") {
+      resultMap.set(item.id, { text: cached.text, glossary: cached.glossary ?? [] });
     } else {
       keyById.set(item.id, key);
       misses.push(item);
@@ -300,6 +382,7 @@ export async function handleTranslate(
         msg.tabId,
         send,
         true,
+        glossaryEnabled,
       ),
     ),
   );
@@ -324,6 +407,7 @@ export async function handleTranslate(
             msg.tabId,
             send,
             false,
+            glossaryEnabled,
           ),
         ),
       );
@@ -336,16 +420,16 @@ export async function handleTranslate(
   let aborted = false;
   for (const outcome of outcomes) {
     if (outcome.ok) {
-      for (const [id, text] of outcome.map) {
+      for (const [id, output] of outcome.map) {
         const key = keyById.get(id);
         if (key) {
           try {
-            await deps.cache.put(key, text, { modelId: provider.model });
+            await deps.cache.put(key, output, { modelId: provider.model });
           } catch {
             // A cache write failure is non-fatal: still deliver the result.
           }
         }
-        resultMap.set(id, text);
+        resultMap.set(id, output);
       }
     } else if (isAborted(outcome.err)) {
       aborted = true;
@@ -359,7 +443,12 @@ export async function handleTranslate(
   if (!aborted && resultMap.size > 0) {
     const items = msg.items
       .filter((item) => resultMap.has(item.id))
-      .map((item) => ({ id: item.id, text: resultMap.get(item.id)! }));
+      .map((item) => {
+        const output = resultMap.get(item.id)!;
+        return output.glossary.length > 0
+          ? { id: item.id, text: output.text, glossary: output.glossary }
+          : { id: item.id, text: output.text };
+      });
     send({ type: "result", requestId, items });
   }
   if (!aborted) send({ type: "finish", requestId });
@@ -367,7 +456,7 @@ export async function handleTranslate(
 
 /** Result of one queued translate group, normalized so callers merge halves. */
 type GroupOutcome =
-  | { ok: true; ids: string[]; map: Map<string, string> }
+  | { ok: true; ids: string[]; map: Map<string, TranslationOutput> }
   | { ok: false; ids: string[]; err: unknown };
 
 /**
@@ -385,10 +474,11 @@ function enqueueTranslateGroup(
   tabId: number,
   send: (m: BackgroundToClient) => void,
   allowSplit: boolean,
+  glossaryEnabled: boolean,
 ): Promise<GroupOutcome> {
   const ids = group.map((item) => item.id);
   return deps.queue
-    .enqueue<Map<string, string>>({
+    .enqueue<Map<string, TranslationOutput>>({
       tabId,
       priority: "translate",
       run: (signal) =>
@@ -404,6 +494,7 @@ function enqueueTranslateGroup(
           signal,
           send,
           allowSplit,
+          glossaryEnabled,
         ),
     })
     .then(
@@ -486,7 +577,8 @@ async function runGroup(
   signal: AbortSignal,
   send: (m: BackgroundToClient) => void,
   allowSplit: boolean,
-): Promise<Map<string, string>> {
+  glossaryEnabled: boolean,
+): Promise<Map<string, TranslationOutput>> {
   const messages = buildTranslateMessages(group, targetLang, systemPrompt);
   const single = group.length === 1 ? group[0].id : undefined;
 
@@ -495,6 +587,20 @@ async function runGroup(
     if (attempt > 0) await deps.sleep(RETRY_BACKOFF_MS[attempt - 1]);
     try {
       if (single !== undefined) {
+        if (glossaryEnabled) {
+          const filter = createAnnotatedStreamFilter();
+          for await (const chunk of deps.adapter.streamCompletion(provider, { messages, temperature, signal })) {
+            const text = filter.push(chunk);
+            if (text !== "") send({ type: "delta", requestId, id: single, text });
+          }
+          const { text: joined, notesRaw } = filter.finish();
+          if (joined.trim() === "") {
+            throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
+          }
+          const glossary = parseGlossaryNotes(notesRaw, group).get(single) ?? [];
+          return new Map([[single, { text: joined, glossary }]]);
+        }
+
         const strip = createSingleSegmentPrefixStripper();
         let joined = "";
         for await (const chunk of deps.adapter.streamCompletion(provider, { messages, temperature, signal })) {
@@ -508,17 +614,32 @@ async function runGroup(
         if (joined.trim() === "") {
           throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
         }
-        return new Map([[single, joined]]);
+        return new Map([[single, { text: joined, glossary: [] }]]);
       }
 
       const result = await deps.adapter.complete(provider, { messages, temperature, signal });
+      if (glossaryEnabled) {
+        const parsed = parseAnnotatedResponse(result.text, group);
+        const map = new Map<string, TranslationOutput>();
+        for (const item of group) {
+          const text = parsed.translations.get(item.id)!;
+          if (text === "") {
+            throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
+          }
+          map.set(item.id, { text, glossary: parsed.glossary.get(item.id) ?? [] });
+        }
+        return map;
+      }
+
       const map = parseNumberedResponse(result.text, ids);
-      for (const text of map.values()) {
+      const outputs = new Map<string, TranslationOutput>();
+      for (const [id, text] of map) {
         if (text === "") {
           throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
         }
+        outputs.set(id, { text, glossary: [] });
       }
-      return map;
+      return outputs;
     } catch (err) {
       // Spec §11: an over-long original group is handed back to the dispatcher,
       // which re-queues each half as its own task. A single-item group or an

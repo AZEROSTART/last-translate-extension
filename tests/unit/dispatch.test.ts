@@ -2,6 +2,7 @@ import { it, expect, vi, afterEach } from "vitest";
 import {
   handleTranslate,
   handleChat,
+  createAnnotatedStreamFilter,
   createDeps,
   createSingleSegmentPrefixStripper,
   isContextLengthError,
@@ -11,6 +12,7 @@ import type { Deps } from "../../src/background/dispatch";
 import type { CompletionRequest, CompletionResult, ProviderAdapter } from "../../src/providers";
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey } from "../../src/background/cache";
+import type { CachedTranslation } from "../../src/background/cache";
 import { DEFAULT_SETTINGS } from "../../src/shared/storage";
 import { promptVersionFor } from "../../src/shared/prompt";
 import type { ProviderConfig, Settings } from "../../src/shared/types";
@@ -61,7 +63,9 @@ afterEach(() => {
 });
 
 it("returns cached results without calling the provider", async () => {
-  const { d, sent, send } = deps({ cache: { get: async () => "缓存的译文", put: async () => {} } });
+  const { d, sent, send } = deps({
+    cache: { get: async () => ({ text: "缓存的译文", glossary: [] }), put: async () => {} },
+  });
   await handleTranslate(d, { type: "translate", requestId: "r1", tabId: 1, items: items(1) }, send);
   expect(d.adapter.complete).not.toHaveBeenCalled();
   expect(d.adapter.streamCompletion).not.toHaveBeenCalled();
@@ -115,6 +119,144 @@ it("strips a prefix split across stream chunks in delta and result", async () =>
   await handleTranslate(d, { type: "translate", requestId: "rs", tabId: 1, items: items(1) }, send);
   expect(sent.map((m) => m.type)).toEqual(["delta", "delta", "result", "finish"]);
   expect(sent.find((m) => m.type === "result").items).toEqual([{ id: "p_1", text: "你好" }]);
+});
+
+it("streams only translation text and returns glossary notes", async () => {
+  const streamCompletion = vi.fn(async function* () {
+    yield "[1] 小工具";
+    yield "比制造者存在得更久。\n<<<ILMT_";
+    yield 'GLOSSARY>>>\n{"1":[{"surface":"outlive","meaning":"比……存在得更久"}]}';
+  });
+  const put = vi.fn(async () => {});
+  const settingsWithGlossary = { ...settings, glossaryEnabled: true };
+  const { d, sent, send } = deps({
+    getSettings: async () => settingsWithGlossary,
+    adapter: fakeAdapter({ streamCompletion }),
+    cache: { get: async () => undefined, put },
+  });
+  await handleTranslate(
+    d,
+    {
+      type: "translate",
+      requestId: "rg1",
+      tabId: 1,
+      items: [{ id: "p_1", text: "Small tools outlive.", hash: "h" }],
+    },
+    send,
+  );
+
+  expect(sent.filter((m) => m.type === "delta").map((m) => m.text)).toEqual([
+    "小工具",
+    "比制造者存在得更久。\n",
+  ]);
+  expect(sent.find((m) => m.type === "result").items).toEqual([
+    {
+      id: "p_1",
+      text: "小工具比制造者存在得更久。\n",
+      glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+    },
+  ]);
+  expect(put).toHaveBeenCalledWith(
+    expect.any(String),
+    {
+      text: "小工具比制造者存在得更久。\n",
+      glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+    },
+    { modelId: "m" },
+  );
+});
+
+it("returns glossary notes for a multi-segment group", async () => {
+  const complete = vi.fn(async () => ({
+    text:
+      "[1] 甲\n[2] 乙\n<<<ILMT_GLOSSARY>>>\n" +
+      JSON.stringify({ "2": [{ surface: "hello 2", meaning: "你好二" }] }),
+  }));
+  const { d, sent, send } = deps({
+    getSettings: async () => ({ ...settings, glossaryEnabled: true }),
+    adapter: fakeAdapter({ complete }),
+    cache: { get: async () => undefined, put: vi.fn(async () => {}) },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rg1b", tabId: 1, items: items(2) }, send);
+
+  expect(sent.find((m) => m.type === "result").items).toEqual([
+    { id: "p_1", text: "甲" },
+    { id: "p_2", text: "乙", glossary: [{ surface: "hello 2", meaning: "你好二" }] },
+  ]);
+});
+
+it("returns translation without notes when the glossary JSON is broken", async () => {
+  const settingsWithGlossary = { ...settings, glossaryEnabled: true };
+  const complete = vi.fn(async () => ({
+    text: "[1] 甲\n[2] 乙\n<<<ILMT_GLOSSARY>>>\n{broken",
+  }));
+  const { d, sent, send } = deps({
+    getSettings: async () => settingsWithGlossary,
+    adapter: fakeAdapter({ complete }),
+    cache: { get: async () => undefined, put: vi.fn(async () => {}) },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rg2", tabId: 1, items: items(2) }, send);
+
+  expect(sent.find((m) => m.type === "result").items).toEqual([
+    { id: "p_1", text: "甲" },
+    { id: "p_2", text: "乙" },
+  ]);
+});
+
+it("uses cached glossary without calling the provider", async () => {
+  const cached = { text: "缓存的译文", glossary: [{ surface: "hello 1", meaning: "缓存" }] };
+  const { d, sent, send } = deps({
+    getSettings: async () => ({ ...settings, glossaryEnabled: true }),
+    cache: { get: async () => cached, put: vi.fn(async () => {}) },
+  });
+  await handleTranslate(d, { type: "translate", requestId: "rg3", tabId: 1, items: items(1) }, send);
+
+  expect(d.adapter.complete).not.toHaveBeenCalled();
+  expect(d.adapter.streamCompletion).not.toHaveBeenCalled();
+  expect(sent.find((m) => m.type === "result").items).toEqual([
+    { id: "p_1", text: "缓存的译文", glossary: cached.glossary },
+  ]);
+});
+
+it("changes the cache key when glossary is enabled", async () => {
+  const keys: string[] = [];
+  const cache = {
+    get: async (key: string) => {
+      keys.push(key);
+      return undefined;
+    },
+    put: async () => {},
+  };
+  const off = deps({
+    getSettings: async () => ({ ...settings, glossaryEnabled: false }),
+    cache,
+  });
+  await handleTranslate(
+    off.d,
+    { type: "translate", requestId: "rg4", tabId: 1, items: items(1) },
+    off.send,
+  );
+  const on = deps({
+    getSettings: async () => ({ ...settings, glossaryEnabled: true }),
+    cache,
+  });
+  await handleTranslate(
+    on.d,
+    { type: "translate", requestId: "rg5", tabId: 1, items: items(1) },
+    on.send,
+  );
+  expect(keys[0]).not.toBe(keys[1]);
+});
+
+it("strips a glossary marker split across stream chunks", () => {
+  const filter = createAnnotatedStreamFilter();
+  expect(filter.push("[1] 你")).toBe("你");
+  expect(filter.push("好\n<<<ILMT_")).toBe("好\n");
+  expect(filter.push('GLOSSARY>>>\n{"1":[{"surface":"好","meaning":"good"}]}')).toBe("");
+  expect(filter.finish()).toEqual({
+    text: "你好\n",
+    notesRaw: '{"1":[{"surface":"好","meaning":"good"}]}',
+  });
 });
 
 it("emits error with the affected ids when the model returns a bad shape", async () => {
@@ -205,7 +347,7 @@ it("translates a multi-segment group, caches each item, and uses provider overri
 });
 
 it("builds the cache key from text, target lang, provider, model and effective prompt version", async () => {
-  const get = vi.fn<(key: string) => Promise<string | undefined>>(async () => undefined);
+  const get = vi.fn<(key: string) => Promise<CachedTranslation | undefined>>(async () => undefined);
   const { d } = deps({ cache: { get, put: vi.fn(async () => {}) } });
   await handleTranslate(d, { type: "translate", requestId: "r10", tabId: 1, items: items(1) }, () => {});
   const expected = await buildCacheKey({
