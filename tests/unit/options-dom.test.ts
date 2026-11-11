@@ -478,8 +478,8 @@ describe("global settings", () => {
       modelId: p1.model,
       promptVersion: "v1",
     });
-    await cache.put(key, "旧译文", { modelId: p1.model });
-    expect(await cache.get(key)).toBe("旧译文");
+    await cache.put(key, { text: "旧译文", glossary: [] }, { modelId: p1.model });
+    expect(await cache.get(key)).toEqual({ text: "旧译文", glossary: [] });
 
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     await seed({ providers: [p1], activeProviderId: p1.id });

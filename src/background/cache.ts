@@ -1,3 +1,5 @@
+import type { GlossaryNote } from "../shared/types";
+
 /**
  * Persistent translation cache backed by IndexedDB.
  *
@@ -20,6 +22,15 @@ function textBytes(text: string): number {
   return encoder.encode(text).byteLength;
 }
 
+export interface CachedTranslation {
+  text: string;
+  glossary: GlossaryNote[];
+}
+
+function recordBytes(record: Pick<CacheRecord, "text" | "glossary">): number {
+  return textBytes(record.text) + textBytes(JSON.stringify(record.glossary ?? []));
+}
+
 export interface CacheKeyInput {
   sourceText: string;
   targetLang: string;
@@ -38,6 +49,7 @@ export interface TranslationCacheOptions {
 interface CacheRecord {
   key: string;
   text: string;
+  glossary?: GlossaryNote[];
   modelId: string;
   createdAt: number;
   lastUsedAt: number;
@@ -107,7 +119,7 @@ export class TranslationCache {
     this.maxBytes = Math.max(0, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
   }
 
-  async get(key: string): Promise<string | undefined> {
+  async get(key: string): Promise<CachedTranslation | undefined> {
     const db = await this.open();
     const record = await withStore(db, "readonly", store => request<CacheRecord | undefined>(store.get(key)));
     if (!record) return undefined;
@@ -119,14 +131,15 @@ export class TranslationCache {
 
     record.lastUsedAt = this.nextLastUse();
     await withStore(db, "readwrite", store => request(store.put(record)));
-    return record.text;
+    return { text: record.text, glossary: record.glossary ?? [] };
   }
 
-  async put(key: string, text: string, meta: { modelId: string }): Promise<void> {
+  async put(key: string, value: CachedTranslation, meta: { modelId: string }): Promise<void> {
     const now = Date.now();
     const record: CacheRecord = {
       key,
-      text,
+      text: value.text,
+      glossary: value.glossary ?? [],
       modelId: meta.modelId,
       createdAt: now,
       lastUsedAt: this.nextLastUse(),
@@ -136,7 +149,7 @@ export class TranslationCache {
     await withStore(db, "readwrite", store => request(store.put(record)));
 
     const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
-    let remainingBytes = records.reduce((total, entry) => total + textBytes(entry.text), 0);
+    let remainingBytes = records.reduce((total, entry) => total + recordBytes(entry), 0);
     if (records.length <= this.maxEntries && remainingBytes <= this.maxBytes) return;
 
     records.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.key.localeCompare(b.key));
@@ -146,7 +159,7 @@ export class TranslationCache {
       if (remainingCount <= this.maxEntries && remainingBytes <= this.maxBytes) break;
       doomed.push(entry.key);
       remainingCount--;
-      remainingBytes -= textBytes(entry.text);
+      remainingBytes -= recordBytes(entry);
     }
 
     await withStore(db, "readwrite", store => {
@@ -163,7 +176,7 @@ export class TranslationCache {
   async stats(): Promise<{ count: number; bytes: number }> {
     const db = await this.open();
     const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
-    const bytes = records.reduce((total, record) => total + textBytes(record.text), 0);
+    const bytes = records.reduce((total, record) => total + recordBytes(record), 0);
     return { count: records.length, bytes };
   }
 
