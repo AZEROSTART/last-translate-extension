@@ -5,7 +5,7 @@ import {
   maskKey,
   promptVersionFor,
   validateProvider,
-} from "../../src/options/providers";
+} from "../../src/settings/provider-form";
 import { DEEPSEEK_PRESET } from "../../src/shared/providers";
 
 const base: ProviderConfig = {

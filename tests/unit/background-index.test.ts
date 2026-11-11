@@ -20,7 +20,7 @@ function installChrome() {
   const storageSet = vi.fn(async () => {});
   const tabsQuery = vi.fn(async () => [{ id: 42 }]);
   const tabsSendMessage = vi.fn(async () => undefined);
-  const openOptionsPage = vi.fn(async () => {});
+  const openPopup = vi.fn(async () => {});
   const tabsCreate = vi.fn(async () => ({}));
   const contextMenusCreate = vi.fn();
   const contextMenusRemoveAll = vi.fn((callback?: () => void) => {
@@ -43,9 +43,9 @@ function installChrome() {
       onConnect: { addListener: (cb: Listener) => onConnect.push(cb) },
       onMessage: { addListener: (cb: Listener) => onMessage.push(cb) },
       onInstalled: { addListener: (cb: Listener) => onInstalled.push(cb) },
-      openOptionsPage,
       getURL: (path: string) => `chrome-extension://test-extension-id/${path}`,
     },
+    action: { openPopup },
     commands: { onCommand: { addListener: (cb: Listener) => onCommand.push(cb) } },
     contextMenus: {
       create: contextMenusCreate,
@@ -73,7 +73,7 @@ function installChrome() {
     storageSet,
     tabsQuery,
     tabsSendMessage,
-    openOptionsPage,
+    openPopup,
     tabsCreate,
     contextMenusCreate,
     contextMenusRemoveAll,
@@ -309,52 +309,52 @@ it("swallows sendMessage rejections when no content script is listening", async 
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
-it("opens the options page for a trusted top-frame tab sender", async () => {
-  const { onMessage, openOptionsPage } = installChrome();
+it("opens the popup settings for a trusted top-frame tab sender", async () => {
+  const { onMessage, openPopup } = installChrome();
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 0 });
 
-  expect(openOptionsPage).toHaveBeenCalledTimes(1);
+  expect(openPopup).toHaveBeenCalledTimes(1);
 });
 
-it("opens the options page for an extension-page sender without a tab", async () => {
-  const { onMessage, openOptionsPage } = installChrome();
+it("opens the popup settings for an extension-page sender without a tab", async () => {
+  const { onMessage, openPopup } = installChrome();
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "test-extension-id" });
 
-  expect(openOptionsPage).toHaveBeenCalledTimes(1);
+  expect(openPopup).toHaveBeenCalledTimes(1);
 });
 
 it("ignores open-options from another extension", async () => {
-  const { onMessage, openOptionsPage } = installChrome();
+  const { onMessage, openPopup } = installChrome();
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "someone-else", tab: { id: 9 }, frameId: 0 });
 
-  expect(openOptionsPage).not.toHaveBeenCalled();
+  expect(openPopup).not.toHaveBeenCalled();
 });
 
 it("ignores open-options from a non-top frame", async () => {
-  const { onMessage, openOptionsPage } = installChrome();
+  const { onMessage, openPopup } = installChrome();
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 3 });
 
-  expect(openOptionsPage).not.toHaveBeenCalled();
+  expect(openPopup).not.toHaveBeenCalled();
 });
 
-it("falls back to a tab when opening the options page rejects", async () => {
-  const { onMessage, openOptionsPage, tabsCreate } = installChrome();
-  openOptionsPage.mockRejectedValueOnce(new Error("no options page"));
+it("falls back to the popup page when opening the popup rejects", async () => {
+  const { onMessage, openPopup, tabsCreate } = installChrome();
+  openPopup.mockRejectedValueOnce(new Error("no popup"));
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "test-extension-id", tab: { id: 9 }, frameId: 0 });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   expect(tabsCreate).toHaveBeenCalledWith({
-    url: "chrome-extension://test-extension-id/options.html",
+    url: "chrome-extension://test-extension-id/popup.html?mode=page",
   });
 });
 
@@ -407,16 +407,16 @@ it("keeps the chat port working for a top-frame tab sender", async () => {
   expect(port.onMessage.addListener).toHaveBeenCalledTimes(1);
 });
 
-it("falls back to a tab when openOptionsPage is unavailable", async () => {
+it("falls back to the popup page when openPopup is unavailable", async () => {
   const { onMessage, tabsCreate } = installChrome();
-  delete (globalThis as any).chrome.runtime.openOptionsPage;
+  delete (globalThis as any).chrome.action.openPopup;
   await importIndexAndSpyOnQueue();
 
   onMessage[0]({ type: "open-options" }, { id: "test-extension-id" });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   expect(tabsCreate).toHaveBeenCalledWith({
-    url: "chrome-extension://test-extension-id/options.html",
+    url: "chrome-extension://test-extension-id/popup.html?mode=page",
   });
 });
 

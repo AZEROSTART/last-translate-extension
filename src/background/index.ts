@@ -170,27 +170,31 @@ function consumePortLastError(): void {
   void chrome.runtime.lastError;
 }
 
-/** Open the options page, falling back to a normal tab if that is unavailable. */
-function openOptionsPage(): void {
+/**
+ * Open the popup settings. `action.openPopup` is the preferred path; when the
+ * Chrome version or the user-gesture requirement blocks it, open the same UI in
+ * a normal tab via `popup.html?mode=page`.
+ */
+function openSettings(): void {
   try {
-    if (typeof chrome.runtime.openOptionsPage !== "function") {
-      createOptionsTab();
+    if (typeof chrome.action?.openPopup !== "function") {
+      createSettingsTab();
       return;
     }
-    const opening = chrome.runtime.openOptionsPage();
+    const opening = chrome.action.openPopup();
     if (opening && typeof opening.catch === "function") {
-      void opening.catch(() => createOptionsTab());
+      void opening.catch(() => createSettingsTab());
     }
     return;
   } catch {
     // Older Chrome or a restricted context; use the tab fallback.
   }
-  createOptionsTab();
+  createSettingsTab();
 }
 
-function createOptionsTab(): void {
+function createSettingsTab(): void {
   try {
-    void chrome.tabs.create({ url: chrome.runtime.getURL("options.html") }).catch(() => {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?mode=page") }).catch(() => {
       // Nowhere to open the page; never surface this to the sender.
     });
   } catch {
@@ -212,7 +216,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
   if (!isTrustedSender(sender)) return;
 
   if (msg.type === "open-options") {
-    openOptionsPage();
+    openSettings();
     return;
   }
 

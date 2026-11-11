@@ -21,6 +21,7 @@ describe("build output", () => {
     const m = JSON.parse(readFileSync("dist/manifest.json", "utf8"));
     expect(m.action).toBeDefined();
     expect(m.key).toBeUndefined();
+    expect(m.options_page).toBeUndefined();
   });
 
   it("gives every command a description so Chrome can load the extension", () => {
@@ -31,9 +32,10 @@ describe("build output", () => {
   });
 
   it("emits every entry file", () => {
-    for (const f of ["background.js", "content_guard.js", "content_main.js", "inject.css", "panel.html", "options.html", "popup.html", "rules/dnr.json", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png"]) {
+    for (const f of ["background.js", "content_guard.js", "content_main.js", "inject.css", "panel.html", "popup.html", "rules/dnr.json", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png"]) {
       expect(existsSync(`dist/${f}`), f).toBe(true);
     }
+    expect(existsSync("dist/options.html")).toBe(false);
   });
 
   it("wires the toolbar popup", () => {

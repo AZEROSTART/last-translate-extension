@@ -251,23 +251,27 @@ test.describe("loaded extension", () => {
     }
   });
 
-  test("shows granularity defaults in options and the active provider in popup", async () => {
+  test("shows settings sections and the active provider in the popup", async () => {
     try {
       server = await startMockServer();
       extension = await launchExtension();
       await seedSettings(extension.worker, server.origin);
       const extensionId = new URL(extension.worker.url()).host;
 
-      const optionsPage = await extension.context.newPage();
-      await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
-      await expect(optionsPage.locator(".global-minParagraphLength")).toHaveValue("10");
-      await expect(optionsPage.locator(".global-contentOnly")).toBeChecked();
-
       const popupPage = await extension.context.newPage();
       await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
       await expect(popupPage.locator(".popup-title")).toHaveText("翻译设置");
-      await expect(popupPage.locator(".popup-provider-select")).toContainText("E2E");
-      await expect(popupPage.locator(".popup-model")).toHaveValue("mock-model");
+      await expect(popupPage.locator("details.settings-section")).toHaveCount(4);
+      await expect(popupPage.locator(".global-minParagraphLength")).toHaveValue("10");
+      await expect(popupPage.locator(".global-contentOnly")).toBeChecked();
+      await expect(popupPage.locator(".settings-active-provider")).toContainText("E2E");
+      await expect(popupPage.locator(".settings-model-summary")).toContainText("mock-model");
+
+      await popupPage.locator(".settings-manage-models").click();
+      await expect(popupPage.locator(".provider-card")).toHaveCount(1);
+      await expect(popupPage.locator(".provider-card")).toContainText("E2E");
+      await popupPage.locator(".settings-back").click();
+      await expect(popupPage.locator("details.settings-section")).toHaveCount(4);
     } finally {
       await cleanup();
     }

@@ -75,7 +75,6 @@ export default defineConfig({
         content_main: resolve(import.meta.dirname, "src/content/main.ts"),
         panel: resolve(import.meta.dirname, "src/panel/index.html"),
         popup: resolve(import.meta.dirname, "src/popup/index.html"),
-        options: resolve(import.meta.dirname, "src/options/index.html"),
         // Manifest `content_scripts[].css` entry: page CSP cannot block it.
         inject: resolve(import.meta.dirname, "src/styles/inject.css"),
       },
@@ -89,7 +88,7 @@ export default defineConfig({
     environment: "jsdom",
     include: ["tests/unit/**/*.test.ts"],
     setupFiles: ["./tests/setup/chrome-mock.ts"],
-    // The panel/options bundles import their CSS with `?inline`; without CSS
+    // The panel/popup bundles import their CSS with `?inline`; without CSS
     // processing the module resolves to an empty string in jsdom.
     css: true,
   },

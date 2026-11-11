@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS, getSettings } from "../../src/shared/storage";
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey, TranslationCache } from "../../src/background/cache";
 import { buildEffectiveSystemPrompt } from "../../src/shared/prompt";
-import { promptVersionFor } from "../../src/options/providers";
+import { promptVersionFor } from "../../src/settings/provider-form";
 
 vi.mock("../../src/providers", () => ({
   listModels: vi.fn(),
@@ -65,8 +65,10 @@ async function seed(partial: Partial<Settings> = {}): Promise<void> {
 
 async function boot(): Promise<ProvidersMock> {
   const providers = (await import("../../src/providers")) as unknown as ProvidersMock;
-  await import("../../src/options/main");
-  await (globalThis as unknown as { __ilmtOptions: { ready: Promise<void> } }).__ilmtOptions.ready;
+  await import("../../src/popup/main");
+  await (globalThis as unknown as { __ilmtPopup: { ready: Promise<void> } }).__ilmtPopup.ready;
+  const manage = document.querySelector(".settings-manage-models") as HTMLElement | null;
+  manage?.click();
   return providers;
 }
 
@@ -86,19 +88,26 @@ function setValue(
   el.value = value;
 }
 
+function setKind(value: "custom" | "deepseek"): void {
+  const kind = document.querySelector(".pf-kind") as HTMLSelectElement | null;
+  if (!kind) throw new Error("missing .pf-kind");
+  kind.value = value;
+  kind.dispatchEvent(new Event("change"));
+}
+
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   document.body.innerHTML = `<div id="root"></div>`;
-  delete (globalThis as unknown as { __ilmtOptions?: unknown }).__ilmtOptions;
+  delete (globalThis as unknown as { __ilmtPopup?: unknown }).__ilmtPopup;
   await chrome.storage.local.clear();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.innerHTML = "";
-  document.querySelectorAll("style[data-ilmt-options]").forEach((el) => el.remove());
-  delete (globalThis as unknown as { __ilmtOptions?: unknown }).__ilmtOptions;
+  document.querySelectorAll("style[data-ilmt-popup]").forEach((el) => el.remove());
+  delete (globalThis as unknown as { __ilmtPopup?: unknown }).__ilmtPopup;
   delete document.documentElement.dataset.theme;
 });
 
@@ -121,6 +130,7 @@ describe("provider list", () => {
     await boot();
 
     click(".provider-add");
+    setKind("custom");
     setValue(".pf-name", "新配置");
     setValue(".pf-baseURL", "https://new.test");
     setValue(".pf-apiKey", "sk-1234567890");
@@ -173,6 +183,7 @@ describe("provider list", () => {
     await boot();
 
     click(".provider-add");
+    setKind("custom");
     setValue(".pf-name", "Trimmed");
     setValue(".pf-baseURL", "https://trim.test");
     setValue(".pf-apiKey", "  key-123456  ");
@@ -225,29 +236,32 @@ describe("provider list", () => {
     expect(copy?.apiKey).toBe(p1.apiKey);
   });
 
-  it("deletes a provider after confirmation", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("deletes a provider after two-step confirmation", async () => {
     await seed({ providers: [p1, p2], activeProviderId: p2.id });
     await boot();
 
     const card = document.querySelector(`[data-provider-id="${p1.id}"]`) as HTMLElement;
+    click(".provider-delete", card);
+    expect((await getSettings()).providers.map((p) => p.id)).toEqual([p1.id, p2.id]);
     click(".provider-delete", card);
 
     await vi.waitFor(async () => {
       const s = await getSettings();
       expect(s.providers.map((p) => p.id)).toEqual([p2.id]);
     });
-    expect(confirm).toHaveBeenCalledWith("确认删除该配置？");
   });
 });
 
 describe("provider kind", () => {
-  it("defaults a new options provider to custom", async () => {
+  it("defaults a new provider to DeepSeek", async () => {
     await seed();
     await boot();
     click(".provider-add");
-    expect((document.querySelector(".pf-kind") as HTMLSelectElement).value).toBe("custom");
-    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(false);
+    expect((document.querySelector(".pf-kind") as HTMLSelectElement).value).toBe("deepseek");
+    expect((document.querySelector(".pf-baseURL-field") as HTMLElement).hidden).toBe(true);
+    expect((document.querySelector(".pf-model") as HTMLInputElement).value).toBe(
+      "deepseek-flash",
+    );
   });
 
   it("edits a DeepSeek provider with the type and preset locked", async () => {
@@ -336,6 +350,7 @@ describe("provider form actions", () => {
     providers.listModels.mockRejectedValue(new Error("boom"));
 
     click(".provider-add");
+    setKind("custom");
     setValue(".pf-name", "手填配置");
     setValue(".pf-baseURL", "https://manual.test");
     setValue(".pf-apiKey", "manual-key-1234");
@@ -416,7 +431,7 @@ describe("global settings", () => {
 
     setValue(".global-concurrency", "99");
     setValue(".global-maxRPS", "30");
-    click(".global-save");
+    click(".advanced-save");
 
     await vi.waitFor(async () => {
       const s = await getSettings();
@@ -428,7 +443,7 @@ describe("global settings", () => {
     expect(s.promptVersion).toBe("keep-me");
 
     setValue(".global-systemPrompt", "新提示词");
-    click(".global-save");
+    click(".advanced-save");
 
     await vi.waitFor(async () => {
       const updated = await getSettings();
@@ -452,7 +467,7 @@ describe("global settings", () => {
     const checkbox = document.querySelector<HTMLInputElement>(".global-glossaryEnabled")!;
     expect(checkbox.checked).toBe(true);
     checkbox.checked = false;
-    click(".global-save");
+    click(".translation-save");
 
     await vi.waitFor(async () => {
       expect((await getSettings()).glossaryEnabled).toBe(false);
@@ -475,7 +490,7 @@ describe("global settings", () => {
     const checkbox = document.querySelector<HTMLInputElement>(".global-glossaryEnabled")!;
     expect(checkbox.checked).toBe(false);
     checkbox.checked = true;
-    click(".global-save");
+    click(".translation-save");
 
     await vi.waitFor(async () => {
       expect((await getSettings()).glossaryEnabled).toBe(true);
@@ -491,7 +506,7 @@ describe("global settings", () => {
     await seed({ promptVersion: "", systemPrompt: "" });
     await boot();
 
-    click(".global-save");
+    click(".advanced-save");
 
     await vi.waitFor(async () => {
       const s = await getSettings();
@@ -508,7 +523,7 @@ describe("global settings", () => {
     setValue(".global-concurrency", "");
     setValue(".global-maxRPS", "");
     setValue(".global-temperature", "");
-    click(".global-save");
+    click(".advanced-save");
 
     await vi.waitFor(async () => {
       const s = await getSettings();
@@ -532,28 +547,26 @@ describe("global settings", () => {
     await cache.put(key, { text: "旧译文", glossary: [] }, { modelId: p1.model });
     expect(await cache.get(key)).toEqual({ text: "旧译文", glossary: [] });
 
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     await seed({ providers: [p1], activeProviderId: p1.id });
     await boot();
 
+    click(".global-clear-cache");
+    expect(await cache.get(key)).toEqual({ text: "旧译文", glossary: [] });
     click(".global-clear-cache");
 
     await vi.waitFor(() => {
       expect(document.querySelector(".global-cache-message")?.textContent).toBe("已清空缓存");
     });
-    expect(confirm).toHaveBeenCalledWith("确认清空翻译缓存？");
     expect(await cache.get(key)).toBeUndefined();
   });
 
-  it("saves the selected active provider radio", async () => {
+  it("saves the selected active provider from the model select", async () => {
     await seed({ providers: [p1, p2], activeProviderId: p1.id });
     await boot();
 
-    const radio = document.querySelector(
-      'input[name="active-provider"][value="p2"]',
-    ) as HTMLInputElement;
-    radio.checked = true;
-    click(".global-save");
+    const select = document.querySelector(".settings-active-provider") as HTMLSelectElement;
+    select.value = p2.id;
+    select.dispatchEvent(new Event("change"));
 
     await vi.waitFor(async () => {
       const s = await getSettings();
@@ -586,7 +599,7 @@ describe("global settings", () => {
 
     setValue(".global-minParagraphLength", "50");
     contentOnly.checked = false;
-    click(".global-save");
+    click(".translation-save");
 
     await vi.waitFor(async () => {
       const s = await getSettings();
@@ -602,7 +615,7 @@ describe("global settings", () => {
     await boot();
 
     setValue(".global-minParagraphLength", "2");
-    click(".global-save");
+    click(".translation-save");
 
     await vi.waitFor(async () => {
       expect((await getSettings()).minParagraphLength).toBe(4);
@@ -614,4 +627,59 @@ it("activates the quantum teal theme", async () => {
   await seed();
   await boot();
   expect(document.documentElement.dataset.theme).toBe("quantum");
+});
+
+describe("model manager navigation", () => {
+  it("shows the unselected state when activeProviderId is empty", async () => {
+    await seed({ providers: [p1, p2], activeProviderId: "" });
+    await boot();
+
+    const select = document.querySelector(".settings-active-provider") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.options[0].textContent).toBe("请选择模型");
+    expect(document.querySelector(".settings-model-summary")?.textContent).toContain(
+      "未选择当前模型",
+    );
+    expect((document.querySelector(".settings-model-test") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("returns from the model manager to the settings home", async () => {
+    await seed({ providers: [p1], activeProviderId: p1.id });
+    await boot();
+
+    expect((document.querySelector(".settings-home") as HTMLElement).hidden).toBe(true);
+    click(".settings-back");
+    expect((document.querySelector(".settings-home") as HTMLElement).hidden).toBe(false);
+    expect((document.querySelector(".settings-subview-host") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("guards a dirty provider form before leaving the manager", async () => {
+    await seed({ providers: [p1], activeProviderId: p1.id });
+    await boot();
+    click(".provider-edit");
+
+    const model = document.querySelector(".pf-model") as HTMLInputElement;
+    model.value = "dirty-model";
+    model.dispatchEvent(new Event("input", { bubbles: true }));
+
+    click(".settings-back");
+    expect(document.querySelector(".pf-discard")).not.toBeNull();
+    click(".pf-discard-no");
+    expect(document.querySelector(".pf-discard")).toBeNull();
+    expect((document.querySelector(".settings-subview-host") as HTMLElement).hidden).toBe(false);
+
+    click(".settings-back");
+    click(".pf-discard-yes");
+    expect((document.querySelector(".settings-home") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("does not request models or a completion when the manager opens", async () => {
+    await seed({ providers: [p1], activeProviderId: p1.id });
+    const providers = await boot();
+
+    expect(providers.listModels).not.toHaveBeenCalled();
+    expect(providers.complete).not.toHaveBeenCalled();
+  });
 });

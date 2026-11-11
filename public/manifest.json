@@ -64,7 +64,6 @@
   "side_panel": {
     "default_path": "panel.html"
   },
-  "options_page": "options.html",
   "declarative_net_request": {
     "rule_resources": [
       {
