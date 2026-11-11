@@ -96,6 +96,7 @@ figcaption
 - 不排除 `header` 本身，避免误删文章标题区；只排除 byline/meta 类区域。
 - `nav`、`footer` 已在基础排除列表中。
 - 正文模式仍保留当前 `main`/`article` 优先策略；没有语义主内容时继续扫 `body`，但应用额外排除。
+- 站点规则的 `extraTextSelectors` 是精确内容选择器，优先于 `scopeExcludeSelectors` 和正文模式的额外排除（例如 GitHub 的 About 描述即使位于侧栏 `<aside>` 内也保留）；`nav`、`code` 等硬排除仍然生效。
 - 动态页面扫描复用同一组 `minLength`/`contentOnly`，避免首次扫描和后续新增内容规则不一致。
 
 ## 6. 设置界面

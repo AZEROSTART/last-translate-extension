@@ -137,7 +137,8 @@ let paragraphIdCounter = 0;
 /** Precompiled selector strings derived from a site rule. */
 interface RuleMatchers {
   allExcludes: string;
-  contentExcludes: string;
+  /** Hard exclusions only; extra selectors may override scope/content-only skips. */
+  ancestorExcludes: string;
   extraInline: string;
   extraBlock: string;
 }
@@ -234,12 +235,13 @@ export async function collectParagraphs(
   }
 
   // Extra selectors are queried under the scan root (not inside each scope).
-  // The ancestor check uses only the content exclusions so a whole skipped
-  // sidebar can still contribute a precise paragraph (GitHub About summary).
+  // The ancestor check uses only hard exclusions, so both a scope-excluded
+  // sidebar and a content-only <aside> can still contribute a precise paragraph
+  // (GitHub About summary). Content-only exclusions still govern the normal walk.
   const extraSelector = rule.extraTextSelectors.join(",");
   if (extraSelector) {
     for (const match of querySelectorAllSafe(scanRoot, extraSelector)) {
-      if (closestSafe(match, matchers.contentExcludes)) continue;
+      if (closestSafe(match, matchers.ancestorExcludes)) continue;
       walkScope(match, matchers, rawPieces);
     }
   }
@@ -373,7 +375,7 @@ function compileRule(rule: SiteRule, contentOnly = false): RuleMatchers {
     : rule.excludeSelectors;
   return {
     allExcludes: [...excludes, ...(rule.scopeExcludeSelectors ?? [])].join(","),
-    contentExcludes: excludes.join(","),
+    ancestorExcludes: rule.excludeSelectors.join(","),
     extraInline: (rule.extraInlineSelectors ?? []).join(","),
     extraBlock: (rule.extraBlockSelectors ?? []).join(","),
   };

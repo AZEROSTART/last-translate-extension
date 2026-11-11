@@ -162,6 +162,29 @@ it("skips the GitHub sidebar but re-includes only the About description", async 
   ]);
 });
 
+it("re-includes the GitHub About description under contentOnly", async () => {
+  html(`
+    <main>
+      <p>Repository readme paragraph.</p>
+      <aside class="Layout-sidebar">
+        <div class="BorderGrid-row">
+          <div class="BorderGrid-cell"><p>About description text.</p></div>
+        </div>
+        <div class="BorderGrid-row">
+          <div class="BorderGrid-cell"><p>No releases published yet.</p></div>
+        </div>
+      </aside>
+    </main>`);
+  const ps = await collectParagraphs(document.body, {
+    url: "https://github.com/owner/repo",
+    contentOnly: true,
+  });
+  expect(texts(ps)).toEqual([
+    "Repository readme paragraph.",
+    "About description text.",
+  ]);
+});
+
 it("collects repo descriptions outside main through the extra selector", async () => {
   html(`
     <main><p>Feed content text.</p></main>
