@@ -11,6 +11,7 @@ import type {
   ReviewAnswerResponse,
 } from "../shared/types";
 import { runLearningUpdate } from "./storage-queue";
+import { refreshBadge } from "./badge";
 
 const LEARNING_TYPES = new Set(["learn-word", "review-answer", "get-learning", "lookup-gloss"]);
 
@@ -40,6 +41,7 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
         dueAt: merged.word.dueAt,
         nextDueLabel: formatDueLabel(merged.word.dueAt, now),
       };
+      void refreshBadge();
       return response;
     }
     case "review-answer": {
@@ -51,6 +53,7 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
       });
       if (!word) return { ok: false };
       const response: ReviewAnswerResponse = { ok: true, word };
+      void refreshBadge();
       return response;
     }
     case "get-learning":

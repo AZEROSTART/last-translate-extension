@@ -7,6 +7,7 @@
 
 import { createDeps, handleChat, handleTranslate } from "./dispatch";
 import { handleLearningMessage, isLearningMessageType } from "./learning";
+import { refreshBadge } from "./badge";
 import type {
   BackgroundToClient,
   ChatBackgroundToClient,
@@ -101,8 +102,31 @@ function registerTranslateContextMenu(): void {
   }
 }
 
+const LEARNING_ALARM = "ilmt-learning-tick";
+
+/** Register the periodic due-count refresh; create() replaces an existing id. */
+function ensureLearningAlarm(): void {
+  try {
+    chrome.alarms.create(LEARNING_ALARM, { periodInMinutes: 30 });
+  } catch {
+    // Alarms unavailable (tests or a restricted context); the badge still
+    // refreshes on storage writes.
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   registerTranslateContextMenu();
+  ensureLearningAlarm();
+});
+
+chrome.runtime.onStartup?.addListener?.(ensureLearningAlarm);
+
+chrome.alarms?.onAlarm?.addListener?.((alarm) => {
+  if (alarm.name === LEARNING_ALARM) void refreshBadge();
+});
+
+chrome.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area === "local" && changes.learning) void refreshBadge();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
