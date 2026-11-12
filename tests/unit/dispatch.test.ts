@@ -32,6 +32,9 @@ const settings: Settings = {
   minParagraphLength: 10,
   contentOnly: true,
   theme: "system",
+  learningLangs: ["en"],
+  preference: { domain: "general", instructions: "" },
+  mascot: { mode: "rotate", enabledIds: [], animations: true },
 };
 
 function fakeAdapter(over: Partial<ProviderAdapter> = {}): ProviderAdapter {

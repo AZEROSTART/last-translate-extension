@@ -1,7 +1,97 @@
-import type { ProviderConfig, Settings } from "./types";
+import type {
+  DomainPreset,
+  MascotSettings,
+  ProviderConfig,
+  Settings,
+  TranslationPreference,
+} from "./types";
 import { normalizeProviderKind } from "./providers";
 
 const SETTINGS_KEY = "settings";
+
+/** Languages that may be learning targets; order is the display order. */
+export const LEARNING_LANGS = ["en", "ja", "es", "fr"] as const;
+
+const DOMAIN_PRESETS: readonly DomainPreset[] = [
+  "general",
+  "tech",
+  "legal",
+  "medical",
+  "literary",
+  "custom",
+];
+
+/** The pre-v2 default prompt; used to tell "untouched" from "user-edited". */
+export const LEGACY_DEFAULT_PROMPT =
+  "你是一个翻译引擎。把用户给出的编号段落翻译成{{targetLang}}。只输出 [编号] 译文，逐行对应，不解释、不合并、不遗漏。保留原文的专有名词、代码、URL。";
+
+/** Whitelist, de-duplicate, cap at 4, and fall back to ["en"]. */
+export function normalizeLearningLangs(value: unknown): string[] {
+  if (!Array.isArray(value)) return ["en"];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const lang = item.trim().toLowerCase();
+    if (!(LEARNING_LANGS as readonly string[]).includes(lang)) continue;
+    if (seen.has(lang)) continue;
+    seen.add(lang);
+    out.push(lang);
+    if (out.length === LEARNING_LANGS.length) break;
+  }
+  return out.length > 0 ? out : ["en"];
+}
+
+function normalizeInstructions(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, 500) : "";
+}
+
+/** Read a valid stored preference; otherwise migrate the legacy system prompt. */
+export function normalizePreference(
+  value: unknown,
+  legacySystemPrompt?: unknown,
+): TranslationPreference {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const raw = value as { domain?: unknown; instructions?: unknown };
+    if (typeof raw.domain === "string" && DOMAIN_PRESETS.includes(raw.domain as DomainPreset)) {
+      return {
+        domain: raw.domain as DomainPreset,
+        instructions: normalizeInstructions(raw.instructions),
+      };
+    }
+  }
+
+  const prompt = typeof legacySystemPrompt === "string" ? legacySystemPrompt.trim() : "";
+  if (!prompt || prompt === LEGACY_DEFAULT_PROMPT) {
+    return { domain: "general", instructions: "" };
+  }
+  const rest = prompt.startsWith(LEGACY_DEFAULT_PROMPT)
+    ? prompt.slice(LEGACY_DEFAULT_PROMPT.length).trim()
+    : prompt;
+  return { domain: "custom", instructions: normalizeInstructions(rest) };
+}
+
+export function normalizeMascot(value: unknown): MascotSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { mode: "rotate", enabledIds: [], animations: true };
+  }
+  const raw = value as {
+    mode?: unknown;
+    fixedId?: unknown;
+    enabledIds?: unknown;
+    animations?: unknown;
+  };
+  const enabledIds = Array.isArray(raw.enabledIds)
+    ? raw.enabledIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  const mode = raw.mode === "fixed" ? "fixed" : "rotate";
+  return {
+    mode,
+    ...(typeof raw.fixedId === "string" && raw.fixedId ? { fixedId: raw.fixedId } : {}),
+    enabledIds,
+    animations: raw.animations !== false,
+  };
+}
 
 /**
  * Defaults mirror the spec. `systemPrompt` keeps the literal
@@ -14,8 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   concurrency: 3,
   maxRPS: 5,
   temperature: 0,
-  systemPrompt:
-    "你是一个翻译引擎。把用户给出的编号段落翻译成{{targetLang}}。只输出 [编号] 译文，逐行对应，不解释、不合并、不遗漏。保留原文的专有名词、代码、URL。",
+  systemPrompt: LEGACY_DEFAULT_PROMPT,
   promptVersion: "",
   triggerMode: "shortcut",
   siteRules: {},
@@ -23,6 +112,9 @@ export const DEFAULT_SETTINGS: Settings = {
   glossaryEnabled: true,
   minParagraphLength: 10,
   contentOnly: true,
+  learningLangs: ["en"],
+  preference: { domain: "general", instructions: "" },
+  mascot: { mode: "rotate", enabledIds: [], animations: true },
 };
 
 /**
@@ -74,6 +166,17 @@ export async function getSettings(): Promise<Settings> {
   if (typeof merged.contentOnly !== "boolean") {
     merged.contentOnly = true;
   }
+
+  // Learning settings are normalized on every read so a corrupt store never
+  // disables annotations or breaks the scheduler.
+  merged.learningLangs = normalizeLearningLangs(
+    (stored as { learningLangs?: unknown } | undefined)?.learningLangs,
+  );
+  merged.preference = normalizePreference(
+    (stored as { preference?: unknown } | undefined)?.preference,
+    (stored as { systemPrompt?: unknown } | undefined)?.systemPrompt,
+  );
+  merged.mascot = normalizeMascot((stored as { mascot?: unknown } | undefined)?.mascot);
 
   return merged;
 }

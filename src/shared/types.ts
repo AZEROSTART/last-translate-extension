@@ -36,6 +36,93 @@ export interface GlossaryNote {
   meaning: string;
   /** Optional short source example. */
   example?: string;
+  /** Extra-language meanings, e.g. `{ es: "sobrevivir a" }`. */
+  glosses?: Record<string, string>;
+}
+
+/** Translation domain preset; only general/tech/custom have UI in v1. */
+export type DomainPreset = "general" | "tech" | "legal" | "medical" | "literary" | "custom";
+
+/** User-owned translation preference layer (style only, never format). */
+export interface TranslationPreference {
+  domain: DomainPreset;
+  instructions: string;
+  /** Reserved: term glossary. No UI in v1. */
+  terms?: Array<{ from: string; to: string }>;
+}
+
+/** How the claim mascot is chosen on the hover card. */
+export interface MascotSettings {
+  mode: "rotate" | "fixed";
+  fixedId?: string;
+  /** Empty array = every registered mascot. */
+  enabledIds: string[];
+  animations: boolean;
+}
+
+export type LearningGrade = "again" | "hard" | "good";
+export type WordStatus = "learning" | "mastered";
+
+export interface ReviewEntry {
+  at: number;
+  grade: LearningGrade;
+  box: number;
+  spot?: boolean;
+  spotCorrect?: boolean;
+  termLang?: string;
+  glossLang?: string;
+}
+
+export interface WordContext {
+  /** Source sentence containing the word, capped at 240 chars. */
+  sentence: string;
+  pageUrl: string;
+  pageTitle?: string;
+  at: number;
+}
+
+export interface WordGloss {
+  lang: string;
+  meaning: string;
+  /** translation = returned with page translation; lookup = backfilled later. */
+  source: "translation" | "lookup";
+  at: number;
+}
+
+export interface LearningWord {
+  /** `${termLang}:${normalizeSurface(surface)}` */
+  id: string;
+  termLang: string;
+  surface: string;
+  pos?: string;
+  glosses: WordGloss[];
+  /** Default answer language for reviews; equals targetLang when captured. */
+  glossLang: string;
+  contexts: WordContext[];
+  status: WordStatus;
+  box: number;
+  dueAt: number | null;
+  mascotId?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastSeenAt: number;
+  reviews: ReviewEntry[];
+  reviewsCount: number;
+  correctCount: number;
+  checksSinceSpot: number;
+}
+
+export interface LearningStats {
+  /** Local date YYYY-MM-DD; todayReviewed resets when the day changes. */
+  day: string;
+  todayReviewed: number;
+}
+
+export interface LearningState {
+  version: 1;
+  words: LearningWord[];
+  stats: LearningStats;
+  updatedAt: number;
 }
 
 /** Persisted global settings (spec §9). */
@@ -46,7 +133,9 @@ export interface Settings {
   concurrency: number;
   maxRPS: number;
   temperature: number;
+  /** @deprecated Mirrors `preference.instructions`; kept readable for old code. */
   systemPrompt: string;
+  /** @deprecated Derived per request; no longer written. */
   promptVersion: string;
   triggerMode: "shortcut" | "auto-current-site";
   siteRules: Record<string, "auto" | "never">;
@@ -57,6 +146,12 @@ export interface Settings {
   minParagraphLength: number;
   /** Skip secondary page regions (asides, captions, metadata, breadcrumbs). */
   contentOnly: boolean;
+  /** Languages whose pages get annotations; defaults to ["en"], max 4. */
+  learningLangs: string[];
+  /** User-owned translation style layer. */
+  preference: TranslationPreference;
+  /** Claim mascot selection. */
+  mascot: MascotSettings;
 }
 
 /** Per-paragraph translation state machine (spec §8.4). */
@@ -211,4 +306,63 @@ export interface OpenChatMessage {
   text: string;
   mode: "explain" | "follow-up";
   context?: SelectionContext;
+}
+
+/** Content → background: claim a hovered word into the learning store. */
+export interface LearnWordMessage {
+  type: "learn-word";
+  surface: string;
+  /** Detected by the content script. */
+  termLang: string;
+  /** Equals the current target language. */
+  glossLang: string;
+  pos?: string;
+  meaning: string;
+  /** Extra-language meanings taken from `GlossaryNote.glosses`. */
+  glosses?: Record<string, string>;
+  sentence: string;
+  pageUrl: string;
+  pageTitle?: string;
+  mascotId?: string;
+}
+
+export interface LearnWordResponse {
+  ok: true;
+  /** false = the word was already in the store. */
+  created: boolean;
+  dueAt: number | null;
+  nextDueLabel: string;
+}
+
+/** Side panel → background: record one self-assessment. */
+export interface ReviewAnswerMessage {
+  type: "review-answer";
+  id: string;
+  grade: LearningGrade;
+  glossLang?: string;
+  spot?: boolean;
+  spotCorrect?: boolean;
+}
+
+export interface ReviewAnswerResponse {
+  ok: true;
+  word: LearningWord;
+}
+
+export interface GetLearningMessage {
+  type: "get-learning";
+}
+
+export interface GetLearningResponse {
+  ok: true;
+  state: LearningState;
+}
+
+/** Reserved: backfill one gloss. V1 answers `{ ok: false, reason: "not-implemented" }`. */
+export interface LookupGlossMessage {
+  type: "lookup-gloss";
+  termLang: string;
+  glossLang: string;
+  surface: string;
+  sentence: string;
 }

@@ -84,6 +84,45 @@ describe("settings storage", () => {
     expect(s.maxRPS).toBe(5);
   });
 
+  it("defaults learning settings", async () => {
+    const s = await getSettings();
+    expect(s.learningLangs).toEqual(["en"]);
+    expect(s.preference).toEqual({ domain: "general", instructions: "" });
+    expect(s.mascot).toEqual({ mode: "rotate", enabledIds: [], animations: true });
+  });
+
+  it("migrates a user-edited system prompt into custom instructions", async () => {
+    const legacy = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete legacy.preference;
+    await chrome.storage.local.set({
+      settings: { ...legacy, systemPrompt: "尽量口语化，别用术语" },
+    });
+    const s = await getSettings();
+    expect(s.preference.domain).toBe("custom");
+    expect(s.preference.instructions).toBe("尽量口语化，别用术语");
+  });
+
+  it("migrates the legacy default prompt to general", async () => {
+    const legacy = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+    delete legacy.preference;
+    await chrome.storage.local.set({ settings: legacy });
+    const s = await getSettings();
+    expect(s.preference).toEqual({ domain: "general", instructions: "" });
+  });
+
+  it("keeps a stored preference and drops unknown languages", async () => {
+    await chrome.storage.local.set({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        preference: { domain: "tech", instructions: "保留英文术语" },
+        learningLangs: ["en", "xx", "es", "fr", "ja", "de"],
+      },
+    });
+    const s = await getSettings();
+    expect(s.preference.domain).toBe("tech");
+    expect(s.learningLangs).toEqual(["en", "es", "fr", "ja"]);
+  });
+
   it("preserves unknown stored keys while merging over defaults", async () => {
     await chrome.storage.local.set({ settings: { targetLang: "ko", futureOption: true } });
     const s = (await getSettings()) as typeof DEFAULT_SETTINGS & { futureOption: boolean };
