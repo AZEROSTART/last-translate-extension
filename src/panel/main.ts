@@ -13,7 +13,10 @@
  */
 
 import { appendMessage, buildChatContext, createSession } from "./session";
+import { mountReview, type ReviewView } from "./review";
 import { getSettings, saveSettings } from "../shared/storage";
+import { getLearning } from "../shared/learning-storage";
+import { dueCount } from "../shared/srs";
 import { SELECTION_CONTEXT_LIMITS } from "../shared/selection-context-limits";
 import type {
   ChatBackgroundToClient,
@@ -113,6 +116,14 @@ let thinkingInput: HTMLInputElement;
 let providerSettingsBtn: HTMLButtonElement;
 let assistantEl: HTMLElement | null = null;
 
+// --- view switching (chat | review) ---
+let chatView: HTMLElement;
+let reviewView: HTMLElement;
+let chatTab: HTMLButtonElement;
+let reviewTab: HTMLButtonElement;
+let review: ReviewView | null = null;
+let dueReviews = 0;
+
 let resolveReady!: () => void;
 const ready = new Promise<void>((resolve) => (resolveReady = resolve));
 scope.__ilmtPanel = {
@@ -136,6 +147,7 @@ async function start(): Promise<void> {
   document.documentElement.dataset.theme = "quantum";
   buildDom();
   injectStyles();
+  void refreshDueReviews();
   await loadPanelSettings();
   sessions = await loadSessions();
   const quote = await readPendingQuote();
@@ -163,10 +175,35 @@ function buildDom(): void {
   root = document.getElementById("root") ?? document.body;
   root.replaceChildren();
 
+  const tabs = document.createElement("div");
+  tabs.className = "panel-tabs";
+  tabs.setAttribute("role", "tablist");
+  chatTab = document.createElement("button");
+  chatTab.type = "button";
+  chatTab.className = "panel-tab is-active";
+  chatTab.dataset.view = "chat";
+  chatTab.setAttribute("role", "tab");
+  chatTab.setAttribute("aria-selected", "true");
+  chatTab.textContent = "对话";
+  chatTab.addEventListener("click", () => showView("chat"));
+  reviewTab = document.createElement("button");
+  reviewTab.type = "button";
+  reviewTab.className = "panel-tab";
+  reviewTab.dataset.view = "review";
+  reviewTab.setAttribute("role", "tab");
+  reviewTab.setAttribute("aria-selected", "false");
+  reviewTab.textContent = "复习";
+  reviewTab.addEventListener("click", () => showView("review"));
+  tabs.append(chatTab, reviewTab);
+  root.appendChild(tabs);
+
+  chatView = document.createElement("div");
+  chatView.className = "panel-view panel-view--chat";
+
   const note = document.createElement("div");
   note.className = "context-note";
   note.textContent = CONTEXT_NOTE;
-  root.appendChild(note);
+  chatView.appendChild(note);
 
   banner = document.createElement("div");
   banner.className = "banner";
@@ -179,7 +216,7 @@ function buildDom(): void {
   bannerButton.textContent = "针对新页面开新会话";
   bannerButton.addEventListener("click", handleNewSession);
   banner.append(bannerTitle, bannerButton);
-  root.appendChild(banner);
+  chatView.appendChild(banner);
 
   quoteChip = document.createElement("div");
   quoteChip.className = "quote-chip";
@@ -193,7 +230,7 @@ function buildDom(): void {
   quoteRemove.setAttribute("aria-label", "清除引用");
   quoteRemove.addEventListener("click", clearQuoteChip);
   quoteChip.append(quoteTextEl, quoteRemove);
-  root.appendChild(quoteChip);
+  chatView.appendChild(quoteChip);
 
   const providerBar = document.createElement("div");
   providerBar.className = "provider-bar";
@@ -228,11 +265,11 @@ function buildDom(): void {
   providerSettingsBtn.hidden = true;
   providerSettingsBtn.addEventListener("click", handleOpenOptions);
   providerBar.append(providerSelect, providerModel, thinkingToggle, providerSettingsBtn);
-  root.appendChild(providerBar);
+  chatView.appendChild(providerBar);
 
   msgList = document.createElement("div");
   msgList.className = "msg-list";
-  root.appendChild(msgList);
+  chatView.appendChild(msgList);
 
   const composer = document.createElement("div");
   composer.className = "composer";
@@ -257,7 +294,40 @@ function buildDom(): void {
   stopBtn.hidden = true;
   stopBtn.addEventListener("click", handleStop);
   composer.append(input, sendBtn, stopBtn);
-  root.appendChild(composer);
+  chatView.appendChild(composer);
+
+  reviewView = document.createElement("div");
+  reviewView.className = "panel-view panel-view--review";
+  reviewView.hidden = true;
+  reviewView.setAttribute("role", "tabpanel");
+
+  root.append(chatView, reviewView);
+}
+
+function showView(view: "chat" | "review"): void {
+  const isReview = view === "review";
+  chatView.hidden = isReview;
+  reviewView.hidden = !isReview;
+  chatTab.classList.toggle("is-active", !isReview);
+  reviewTab.classList.toggle("is-active", isReview);
+  chatTab.setAttribute("aria-selected", String(!isReview));
+  reviewTab.setAttribute("aria-selected", String(isReview));
+
+  if (isReview) {
+    if (!review) review = mountReview(reviewView);
+    void review.refresh();
+  }
+}
+
+/** Count today's due cards and reflect it on the review tab. */
+async function refreshDueReviews(): Promise<void> {
+  try {
+    const state = await getLearning();
+    dueReviews = dueCount(state.words, Date.now());
+  } catch {
+    dueReviews = 0;
+  }
+  reviewTab.textContent = dueReviews > 0 ? `复习 (${dueReviews})` : "复习";
 }
 
 function injectStyles(): void {
@@ -503,6 +573,11 @@ function wireStorage(): void {
     }
 
     if (changes.settings) void refreshSettingsFromStorage();
+
+    if (changes.learning) {
+      void refreshDueReviews();
+      void review?.refresh();
+    }
   });
 }
 
