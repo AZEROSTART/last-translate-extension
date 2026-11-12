@@ -165,8 +165,23 @@ async function start(): Promise<void> {
   connectPort();
   wireTabs();
   wireStorage();
+  void consumePendingReview();
   applyPendingQuote(quote);
   resolveReady();
+}
+
+/** The popup asks for the review view via `storage.session`; consume it once. */
+async function consumePendingReview(): Promise<void> {
+  try {
+    const session = chrome.storage.session;
+    if (!session) return;
+    const stored = await session.get("reviewPending");
+    if (!stored?.reviewPending) return;
+    await session.remove("reviewPending");
+    showView("review");
+  } catch {
+    // No session storage or a firewall on it: chat is a safe default.
+  }
 }
 
 // --- DOM construction ---

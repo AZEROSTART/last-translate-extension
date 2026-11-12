@@ -174,3 +174,23 @@ button:focus-visible {
 .error {
   color: var(--ilmt-danger);
 }
+
+/* Due-review shortcut, shown under the header only when something is due. */
+.popup-review-entry {
+  appearance: none;
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--ilmt-accent);
+  border-radius: 9px;
+  background: rgba(45, 212, 191, 0.12);
+  color: var(--ilmt-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.popup-review-entry:hover {
+  background: rgba(45, 212, 191, 0.2);
+}

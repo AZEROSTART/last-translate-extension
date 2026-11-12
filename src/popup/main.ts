@@ -5,6 +5,8 @@
  */
 
 import type { Settings } from "../shared/types";
+import { getLearning } from "../shared/learning-storage";
+import { dueCount } from "../shared/srs";
 import { createSettingsView, type SettingsViewHandle } from "../settings/settings-view";
 import themeCss from "../styles/theme.css?inline";
 import popupCss from "../styles/popup.css?inline";
@@ -48,7 +50,48 @@ async function start(): Promise<void> {
   buildShell();
   injectStyles();
   view = await createSettingsView(scrollHost, { mode });
+  void refreshReviewEntry();
   resolveReady();
+}
+
+/** Show "待复习 N · 打开复习" only when something is actually due. */
+async function refreshReviewEntry(): Promise<void> {
+  let due = 0;
+  try {
+    due = dueCount((await getLearning()).words, Date.now());
+  } catch {
+    return;
+  }
+  if (due <= 0) return;
+
+  const entry = el("button", "popup-review-entry", `待复习 ${due} · 打开复习`);
+  entry.type = "button";
+  entry.addEventListener("click", openReview);
+  const header = root.querySelector(".popup-header");
+  if (header) header.after(entry);
+  else root.insertBefore(entry, scrollHost);
+}
+
+/** Mark the panel to open on the review view, then open it in this gesture. */
+function openReview(): void {
+  try {
+    void chrome.storage.session?.set({ reviewPending: true });
+  } catch {
+    // Older Chrome without storage.session: the panel just opens on chat.
+  }
+
+  const close = (): void => {
+    if (mode === "popup") window.close();
+  };
+  try {
+    const windowId = chrome.windows?.WINDOW_ID_CURRENT ?? -2;
+    void chrome.sidePanel
+      .open({ windowId })
+      .then(close)
+      .catch(() => openSidePanelForActiveTab(close));
+  } catch {
+    openSidePanelForActiveTab(close);
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(

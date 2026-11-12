@@ -701,3 +701,48 @@ describe("translation style and learning settings", () => {
     expect(document.querySelector(".global-systemPrompt")).toBeNull();
   });
 });
+
+describe("pending review entry", () => {
+  it("shows the due count and opens the side panel on click", async () => {
+    const now = Date.now();
+    const words = [1, 2, 3].map((i) => ({
+      id: `en:word${i}`,
+      termLang: "en",
+      surface: `word${i}`,
+      glosses: [{ lang: "zh", meaning: `词${i}`, source: "translation", at: now }],
+      glossLang: "zh",
+      contexts: [],
+      status: "learning",
+      box: 0,
+      dueAt: now - 1000,
+      createdAt: now,
+      updatedAt: now,
+      lastSeenAt: now,
+      reviews: [],
+      reviewsCount: 0,
+      correctCount: 0,
+      checksSinceSpot: 0,
+    }));
+    await seed();
+    await chrome.storage.local.set({
+      learning: { version: 1, words, stats: { day: "", todayReviewed: 0 }, updatedAt: now },
+    });
+    const sessionSet = vi.fn(async () => {});
+    const open = vi.fn(async () => {});
+    (chrome as unknown as { storage: { session: unknown } }).storage.session = { set: sessionSet };
+    (chrome as unknown as { sidePanel: unknown }).sidePanel = { open };
+
+    await boot();
+
+    const entry = document.querySelector(".popup-review-entry") as HTMLButtonElement | null;
+    expect(entry).toBeTruthy();
+    expect(entry?.textContent).toContain("待复习 3");
+
+    entry!.click();
+
+    await vi.waitFor(() => {
+      expect(sessionSet).toHaveBeenCalledWith({ reviewPending: true });
+    });
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});
