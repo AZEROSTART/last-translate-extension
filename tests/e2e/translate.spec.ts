@@ -261,7 +261,7 @@ test.describe("loaded extension", () => {
       const popupPage = await extension.context.newPage();
       await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
       await expect(popupPage.locator(".popup-title")).toHaveText("翻译设置");
-      await expect(popupPage.locator("details.settings-section")).toHaveCount(4);
+      await expect(popupPage.locator("details.settings-section")).toHaveCount(5);
       await expect(popupPage.locator(".global-minParagraphLength")).toHaveValue("10");
       await expect(popupPage.locator(".global-contentOnly")).toBeChecked();
       await expect(popupPage.locator(".settings-active-provider")).toContainText("E2E");
@@ -271,7 +271,7 @@ test.describe("loaded extension", () => {
       await expect(popupPage.locator(".provider-card")).toHaveCount(1);
       await expect(popupPage.locator(".provider-card")).toContainText("E2E");
       await popupPage.locator(".settings-back").click();
-      await expect(popupPage.locator("details.settings-section")).toHaveCount(4);
+      await expect(popupPage.locator("details.settings-section")).toHaveCount(5);
     } finally {
       await cleanup();
     }

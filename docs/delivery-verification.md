@@ -213,3 +213,15 @@ P0 交付验证：通过 / 未通过
 - popup：通过（点击工具栏图标，显示 DeepSeek、deepseek-flash、脱敏 Key）
 - 侧栏解释：通过（选中首段，侧栏自动发送并返回中文解释）
 - 控制台：通过（无红色报错）
+
+## 7. 本次验证记录（2026-11-12，学习闭环）
+
+- 自动门禁：通过（571/571 单测，`tsc`、build、`check-build`）
+- Opt+A 翻译：通过（opencli 真实 Chrome + 真实 provider，10/10，banner「翻译已开启 · 10 个词可悬停」）
+- 双语在原文下方：通过（count 10，`bad: []`，无 `data-loading="1"` 残留）
+- 再按 Opt+A 恢复：通过（0 译文，banner `null`，原文 10 段）
+- popup：通过（Playwright 真实 Chromium MV3 配置，5 个分组与当前 provider/model 正常；真实 Chrome 工具栏 popup 因自动化桥不注入 `chrome://`/`chrome-extension://` 页面，未用 opencli 断言）
+- 侧栏解释：通过（同源 Playwright E2E 覆盖侧栏页面渲染与复习作答；本轮改动未触碰划词解释链路）
+- 学习闭环（真实 Chrome）：通过（悬停「outlive」出卡片与地鼠，点击后卡片显示「已抓住」；收录后徽标保持隐藏，因为首次到期在 10 分钟后）
+- 控制台：通过（`opencli browser delivery console` 无 error）
+

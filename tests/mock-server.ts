@@ -32,6 +32,8 @@ export interface MockGlossaryNote {
   pos?: string;
   meaning: string;
   example?: string;
+  /** Extra language → meaning, forwarded verbatim in the glossary block. */
+  glosses?: Record<string, string>;
 }
 
 export interface MockServerOptions {
