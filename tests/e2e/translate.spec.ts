@@ -26,6 +26,7 @@ const ARTICLES = {
   english: "article.html",
   chinese: "chinese.html",
   granularity: "granularity.html",
+  long: "long.html",
 } as const;
 
 interface Extension {
@@ -421,6 +422,40 @@ test.describe("loaded extension", () => {
           'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
         ),
       ).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("translates the viewport band first and follows the scroll", async () => {
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.long}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+
+      await expect(page.locator("#long-p1 .ilmt-tr")).toHaveCount(1);
+      await expect(page.locator("#long-p60 .ilmt-tr")).toHaveCount(0);
+      const initialCount = await page.locator(".ilmt-tr").count();
+      expect(initialCount).toBeGreaterThan(0);
+      expect(initialCount).toBeLessThan(30);
+
+      await page.locator("#long-p30").scrollIntoViewIfNeeded();
+      await expect(page.locator("#long-p30 .ilmt-tr")).toHaveCount(1);
+      await expect(page.locator("#long-p60 .ilmt-tr")).toHaveCount(0);
+
+      // Scrolling back must not re-request or duplicate the first paragraph.
+      await page.locator("#long-p1").scrollIntoViewIfNeeded();
+      await expect(page.locator("#long-p1 .ilmt-tr")).toHaveCount(1);
+
+      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
     } finally {
       await cleanup();
     }
