@@ -370,9 +370,13 @@ export function mountProviderManager(
     const systemPromptInput = el("textarea", "pf-systemPrompt");
     systemPromptInput.rows = 3;
     systemPromptInput.value = base.overrides?.systemPrompt ?? "";
-    systemPromptInput.placeholder = "留空继承全局提示词";
+    systemPromptInput.placeholder = "留空继承全局翻译偏好";
     form.appendChild(
-      field("系统提示词（可选）", systemPromptInput, "留空表示使用全局提示词。"),
+      field(
+        "该提供商的翻译偏好（仍受格式约束）",
+        systemPromptInput,
+        "留空继承全局翻译偏好；只影响用词与语气，不会改变输出格式。",
+      ),
     );
 
     const testResult = el("div", "pf-test-result");

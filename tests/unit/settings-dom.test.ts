@@ -436,20 +436,10 @@ describe("global settings", () => {
       expect(s.concurrency).toBe(10);
     });
 
-    let s = await getSettings();
+    const s = await getSettings();
     expect(s.maxRPS).toBe(20);
     expect(s.promptVersion).toBe("keep-me");
-
-    setValue(".global-systemPrompt", "新提示词");
-    click(".advanced-save");
-
-    await vi.waitFor(async () => {
-      const updated = await getSettings();
-      expect(updated.systemPrompt).toBe("新提示词");
-    });
-
-    s = await getSettings();
-    expect(s.promptVersion).toBe("keep-me");
+    expect(s.systemPrompt).toBe("旧提示词");
   });
 
   it("renders the glossary toggle and saves false without rewriting the prompt version", async () => {
@@ -659,5 +649,55 @@ describe("model manager navigation", () => {
 
     expect(providers.listModels).not.toHaveBeenCalled();
     expect(providers.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe("translation style and learning settings", () => {
+  it("saves a translation style and instructions", async () => {
+    await seed();
+    await boot();
+
+    setValue(".global-preference-domain", "tech");
+    setValue(".global-preference-instructions", "保留英文术语");
+    click(".translation-save");
+
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.preference).toEqual({ domain: "tech", instructions: "保留英文术语" });
+    });
+  });
+
+  it("toggles learning languages within the whitelist", async () => {
+    await seed();
+    await boot();
+
+    const en = document.querySelector<HTMLInputElement>('.global-learningLang[value="en"]')!;
+    const es = document.querySelector<HTMLInputElement>('.global-learningLang[value="es"]')!;
+    const ja = document.querySelector<HTMLInputElement>('.global-learningLang[value="ja"]')!;
+    en.checked = false;
+    es.checked = true;
+    ja.checked = true;
+    click(".learning-save");
+
+    await vi.waitFor(async () => {
+      expect((await getSettings()).learningLangs).toEqual(["ja", "es"]);
+    });
+  });
+
+  it("renders the learning section with mascot rotation", async () => {
+    await seed();
+    await boot();
+
+    const mode = document.querySelector<HTMLSelectElement>(".global-mascot-mode")!;
+    const labels = Array.from(mode.options).map((option) => option.textContent);
+    expect(labels).toContain("随机轮换");
+    expect(labels).toContain("固定为");
+    expect(document.querySelector(".global-mascot-fixed")).toBeTruthy();
+  });
+
+  it("removes the free-form global system prompt", async () => {
+    await seed();
+    await boot();
+    expect(document.querySelector(".global-systemPrompt")).toBeNull();
   });
 });

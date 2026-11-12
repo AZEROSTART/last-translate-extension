@@ -42,17 +42,6 @@ export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
   numericGrid.append(concurrency.wrap, maxRPS.wrap, temperature.wrap);
   element.appendChild(numericGrid);
 
-  const promptField = el("label", "field");
-  promptField.appendChild(el("span", "field-label", "全局系统提示词"));
-  const systemPrompt = el("textarea", "global-systemPrompt");
-  systemPrompt.rows = 4;
-  systemPrompt.value = settings.systemPrompt;
-  promptField.appendChild(systemPrompt);
-  promptField.appendChild(
-    el("span", "field-hint", "修改后会自动更新缓存版本；{{targetLang}} 发送前替换为目标语言。"),
-  );
-  element.appendChild(promptField);
-
   const saved = el("span", "global-saved advanced-saved", "已保存");
   saved.hidden = true;
   const saveButton = makeButton("保存高级设置", "global-save advanced-save");
@@ -77,7 +66,6 @@ export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
           concurrency: nextConcurrency,
           maxRPS: nextMaxRPS,
           temperature: nextTemperature,
-          systemPrompt: systemPrompt.value,
         });
         saved.textContent = "已保存";
       } catch {
@@ -103,7 +91,6 @@ export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
       concurrency.input.value = String(next.concurrency);
       maxRPS.input.value = String(next.maxRPS);
       temperature.input.value = String(next.temperature);
-      systemPrompt.value = next.systemPrompt;
     },
   };
 }

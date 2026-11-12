@@ -106,6 +106,7 @@ export const DEFAULT_SETTINGS: Settings = {
   temperature: 0,
   systemPrompt: LEGACY_DEFAULT_PROMPT,
   promptVersion: "",
+  reviewAnswerLang: "",
   triggerMode: "shortcut",
   siteRules: {},
   theme: "system",
@@ -177,6 +178,7 @@ export async function getSettings(): Promise<Settings> {
     (stored as { systemPrompt?: unknown } | undefined)?.systemPrompt,
   );
   merged.mascot = normalizeMascot((stored as { mascot?: unknown } | undefined)?.mascot);
+  if (typeof merged.reviewAnswerLang !== "string") merged.reviewAnswerLang = "";
 
   return merged;
 }

@@ -314,7 +314,11 @@ function showView(view: "chat" | "review"): void {
   reviewTab.setAttribute("aria-selected", String(isReview));
 
   if (isReview) {
-    if (!review) review = mountReview(reviewView);
+    if (!review) {
+      review = mountReview(reviewView, {
+        defaultGlossLang: () => panelSettings?.reviewAnswerLang ?? "",
+      });
+    }
     void review.refresh();
   }
 }

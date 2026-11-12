@@ -64,6 +64,11 @@ export interface ReviewDeps {
   now(): number;
 }
 
+export interface ReviewOptions extends Partial<ReviewDeps> {
+  /** Settings-level answer language; an in-session choice still wins. */
+  defaultGlossLang?: () => string;
+}
+
 /** Due cards only, oldest due first, optionally narrowed to one word language. */
 export function buildReviewQueue(
   state: LearningState,
@@ -112,7 +117,7 @@ interface ReviewState {
   spotResult: { chosen: number; correct: boolean } | null;
 }
 
-export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {}): ReviewView {
+export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
     answer: over.answer ?? defaultAnswer,
@@ -132,7 +137,7 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     correct: 0,
     revealed: false,
     termLang: readSession(TERM_LANG_KEY) || ALL,
-    glossLang: readSession(GLOSS_LANG_KEY),
+    glossLang: readSession(GLOSS_LANG_KEY) || (over.defaultGlossLang?.() ?? ""),
     busy: false,
     spotResult: null,
   };

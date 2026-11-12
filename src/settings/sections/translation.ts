@@ -1,4 +1,5 @@
-import type { Settings } from "../../shared/types";
+import type { DomainPreset, Settings } from "../../shared/types";
+import { DOMAIN_PRESETS } from "../../shared/preferences";
 import {
   clampInt,
   el,
@@ -44,6 +45,37 @@ export function createTranslationSection(ctx: SettingsContext): SectionHandle {
   targetLang.value = settings.targetLang;
   targetField.appendChild(targetLang);
   element.appendChild(targetField);
+
+  // Only general/tech/custom are exposed in v1; the other presets are
+  // reserved in shared/preferences.ts and stay out of the UI on purpose.
+  const styleField = el("fieldset", "field-group preference-field");
+  styleField.appendChild(el("legend", undefined, "翻译风格"));
+  const domainField = el("label", "field");
+  domainField.appendChild(el("span", "field-label", "风格预设"));
+  const preferenceDomain = el("select", "global-preference-domain");
+  for (const domain of ["general", "tech", "custom"] as DomainPreset[]) {
+    const option = el("option");
+    option.value = domain;
+    option.textContent = DOMAIN_PRESETS[domain].label;
+    preferenceDomain.appendChild(option);
+  }
+  preferenceDomain.value = settings.preference.domain;
+  domainField.appendChild(preferenceDomain);
+  styleField.appendChild(domainField);
+
+  const instructionsField = el("label", "field");
+  instructionsField.appendChild(el("span", "field-label", "追加说明"));
+  const preferenceInstructions = el("textarea", "global-preference-instructions");
+  preferenceInstructions.rows = 3;
+  preferenceInstructions.maxLength = 500;
+  preferenceInstructions.placeholder = "例如：保留英文术语，语气口语化";
+  preferenceInstructions.value = settings.preference.instructions;
+  instructionsField.appendChild(preferenceInstructions);
+  instructionsField.appendChild(
+    el("span", "field-hint", "只影响用词与语气，不会改变译文格式；最多 500 字。"),
+  );
+  styleField.appendChild(instructionsField);
+  element.appendChild(styleField);
 
   const scopeField = el("fieldset", "field-group");
   scopeField.appendChild(el("legend", undefined, "翻译范围"));
@@ -129,6 +161,10 @@ export function createTranslationSection(ctx: SettingsContext): SectionHandle {
           contentOnly: contentOnly.checked,
           triggerMode,
           glossaryEnabled: glossaryEnabled.checked,
+          preference: {
+            domain: preferenceDomain.value as DomainPreset,
+            instructions: preferenceInstructions.value.trim().slice(0, 500),
+          },
         });
         saved.textContent = "已保存";
       } catch {
@@ -159,6 +195,8 @@ export function createTranslationSection(ctx: SettingsContext): SectionHandle {
       minParagraphLength.input.value = String(next.minParagraphLength);
       contentOnly.checked = next.contentOnly !== false;
       glossaryEnabled.checked = next.glossaryEnabled !== false;
+      preferenceDomain.value = next.preference.domain;
+      preferenceInstructions.value = next.preference.instructions;
       for (const radio of triggerRadios) {
         radio.checked = radio.value === next.triggerMode;
       }

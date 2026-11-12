@@ -1,6 +1,6 @@
 import type { Settings } from "../../shared/types";
 
-export type SectionId = "model" | "translation" | "advanced" | "maintenance";
+export type SectionId = "model" | "translation" | "learning" | "advanced" | "maintenance";
 
 export interface SettingsContext {
   getSettings(): Settings;

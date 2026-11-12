@@ -10,6 +10,7 @@ import { el } from "./components";
 import { mountProviderManager, type ProviderManagerHandle } from "./provider-manager";
 import { createAdvancedSection } from "./sections/advanced";
 import { createMaintenanceSection } from "./sections/maintenance";
+import { createLearningSection } from "./sections/learning";
 import { createModelSection } from "./sections/model";
 import { createTranslationSection } from "./sections/translation";
 import type { SectionHandle, SettingsContext } from "./sections/types";
@@ -71,6 +72,7 @@ function mount(
   const handles: SectionHandle[] = [
     createModelSection(ctx),
     createTranslationSection(ctx),
+    createLearningSection(ctx),
     createAdvancedSection(ctx),
     createMaintenanceSection(ctx),
   ];
@@ -80,6 +82,7 @@ function mount(
   const titles: Record<string, string> = {
     model: "模型设置",
     translation: "翻译设置",
+    learning: "学习",
     advanced: "性能与提示词",
     maintenance: "缓存维护",
   };

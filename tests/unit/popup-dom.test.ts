@@ -81,7 +81,7 @@ async function boot(): Promise<void> {
 }
 
 describe("popup shell", () => {
-  it("renders four settings sections and defaults to model settings", async () => {
+  it("renders five settings sections and defaults to model settings", async () => {
     installChrome();
     await seed();
     await boot();
@@ -89,12 +89,12 @@ describe("popup shell", () => {
     expect(document.documentElement.dataset.theme).toBe("quantum");
     expect(document.querySelector(".popup-title")?.textContent).toBe("翻译设置");
     expect(document.querySelector(".popup-open-options")).toBeNull();
-    expect(document.querySelectorAll("details.settings-section")).toHaveLength(4);
+    expect(document.querySelectorAll("details.settings-section")).toHaveLength(5);
     expect(
       Array.from(document.querySelectorAll("details.settings-section")).map((node) =>
         (node as HTMLElement).dataset.section,
       ),
-    ).toEqual(["model", "translation", "advanced", "maintenance"]);
+    ).toEqual(["model", "translation", "learning", "advanced", "maintenance"]);
     expect(
       (document.querySelector('details[data-section="model"]') as HTMLDetailsElement).open,
     ).toBe(true);

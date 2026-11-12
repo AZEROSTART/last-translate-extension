@@ -137,6 +137,8 @@ export interface Settings {
   systemPrompt: string;
   /** @deprecated Derived per request; no longer written. */
   promptVersion: string;
+  /** Answer language for reviews; empty = each word's captured language. */
+  reviewAnswerLang?: string;
   triggerMode: "shortcut" | "auto-current-site";
   siteRules: Record<string, "auto" | "never">;
   theme: "system" | "light" | "dark";
