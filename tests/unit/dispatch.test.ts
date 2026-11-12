@@ -13,8 +13,7 @@ import type { CompletionRequest, CompletionResult, ProviderAdapter } from "../..
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey } from "../../src/background/cache";
 import type { CachedTranslation } from "../../src/background/cache";
-import { DEFAULT_SETTINGS } from "../../src/shared/storage";
-import { promptVersionFor } from "../../src/shared/prompt";
+import { buildFormatPrompt, buildPromptVersion } from "../../src/shared/prompt";
 import type { ProviderConfig, Settings } from "../../src/shared/types";
 
 const settings: Settings = {
@@ -346,7 +345,10 @@ it("translates a multi-segment group, caches each item, and uses provider overri
   expect(complete).toHaveBeenCalledTimes(1);
   const req = complete.mock.calls[0][1];
   expect(req.temperature).toBe(0.7);
-  expect(req.messages[0].content).toBe("OVERRIDE");
+  const system = req.messages[0].content;
+  expect(system).toContain("OVERRIDE");
+  expect(system.startsWith("你是一个翻译引擎")).toBe(true);
+  expect(system.indexOf("OVERRIDE")).toBeGreaterThan(system.indexOf("[编号]"));
   expect(put).toHaveBeenCalledTimes(2);
   expect(sent).toContainEqual({ type: "result", requestId: "r9", items: [{ id: "p_1", text: "甲" }, { id: "p_2", text: "乙" }] });
 });
@@ -360,9 +362,32 @@ it("builds the cache key from text, target lang, provider, model and effective p
     targetLang: "zh-CN",
     providerConfigId: "a",
     modelId: "m",
-    promptVersion: await promptVersionFor("SYS"),
+    promptVersion: await buildPromptVersion({ glossaryEnabled: false, preferenceText: "" }),
   });
   expect(get.mock.calls[0][0]).toBe(expected);
+});
+
+it("does not invalidate the page cache when a learning language is added", async () => {
+  const store = new Map<string, CachedTranslation>();
+  const cache = {
+    get: async (key: string) => store.get(key),
+    put: async (key: string, value: CachedTranslation) => {
+      store.set(key, value);
+    },
+  };
+  const complete = vi.fn(async () => ({ text: "[1] 甲\n[2] 乙" }));
+  let learningLangs = ["en"];
+  const { d } = deps({
+    cache,
+    adapter: fakeAdapter({ complete }),
+    getSettings: async () => ({ ...settings, learningLangs }),
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "rA", tabId: 1, items: items(2) }, () => {});
+  learningLangs = ["en", "es"];
+  await handleTranslate(d, { type: "translate", requestId: "rB", tabId: 1, items: items(2) }, () => {});
+
+  expect(complete).toHaveBeenCalledTimes(1);
 });
 
 it("keys the cache by each provider's effective systemPrompt override", async () => {
@@ -412,7 +437,11 @@ it("falls back to the built-in prompt when the global systemPrompt is blank", as
   await handleTranslate(d, { type: "translate", requestId: "r14", tabId: 1, items: items(2) }, () => {});
   const req = complete.mock.calls[0][1];
   expect(req.messages[0].content).toBe(
-    DEFAULT_SETTINGS.systemPrompt.replace("{{targetLang}}", "zh-CN"),
+    buildFormatPrompt({
+      targetLang: "zh-CN",
+      glossaryEnabled: settings.glossaryEnabled,
+      glossLangs: [],
+    }).replace("{{targetLang}}", "zh-CN"),
   );
 });
 

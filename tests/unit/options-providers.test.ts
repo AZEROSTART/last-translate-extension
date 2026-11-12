@@ -3,9 +3,9 @@ import type { ProviderConfig } from "../../src/shared/types";
 import {
   applyProviderForm,
   maskKey,
-  promptVersionFor,
   validateProvider,
 } from "../../src/settings/provider-form";
+import { buildPromptVersion } from "../../src/shared/prompt";
 import { DEEPSEEK_PRESET } from "../../src/shared/providers";
 
 const base: ProviderConfig = {
@@ -114,14 +114,18 @@ describe("applyProviderForm", () => {
   });
 });
 
-describe("promptVersionFor", () => {
+describe("buildPromptVersion", () => {
   it("is stable for identical input and returns a 64-char SHA-256 hex", async () => {
-    const first = await promptVersionFor("相同的提示词");
-    expect(first).toBe(await promptVersionFor("相同的提示词"));
+    const first = await buildPromptVersion({ glossaryEnabled: true, preferenceText: "相同的提示词" });
+    expect(first).toBe(
+      await buildPromptVersion({ glossaryEnabled: true, preferenceText: "相同的提示词" }),
+    );
     expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("changes when the prompt changes", async () => {
-    expect(await promptVersionFor("提示词 A")).not.toBe(await promptVersionFor("提示词 B"));
+  it("changes when the preference changes", async () => {
+    expect(
+      await buildPromptVersion({ glossaryEnabled: true, preferenceText: "提示词 A" }),
+    ).not.toBe(await buildPromptVersion({ glossaryEnabled: true, preferenceText: "提示词 B" }));
   });
 });

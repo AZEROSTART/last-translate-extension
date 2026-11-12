@@ -5,8 +5,6 @@
 
 import type { ErrorCode, ProviderConfig } from "../shared/types";
 
-export { promptVersionFor } from "../shared/prompt";
-
 export interface ProviderOverridesForm {
   concurrency?: number | "";
   maxRPS?: number | "";

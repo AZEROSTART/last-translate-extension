@@ -3,8 +3,8 @@ import { estimateTokens } from "../../src/shared/token-estimate";
 import {
   GLOSSARY_INSTRUCTIONS,
   GLOSSARY_MARKER,
-  buildEffectiveSystemPrompt,
   buildFormatPrompt,
+  buildPromptVersion,
   buildTranslateMessages,
   groupSegments,
   parseAnnotatedResponse,
@@ -127,19 +127,13 @@ describe("parseNumberedResponse", () => {
   });
 });
 
-describe("buildEffectiveSystemPrompt", () => {
-  it("appends the glossary protocol once when enabled", () => {
-    const on = buildEffectiveSystemPrompt("SYS", true);
-    expect(on).toContain("SYS");
+describe("buildFormatPrompt glossary contract", () => {
+  it("embeds the glossary protocol once when enabled", () => {
+    const on = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: true, glossLangs: [] });
     expect(on).toContain(GLOSSARY_INSTRUCTIONS);
     expect(on).toContain(GLOSSARY_MARKER);
     expect(on).toContain("0～3");
     expect(on).toContain("注释块是必须输出的第二部分");
-    expect(buildEffectiveSystemPrompt(on, true)).toBe(on);
-  });
-
-  it("returns the base prompt unchanged when disabled", () => {
-    expect(buildEffectiveSystemPrompt("SYS", false)).toBe("SYS");
   });
 });
 
@@ -319,5 +313,18 @@ describe("parseAnnotatedResponse glosses", () => {
     expect(parseAnnotatedResponse(raw, items, ["es", "ja", "fr"]).glossary.get("p_1")?.[0].glosses).toEqual({
       es: "sobrevivir",
     });
+  });
+});
+
+describe("buildPromptVersion", () => {
+  it("is stable, format-versioned, and ignores the gloss languages", async () => {
+    const a = await buildPromptVersion({ glossaryEnabled: true, preferenceText: "tech" });
+    const b = await buildPromptVersion({ glossaryEnabled: true, preferenceText: "tech" });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    const c = await buildPromptVersion({ glossaryEnabled: true, preferenceText: "legal" });
+    expect(c).not.toBe(a);
+    const d = await buildPromptVersion({ glossaryEnabled: false, preferenceText: "tech" });
+    expect(d).not.toBe(a);
   });
 });

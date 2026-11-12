@@ -3,7 +3,8 @@
  * Pure functions only: no DOM, no `chrome.*`, no network.
  */
 
-import type { ChatMessage, GlossaryNote } from "./types";
+import type { ChatMessage, GlossaryNote, TranslationPreference } from "./types";
+import { buildPreferencePrompt, wrapProviderOverride } from "./preferences";
 import { estimateTokens } from "./token-estimate";
 
 /** Line that separates translations from optional glossary annotations. */
@@ -19,12 +20,6 @@ export const GLOSSARY_INSTRUCTIONS = `注意：启用学习注释时，最终输
 在全部译文之后另起一行输出 ${GLOSSARY_MARKER}，下一行只输出一个 JSON 对象，键是译文里的段号（字符串），值是该段的注释数组：
 {"1":[{"surface":"原文中的词或短语","pos":"词性，可省略","meaning":"当前语境下的释义","example":"原文中的短例句，可省略"}]}
 规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
-
-/** Append the glossary protocol once, or leave the base prompt untouched. */
-export function buildEffectiveSystemPrompt(systemPrompt: string, glossaryEnabled: boolean): string {
-  if (!glossaryEnabled || systemPrompt.includes(GLOSSARY_MARKER)) return systemPrompt;
-  return systemPrompt ? `${systemPrompt}\n\n${GLOSSARY_INSTRUCTIONS}` : GLOSSARY_INSTRUCTIONS;
-}
 
 /** Developer-owned format contract version; bump when the contract changes. */
 export const FORMAT_VERSION = 2;
@@ -62,15 +57,35 @@ export function buildFormatPrompt(options: FormatOptions): string {
   return parts.join("\n\n");
 }
 
+export interface SystemPromptOptions extends FormatOptions {
+  preference?: TranslationPreference;
+  /** Provider-level preference; replaces (never appends to) the global layer. */
+  providerOverride?: string;
+}
+
+/** Format layer first, preference layer second; either may be empty. */
+export function buildSystemPrompt(options: SystemPromptOptions): string {
+  const format = buildFormatPrompt(options);
+  const override = options.providerOverride?.trim();
+  const preference = override
+    ? wrapProviderOverride(override)
+    : options.preference
+      ? buildPreferencePrompt(options.preference)
+      : "";
+  return [format, preference].filter((part) => part !== "").join("\n\n");
+}
+
 /**
- * Lowercase SHA-256 hex of the effective system prompt. Used as the cache
- * `promptVersion`; identical prompt text must always yield the same value.
+ * Cache version derived from the contract, the glossary toggle and the
+ * preference text. `glossLangs` is deliberately absent: adding a learning
+ * language must not invalidate every cached page.
  */
-export async function promptVersionFor(systemPrompt: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(systemPrompt),
-  );
+export async function buildPromptVersion(options: {
+  glossaryEnabled: boolean;
+  preferenceText: string;
+}): Promise<string> {
+  const payload = `v${FORMAT_VERSION}\u0000${options.glossaryEnabled ? "g" : ""}\u0000${options.preferenceText}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

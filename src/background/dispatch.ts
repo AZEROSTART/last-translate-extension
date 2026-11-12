@@ -21,16 +21,17 @@ import type {
 } from "../shared/types";
 import { getActiveProvider, getSettings, DEFAULT_SETTINGS } from "../shared/storage";
 import {
-  buildEffectiveSystemPrompt,
+  buildPromptVersion,
+  buildSystemPrompt,
   buildTranslateMessages,
   GLOSSARY_MARKER,
   groupSegments,
   parseAnnotatedResponse,
   parseGlossaryNotes,
   parseNumberedResponse,
-  promptVersionFor,
   PromptParseError,
 } from "../shared/prompt";
+import { buildPreferencePrompt, wrapProviderOverride } from "../shared/preferences";
 import { ProviderError } from "../shared/errors";
 import { buildCacheKey, TranslationCache } from "./cache";
 import type { CachedTranslation } from "./cache";
@@ -328,13 +329,22 @@ export async function handleTranslate(
   }
 
   const glossaryEnabled = settings.glossaryEnabled !== false;
-  const baseSystemPrompt = provider.overrides?.systemPrompt?.trim()
-    ? provider.overrides.systemPrompt
-    : settings.systemPrompt.trim()
-      ? settings.systemPrompt
-      : DEFAULT_SETTINGS.systemPrompt;
-  const systemPrompt = buildEffectiveSystemPrompt(baseSystemPrompt, glossaryEnabled);
-  const promptVersion = await promptVersionFor(systemPrompt);
+  const targetPrefix = languagePrefix(settings.targetLang);
+  const glossLangs = settings.learningLangs
+    .filter((lang) => languagePrefix(lang) !== targetPrefix)
+    .slice(0, 3);
+  const override = provider.overrides?.systemPrompt?.trim();
+  const preferenceText = override
+    ? wrapProviderOverride(override)
+    : buildPreferencePrompt(settings.preference);
+  const systemPrompt = buildSystemPrompt({
+    targetLang: settings.targetLang,
+    glossaryEnabled,
+    glossLangs,
+    preference: settings.preference,
+    providerOverride: override,
+  });
+  const promptVersion = await buildPromptVersion({ glossaryEnabled, preferenceText });
   const temperature = provider.overrides?.temperature ?? settings.temperature;
 
   const keyById = new Map<string, string>();
@@ -383,6 +393,7 @@ export async function handleTranslate(
         send,
         true,
         glossaryEnabled,
+        glossLangs,
       ),
     ),
   );
@@ -408,6 +419,7 @@ export async function handleTranslate(
             send,
             false,
             glossaryEnabled,
+            glossLangs,
           ),
         ),
       );
@@ -475,6 +487,7 @@ function enqueueTranslateGroup(
   send: (m: BackgroundToClient) => void,
   allowSplit: boolean,
   glossaryEnabled: boolean,
+  glossLangs: string[],
 ): Promise<GroupOutcome> {
   const ids = group.map((item) => item.id);
   return deps.queue
@@ -495,6 +508,7 @@ function enqueueTranslateGroup(
           send,
           allowSplit,
           glossaryEnabled,
+          glossLangs,
         ),
     })
     .then(
@@ -578,6 +592,7 @@ async function runGroup(
   send: (m: BackgroundToClient) => void,
   allowSplit: boolean,
   glossaryEnabled: boolean,
+  glossLangs: string[],
 ): Promise<Map<string, TranslationOutput>> {
   const messages = buildTranslateMessages(group, targetLang, systemPrompt);
   const single = group.length === 1 ? group[0].id : undefined;
@@ -597,7 +612,7 @@ async function runGroup(
           if (joined.trim() === "") {
             throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
           }
-          const glossary = parseGlossaryNotes(notesRaw, group).get(single) ?? [];
+          const glossary = parseGlossaryNotes(notesRaw, group, glossLangs).get(single) ?? [];
           return new Map([[single, { text: joined, glossary }]]);
         }
 
@@ -619,7 +634,7 @@ async function runGroup(
 
       const result = await deps.adapter.complete(provider, { messages, temperature, signal });
       if (glossaryEnabled) {
-        const parsed = parseAnnotatedResponse(result.text, group);
+        const parsed = parseAnnotatedResponse(result.text, group, glossLangs);
         const map = new Map<string, TranslationOutput>();
         for (const item of group) {
           const text = parsed.translations.get(item.id)!;
@@ -785,4 +800,9 @@ function isAborted(err: unknown): boolean {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** ISO language tag → short prefix, e.g. "zh-CN" → "zh". */
+function languagePrefix(lang: string): string {
+  return lang.split("-")[0].trim().toLowerCase();
 }

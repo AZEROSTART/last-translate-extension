@@ -5,8 +5,6 @@ import type { ProviderConfig, Settings } from "../../src/shared/types";
 import { DEFAULT_SETTINGS, getSettings } from "../../src/shared/storage";
 import { ProviderError } from "../../src/shared/errors";
 import { buildCacheKey, TranslationCache } from "../../src/background/cache";
-import { buildEffectiveSystemPrompt } from "../../src/shared/prompt";
-import { promptVersionFor } from "../../src/settings/provider-form";
 
 vi.mock("../../src/providers", () => ({
   listModels: vi.fn(),
@@ -418,7 +416,7 @@ describe("provider form actions", () => {
 });
 
 describe("global settings", () => {
-  it("preserves promptVersion when the prompt is unchanged and recomputes it after an edit", async () => {
+  it("preserves the stored prompt version while saving advanced settings", async () => {
     await seed({
       providers: [p1],
       activeProviderId: p1.id,
@@ -447,16 +445,14 @@ describe("global settings", () => {
 
     await vi.waitFor(async () => {
       const updated = await getSettings();
-      expect(updated.promptVersion).toBe(
-        await promptVersionFor(buildEffectiveSystemPrompt("新提示词", true)),
-      );
+      expect(updated.systemPrompt).toBe("新提示词");
     });
 
     s = await getSettings();
-    expect(s.systemPrompt).toBe("新提示词");
+    expect(s.promptVersion).toBe("keep-me");
   });
 
-  it("renders the glossary toggle and saves false with a fresh prompt version", async () => {
+  it("renders the glossary toggle and saves false without rewriting the prompt version", async () => {
     await seed({
       glossaryEnabled: true,
       systemPrompt: "旧提示词",
@@ -474,12 +470,10 @@ describe("global settings", () => {
     });
 
     const s = await getSettings();
-    expect(s.promptVersion).toBe(
-      await promptVersionFor(buildEffectiveSystemPrompt("旧提示词", false)),
-    );
+    expect(s.promptVersion).toBe("keep-me");
   });
 
-  it("recomputes the prompt version when the glossary toggle turns on", async () => {
+  it("saves the glossary toggle when it turns on", async () => {
     await seed({
       glossaryEnabled: false,
       systemPrompt: "旧提示词",
@@ -497,23 +491,7 @@ describe("global settings", () => {
     });
 
     const s = await getSettings();
-    expect(s.promptVersion).toBe(
-      await promptVersionFor(buildEffectiveSystemPrompt("旧提示词", true)),
-    );
-  });
-
-  it("initializes an empty stored promptVersion from the effective global prompt", async () => {
-    await seed({ promptVersion: "", systemPrompt: "" });
-    await boot();
-
-    click(".advanced-save");
-
-    await vi.waitFor(async () => {
-      const s = await getSettings();
-      expect(s.promptVersion).toBe(
-        await promptVersionFor(buildEffectiveSystemPrompt(DEFAULT_SETTINGS.systemPrompt, true)),
-      );
-    });
+    expect(s.promptVersion).toBe("keep-me");
   });
 
   it("keeps stored numeric values when the global fields are blank", async () => {

@@ -4,8 +4,7 @@
  * sections never discards unsaved input.
  */
 
-import { DEFAULT_SETTINGS, getSettings, saveSettings } from "../shared/storage";
-import { buildEffectiveSystemPrompt, promptVersionFor } from "../shared/prompt";
+import { getSettings, saveSettings } from "../shared/storage";
 import type { Settings } from "../shared/types";
 import { el } from "./components";
 import { mountProviderManager, type ProviderManagerHandle } from "./provider-manager";
@@ -116,20 +115,7 @@ function mount(
   }
 
   async function savePatch(patch: Partial<Settings>): Promise<void> {
-    const current = settings;
-    const next: Settings = { ...current, ...patch };
-    const promptChanged =
-      patch.systemPrompt !== undefined && patch.systemPrompt !== current.systemPrompt;
-    const glossaryChanged =
-      patch.glossaryEnabled !== undefined && patch.glossaryEnabled !== current.glossaryEnabled;
-    if (promptChanged || glossaryChanged || next.promptVersion === "") {
-      const effective = buildEffectiveSystemPrompt(
-        next.systemPrompt.trim() ? next.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
-        next.glossaryEnabled,
-      );
-      next.promptVersion = await promptVersionFor(effective);
-    }
-
+    const next: Settings = { ...settings, ...patch };
     await saveSettings(next);
     settings = await getSettings();
     if (patch.activeProviderId !== undefined) modelHandle.update(settings);
