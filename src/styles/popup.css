@@ -8,11 +8,15 @@
   color-scheme: dark;
 }
 
+html,
+body {
+  background: transparent;
+}
+
 body {
   margin: 0;
   width: 400px;
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-  background: var(--ilmt-bg, #04060c);
   color: var(--ilmt-text, #dffcf7);
 }
 
@@ -22,8 +26,9 @@ body {
   display: flex;
   flex-direction: column;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: 16px;
   overflow: hidden;
+  box-shadow: 0 0 0 1px var(--ilmt-border-soft);
   background:
     radial-gradient(circle at 1px 1px, rgba(103, 232, 249, 0.08) 1px, transparent 0) 0 0 / 16px 16px,
     linear-gradient(160deg, rgba(7, 22, 21, 0.98), rgba(4, 10, 12, 0.98));
@@ -32,12 +37,14 @@ body {
 body.page-mode {
   width: min(560px, 100%);
   margin: 0 auto;
+  background: var(--ilmt-bg);
 }
 
 body.page-mode #root {
   min-height: 100vh;
   max-height: none;
   border-radius: 0;
+  box-shadow: none;
   overflow: visible;
 }
 
