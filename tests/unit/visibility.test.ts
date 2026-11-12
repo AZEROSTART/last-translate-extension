@@ -174,3 +174,25 @@ it("stops mapping a root after unobserve", () => {
 
   expect(batches).toEqual([]);
 });
+
+it("prunes roots that have left the document", () => {
+  installFake();
+  const gate = createVisibilityObserver({
+    prefetchScreens: 1,
+    batchMs: 150,
+    onVisible: () => {},
+  });
+  const io = FakeIntersectionObserver.instances[0];
+  const attached = document.createElement("p");
+  const detached = document.createElement("p");
+  document.body.append(attached);
+  gate.observe(attached, ["a"]);
+  gate.observe(detached, ["b"]);
+
+  detached.remove();
+  gate.pruneDetached();
+
+  expect(io.targets.has(detached)).toBe(false);
+  expect(io.targets.has(attached)).toBe(true);
+  attached.remove();
+});

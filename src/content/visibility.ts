@@ -22,6 +22,8 @@ export interface VisibilityObserver {
   observe(root: Element, ids: string[]): void;
   /** Stop observing a root whose paragraphs were invalidated. */
   unobserve(root: Element): void;
+  /** Drop roots the page removed, so the map cannot outlive the DOM. */
+  pruneDetached(): void;
   /** Disconnect and drop any pending batch (restore / rescan). */
   stop(): void;
 }
@@ -91,6 +93,13 @@ export function createVisibilityObserver(options: VisibilityOptions): Visibility
     unobserve(root) {
       if (!roots.delete(root)) return;
       io.unobserve(root);
+    },
+    pruneDetached() {
+      for (const root of roots.keys()) {
+        if (root.isConnected) continue;
+        roots.delete(root);
+        io.unobserve(root);
+      }
     },
     stop() {
       io.disconnect();

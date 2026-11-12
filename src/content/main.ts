@@ -925,6 +925,7 @@ function startPruneTimer(): void {
   pruneTimer = setInterval(() => {
     registry.prune();
     pruneOrphanTranslations();
+    visibility?.pruneDetached();
   }, PRUNE_INTERVAL_MS);
 }
 

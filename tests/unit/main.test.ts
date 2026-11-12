@@ -531,3 +531,28 @@ it("replaces the visibility observer on an SPA rescan", async () => {
     restoreIo();
   }
 });
+
+it("unobserves detached piece roots on the prune timer", async () => {
+  document.body.innerHTML = `<p id="top">First paragraph here.</p><p id="far">Far paragraph here.</p>`;
+  const restoreIo = installFakeIntersectionObserver();
+  vi.useFakeTimers();
+  try {
+    stubRect(document.getElementById("far")!, 5000, 5040);
+    const { runContentMain } = await import("../../src/content/main");
+    (globalThis as any).__ilmtTestPort = { send: vi.fn() };
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const io = FakeIntersectionObserver.instances.at(-1)!;
+    const far = document.getElementById("far")!;
+    expect(io.targets.has(far)).toBe(true);
+
+    far.remove();
+    vi.advanceTimersByTime(30_000);
+
+    expect(io.targets.has(far)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    restoreIo();
+  }
+});
