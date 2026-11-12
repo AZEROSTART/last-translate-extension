@@ -26,6 +26,59 @@ function djb2Hex(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+type VisibilityEntry = { target: Element; isIntersecting: boolean };
+
+/** Records observed roots and lets the test drive intersection callbacks. */
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  readonly targets = new Set<Element>();
+  disconnected = false;
+
+  constructor(
+    public readonly callback: IntersectionObserverCallback,
+    public readonly options: IntersectionObserverInit,
+  ) {
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(el: Element): void {
+    this.targets.add(el);
+  }
+
+  unobserve(el: Element): void {
+    this.targets.delete(el);
+  }
+
+  disconnect(): void {
+    this.targets.clear();
+    this.disconnected = true;
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  fire(entries: VisibilityEntry[]): void {
+    this.callback(
+      entries.map((entry) => ({
+        ...entry,
+        intersectionRatio: entry.isIntersecting ? 1 : 0,
+      })) as IntersectionObserverEntry[],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
+/** Install the fake for one test; the original constructor is restored after. */
+function installFakeIntersectionObserver(): () => void {
+  const original = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+  FakeIntersectionObserver.instances = [];
+  (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver;
+  return () => {
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = original;
+  };
+}
+
 /** A port stub that records outbound messages and lets the test drive inbound ones. */
 function captureConnectPort() {
   const sent: any[] = [];
@@ -219,15 +272,15 @@ function stubRect(el: Element, top: number, bottom: number): void {
     }) as DOMRect;
 }
 
-it("sends the paragraph nearest the viewport first, then the 300px band", async () => {
+it("sends the paragraph nearest the viewport first inside one batch", async () => {
   document.body.innerHTML = [
     `<p id="far">Far away paragraph here.</p>`,
     `<p id="near">Nearest paragraph here.</p>`,
     `<p id="below">Just below paragraph here.</p>`,
   ].join("");
-  stubRect(document.getElementById("far")!, 5000, 5050);
+  stubRect(document.getElementById("far")!, 1200, 1250);
   stubRect(document.getElementById("near")!, 100, 150);
-  stubRect(document.getElementById("below")!, 900, 950); // 132px below a 768px viewport
+  stubRect(document.getElementById("below")!, 900, 950);
 
   const { runContentMain } = await import("../../src/content/main");
   runContentMain();
@@ -243,40 +296,35 @@ it("sends the paragraph nearest the viewport first, then the 300px band", async 
   ]);
 });
 
-it("pumps queued paragraphs on scroll when no request is in flight", async () => {
+it("leaves off-screen paragraphs to the observer instead of pumping on scroll", async () => {
   document.body.innerHTML = Array.from(
     { length: 21 },
     (_, i) => `<p>Paragraph number ${i} here.</p>`,
   ).join("");
-  const { runContentMain } = await import("../../src/content/main");
-  const { sent, disconnectListeners, connect } = captureConnectPort();
-  (globalThis as any).chrome.runtime.connect = connect;
+  const restoreIo = installFakeIntersectionObserver();
+  try {
+    const last = document.querySelectorAll("p")[20]!;
+    stubRect(last, 6000, 6040);
+    const { runContentMain } = await import("../../src/content/main");
+    const { sent, connect } = captureConnectPort();
+    (globalThis as any).chrome.runtime.connect = connect;
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
 
-  runContentMain();
-  await (globalThis as any).__ilmtMain.translatePage();
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
-  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
-  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
-  const paragraphs = Array.from(document.querySelectorAll("p"));
-  expect(paragraphs[20].querySelector(".ilmt-tr")).toBeNull();
+    expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+    expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
+    expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
 
-  // Still in flight: a scroll must not start a second request.
-  window.dispatchEvent(new Event("scroll"));
-  await new Promise((resolve) => setTimeout(resolve, 320));
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+    window.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => setTimeout(resolve, 320));
 
-  // Server-side disconnect requeues inflight work and resumes it immediately
-  // through the port client's reconnect queue.
-  disconnectListeners[0]();
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
-  // The retry reuses the same skeletons instead of stacking new ones.
-  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(20);
-  expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
-
-  // The requeued batch is now in flight; a scroll must not preempt it.
-  window.dispatchEvent(new Event("scroll"));
-  await new Promise((resolve) => setTimeout(resolve, 320));
-  expect(sent.filter((m) => m.type === "translate")).toHaveLength(2);
+    expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+    expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(20);
+    // The 21st paragraph waits for the visibility observer, not for a scroll.
+    expect(FakeIntersectionObserver.instances.at(-1)!.targets.has(last)).toBe(true);
+  } finally {
+    restoreIo();
+  }
 });
 
 it("removes old translations before an SPA rescan so sources stay clean", async () => {
@@ -373,4 +421,113 @@ it("defers closing the port until after the abort message is posted", async () =
 
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(disconnect).toHaveBeenCalledTimes(1);
+});
+
+it("requeues inflight paragraphs when the port disconnects", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, disconnectListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+
+  disconnectListeners[0]();
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items).toHaveLength(1);
+  expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+});
+
+it("translates only the viewport band, then follows the observer", async () => {
+  document.body.innerHTML = `<p id="top">First paragraph here.</p><p id="bottom">Last paragraph here.</p>`;
+  const restoreIo = installFakeIntersectionObserver();
+  try {
+    stubRect(document.getElementById("bottom")!, 5000, 5040);
+    const { runContentMain } = await import("../../src/content/main");
+    const { sent, messageListeners, connect } = captureConnectPort();
+    (globalThis as any).chrome.runtime.connect = connect;
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const first = sent.find((m) => m.type === "translate");
+    expect(first.items.map((item: any) => item.text)).toEqual(["First paragraph here."]);
+
+    const io = FakeIntersectionObserver.instances.at(-1)!;
+    const bottom = document.getElementById("bottom")!;
+    expect(io.targets.has(bottom)).toBe(true);
+
+    io.fire([{ target: bottom, isIntersecting: true }]);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    messageListeners[0]({ type: "finish", requestId: first.requestId });
+
+    const translates = sent.filter((m) => m.type === "translate");
+    expect(translates).toHaveLength(2);
+    expect(translates[1].items.map((item: any) => item.text)).toEqual(["Last paragraph here."]);
+  } finally {
+    restoreIo();
+  }
+});
+
+it("does not re-observe a paragraph the initial band already queued", async () => {
+  document.body.innerHTML = `<p id="top">First paragraph here.</p>`;
+  const restoreIo = installFakeIntersectionObserver();
+  try {
+    const { runContentMain } = await import("../../src/content/main");
+    runContentMain();
+    (globalThis as any).__ilmtTestPort = { send: vi.fn() };
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const io = FakeIntersectionObserver.instances.at(-1)!;
+    expect(io.targets.size).toBe(0);
+  } finally {
+    restoreIo();
+  }
+});
+
+it("disconnects the visibility observer on restore", async () => {
+  document.body.innerHTML = `<p id="top">First paragraph here.</p><p id="bottom">Last paragraph here.</p>`;
+  const restoreIo = installFakeIntersectionObserver();
+  try {
+    stubRect(document.getElementById("bottom")!, 5000, 5040);
+    const { runContentMain } = await import("../../src/content/main");
+    const sent: any[] = [];
+    (globalThis as any).__ilmtTestPort = { send: (m: any) => sent.push(m) };
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const io = FakeIntersectionObserver.instances.at(-1)!;
+    (globalThis as any).__ilmtMain.restore();
+    expect(io.disconnected).toBe(true);
+
+    io.fire([{ target: document.getElementById("bottom")!, isIntersecting: true }]);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sent.filter((m) => m.type === "translate")).toHaveLength(1);
+  } finally {
+    restoreIo();
+  }
+});
+
+it("replaces the visibility observer on an SPA rescan", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const restoreIo = installFakeIntersectionObserver();
+  try {
+    const { runContentMain } = await import("../../src/content/main");
+    const navListeners: Array<(message: unknown, sender: { id?: string }) => void> = [];
+    (globalThis as any).chrome.runtime.onMessage.addListener = (cb: any) => navListeners.push(cb);
+    (globalThis as any).__ilmtTestPort = { send: vi.fn() };
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+    const firstIo = FakeIntersectionObserver.instances.at(-1)!;
+
+    navListeners[0]({ type: "page-navigated" }, { id: (globalThis as any).chrome.runtime.id });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const secondIo = FakeIntersectionObserver.instances.at(-1)!;
+    expect(secondIo).not.toBe(firstIo);
+    expect(firstIo.disconnected).toBe(true);
+  } finally {
+    restoreIo();
+  }
 });

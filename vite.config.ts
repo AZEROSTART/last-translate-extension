@@ -87,7 +87,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/unit/**/*.test.ts"],
-    setupFiles: ["./tests/setup/chrome-mock.ts"],
+    setupFiles: ["./tests/setup/chrome-mock.ts", "./tests/setup/intersection-observer.ts"],
     // The panel/popup bundles import their CSS with `?inline`; without CSS
     // processing the module resolves to an empty string in jsdom.
     css: true,

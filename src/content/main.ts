@@ -1,7 +1,8 @@
 /**
- * Content-script orchestration: activate → detect → queue → batch-translate →
- * render → restore. Owns the paragraph registry, the translate port, the
- * dynamic-content observer and the SPA-rescan hook. Paragraph detection,
+ * Content-script orchestration: activate → detect → observe/queue →
+ * batch-translate → render → restore. Owns the paragraph registry, the
+ * translate port, the visibility observer, the dynamic-content observer and
+ * the SPA-rescan hook. Paragraph detection,
  * rendering and port mechanics stay in their own modules; this file only wires
  * them together.
  *
@@ -30,6 +31,7 @@ import {
 } from "./render";
 import { ParagraphRegistry, type ParagraphRecord } from "./registry";
 import { createTranslatePort, type PortError, type TranslatePortClient } from "./port";
+import { createVisibilityObserver, inPrefetchBand, type VisibilityObserver } from "./visibility";
 import { createGlossController } from "./glossary";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
 import { buildSelectionContext } from "./selection-context";
@@ -53,8 +55,10 @@ const BATCH_SIZE = 20;
 const MUTATION_DEBOUNCE_MS = 250;
 /** Viewport-first band below the fold (spec §8.5 `rootMargin: 300px`). */
 const VIEWPORT_MARGIN_PX = 300;
-/** Scroll-triggered pump debounce, matching the mutation debounce. */
-const SCROLL_DEBOUNCE_MS = 250;
+/** Viewport heights below the fold that are queued before they are seen. */
+const VIEWPORT_PREFETCH_SCREENS = 1;
+/** Coalescing window for roots that enter the visible band together. */
+const VISIBILITY_BATCH_MS = 150;
 /** Registry prune cadence (spec §8.4). */
 const PRUNE_INTERVAL_MS = 30_000;
 const DEFAULT_TARGET_LANG = "zh-CN";
@@ -109,8 +113,8 @@ let observer: MutationObserver | null = null;
 let observerPaused = false;
 let mutationTimer: ReturnType<typeof setTimeout> | null = null;
 let pruneTimer: ReturnType<typeof setInterval> | null = null;
-let scrollListening = false;
-let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+/** Grants queue rights to paragraphs that scroll into the visible band. */
+let visibility: VisibilityObserver | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 /** While set, `pump` waits for the single rate-limit retry timer. */
@@ -170,7 +174,7 @@ async function translatePage(): Promise<void> {
     gloss.start();
     showActiveBanner();
     startPruneTimer();
-    startScrollListener();
+    startVisibilityObserver();
 
     // At document_start `<body>` may not exist yet; wait for the parser before
     // touching the tree. A rescan may have bumped the generation while we
@@ -195,6 +199,7 @@ async function rescan(): Promise<void> {
   // Invalidate the previous scan first, then rebuild marks and run a fresh
   // full scan; the coordinator queues it behind any still-running scan.
   const generation = ++scanGeneration;
+  stopVisibilityObserver();
   registry = new ParagraphRegistry();
   gloss.clear();
   // `restoreAll` removes both injected translation spans and `data-ilmt-p`
@@ -250,7 +255,7 @@ async function runScanQueue(first: ScanTicket): Promise<void> {
       const current = ticket;
       ticket = null;
       try {
-        if (current.kind === "full") await collectAndQueue(current.generation);
+        if (current.kind === "full") await collectAndObserve(current.generation);
         else await enqueueNewParagraphs(current.generation);
       } catch (error) {
         reportScanError(error);
@@ -279,8 +284,8 @@ function unmarkNodes(nodes: ParagraphNode[]): void {
   }
 }
 
-/** Collect the full page, cap at MAX_PARAGRAPHS, queue and start the first batch. */
-async function collectAndQueue(generation: number): Promise<void> {
+/** Collect the full page, cap at MAX_PARAGRAPHS, then observe or queue it. */
+async function collectAndObserve(generation: number): Promise<void> {
   if (!active || generation !== scanGeneration) return;
   const body = document.body;
   if (!body) return;
@@ -319,15 +324,57 @@ async function collectAndQueue(generation: number): Promise<void> {
     );
   }
 
-  queueNodes(nodes.slice(0, MAX_PARAGRAPHS));
+  registerScannedNodes(nodes.slice(0, MAX_PARAGRAPHS));
 }
 
-function queueNodes(nodes: ParagraphNode[]): void {
+function startVisibilityObserver(): void {
+  if (visibility) return;
+  visibility = createVisibilityObserver({
+    prefetchScreens: VIEWPORT_PREFETCH_SCREENS,
+    batchMs: VISIBILITY_BATCH_MS,
+    onVisible(ids) {
+      if (!active) return;
+      for (const id of ids) registry.setStatus(id, "queued");
+      pump();
+    },
+  });
+}
+
+function stopVisibilityObserver(): void {
+  visibility?.stop();
+  visibility = null;
+}
+
+/**
+ * Register a scanned batch and grant queue rights only to roots that are
+ * already inside the viewport band. Everything else waits for the observer,
+ * so scrolling (not the scan) decides when the rest is translated.
+ */
+function registerScannedNodes(nodes: ParagraphNode[]): void {
+  for (const node of nodes) registry.add(node);
+  if (nodes.length === 0) return;
+  startVisibilityObserver();
+
+  // One piece root can own several paragraph ids; observing it once reports
+  // them together when it enters the band.
+  const groups = new Map<Element, string[]>();
   for (const node of nodes) {
-    registry.add(node);
-    registry.setStatus(node.id, "queued");
+    const ids = groups.get(node.el);
+    if (ids) ids.push(node.id);
+    else groups.set(node.el, [node.id]);
   }
-  pump();
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  let queued = false;
+  for (const [root, ids] of groups) {
+    if (inPrefetchBand(root.getBoundingClientRect(), viewportHeight, VIEWPORT_PREFETCH_SCREENS)) {
+      for (const id of ids) registry.setStatus(id, "queued");
+      queued = true;
+    } else {
+      visibility!.observe(root, ids);
+    }
+  }
+  if (queued) pump();
 }
 
 /**
@@ -441,7 +488,7 @@ function restore(): void {
   langCache.clear();
   stopObserver();
   stopPruneTimer();
-  stopScrollListener();
+  stopVisibilityObserver();
   removeActiveBanner();
   removeErrorBanner();
   clearRateLimitTimer();
@@ -781,37 +828,6 @@ function stopObserver(): void {
   }
 }
 
-function startScrollListener(): void {
-  if (scrollListening) return;
-  window.addEventListener("scroll", handleScroll, { passive: true });
-  scrollListening = true;
-}
-
-function stopScrollListener(): void {
-  if (scrollListening) {
-    window.removeEventListener("scroll", handleScroll);
-    scrollListening = false;
-  }
-  if (scrollTimer !== null) {
-    clearTimeout(scrollTimer);
-    scrollTimer = null;
-  }
-}
-
-/**
- * Scrolling near/into already-collected content is an additional pump trigger
- * (continuous `finish` batching stays the primary one). It never preempts an
- * in-flight request; the queued records are simply left for the next pump.
- */
-function handleScroll(): void {
-  if (!active) return;
-  if (scrollTimer !== null) return;
-  scrollTimer = setTimeout(() => {
-    scrollTimer = null;
-    if (active && currentRequestId === null) pump();
-  }, SCROLL_DEBOUNCE_MS);
-}
-
 function handleMutations(mutations: MutationRecord[]): void {
   for (const mutation of mutations) {
     if (mutation.type !== "characterData") continue;
@@ -854,6 +870,7 @@ function invalidatePieceRoot(root: Element): void {
   }
   root.removeAttribute("data-ilmt-p");
   forgetPiecesInRoot(root);
+  visibility?.unobserve(root);
 }
 
 async function enqueueNewParagraphs(generation: number): Promise<void> {
@@ -881,7 +898,7 @@ async function enqueueNewParagraphs(generation: number): Promise<void> {
     pauseObservation();
     return;
   }
-  queueNodes(nodes);
+  registerScannedNodes(nodes);
 }
 
 function reserveDynamicSlots(count: number): boolean {
