@@ -134,3 +134,68 @@ describe("mountReview", () => {
     expect(root.textContent).toContain("本轮");
   });
 });
+
+describe("spot check integration", () => {
+  it("turns the third review into a four-way question and sends the spot result", async () => {
+    const target = word(1, {
+      surface: "outlive",
+      checksSinceSpot: 2,
+      dueAt: NOW - 5 * HOUR,
+      glosses: [{ lang: "zh", meaning: "比…活得久", source: "translation", at: NOW }],
+    });
+    const words = [
+      target,
+      word(2, { glosses: [{ lang: "zh", meaning: "实际的", source: "translation", at: NOW }] }),
+      word(3, { glosses: [{ lang: "zh", meaning: "当前的", source: "translation", at: NOW }] }),
+      word(4, { glosses: [{ lang: "zh", meaning: "生存", source: "translation", at: NOW }] }),
+    ];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+
+    const options = [...root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")];
+    expect(options).toHaveLength(4);
+    options.find((option) => option.textContent === "比…活得久")!.click();
+
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "review-answer",
+          id: "en:word1",
+          grade: "good",
+          spot: true,
+          spotCorrect: true,
+        }),
+      );
+    });
+  });
+
+  it("shows the correct meaning after a wrong answer and waits for 下一张", async () => {
+    const target = word(1, {
+      surface: "outlive",
+      checksSinceSpot: 2,
+      dueAt: NOW - 5 * HOUR,
+      glosses: [{ lang: "zh", meaning: "比…活得久", source: "translation", at: NOW }],
+    });
+    const words = [
+      target,
+      word(2, { glosses: [{ lang: "zh", meaning: "实际的", source: "translation", at: NOW }] }),
+      word(3, { glosses: [{ lang: "zh", meaning: "当前的", source: "translation", at: NOW }] }),
+      word(4, { glosses: [{ lang: "zh", meaning: "生存", source: "translation", at: NOW }] }),
+    ];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+
+    const options = [...root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")];
+    options.find((option) => option.textContent === "实际的")!.click();
+
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "en:word1", grade: "again", spot: true, spotCorrect: false }),
+      );
+    });
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-spot-note")?.textContent).toContain("比…活得久");
+    });
+    expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
+  });
+});

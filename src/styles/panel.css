@@ -571,3 +571,60 @@ button:focus-visible {
   color: var(--ilmt-muted);
   font-size: 12px;
 }
+
+.ilmt-review-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ilmt-review-option {
+  appearance: none;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 8px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ilmt-review-option:hover:not(:disabled) {
+  border-color: var(--ilmt-accent);
+}
+
+.ilmt-review-option.is-correct {
+  border-color: var(--ilmt-accent);
+  background: rgba(45, 212, 191, 0.14);
+  color: var(--ilmt-accent);
+}
+
+.ilmt-review-option.is-wrong {
+  border-color: var(--ilmt-danger);
+  background: rgba(251, 113, 133, 0.1);
+  color: var(--ilmt-danger);
+}
+
+.ilmt-review-option:disabled {
+  cursor: default;
+}
+
+.ilmt-review-spot-note {
+  margin: 0;
+  color: var(--ilmt-accent);
+  font-size: 12px;
+  text-align: center;
+}
+
+.ilmt-review-next {
+  appearance: none;
+  min-height: 44px;
+  border: 1px solid var(--ilmt-accent);
+  border-radius: 8px;
+  background: rgba(45, 212, 191, 0.12);
+  color: var(--ilmt-accent);
+  font: inherit;
+  cursor: pointer;
+}

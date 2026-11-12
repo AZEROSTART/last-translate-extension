@@ -9,6 +9,7 @@
 
 import { getLearning } from "../shared/learning-storage";
 import { dueCount } from "../shared/srs";
+import { buildSpotQuestion, shouldSpotCheck, type SpotQuestion } from "../shared/spot";
 import type {
   LearningGrade,
   LearningState,
@@ -107,6 +108,8 @@ interface ReviewState {
   termLang: string;
   glossLang: string;
   busy: boolean;
+  /** Chosen option after a wrong spot check; the card waits for "下一张". */
+  spotResult: { chosen: number; correct: boolean } | null;
 }
 
 export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {}): ReviewView {
@@ -131,6 +134,7 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     termLang: readSession(TERM_LANG_KEY) || ALL,
     glossLang: readSession(GLOSS_LANG_KEY),
     busy: false,
+    spotResult: null,
   };
 
   let destroyed = false;
@@ -146,6 +150,16 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     const escaped = word.surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const blanked = escaped ? full.replace(new RegExp(escaped, "gi"), "____") : full;
     return { blanked, full };
+  }
+
+  /** Stable per-word seed so the option order does not jump between renders. */
+  function spotSeed(word: LearningWord): number {
+    let hash = 2166136261;
+    for (const char of `${word.id}:${word.reviewsCount}`) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
   }
 
   function renderFilters(): HTMLElement[] {
@@ -222,12 +236,12 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     return nodes;
   }
 
-  function renderAnswer(word: LearningWord, card: HTMLElement): void {
+  function renderAnswer(word: LearningWord, card: HTMLElement, label = "想不起来，看答案"): void {
     if (!state.revealed) {
       const reveal = document.createElement("button");
       reveal.type = "button";
       reveal.className = "ilmt-review-reveal";
-      reveal.textContent = "想不起来，看答案";
+      reveal.textContent = label;
       reveal.addEventListener("click", () => {
         state.revealed = true;
         render();
@@ -331,8 +345,33 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     sentence.textContent = blanked;
     card.appendChild(sentence);
 
-    renderAnswer(word, card);
+    const question =
+      shouldSpotCheck(word) && state.spotResult === null
+        ? buildSpotQuestion(word, state.all?.words ?? [], state.glossLang || word.glossLang, spotSeed(word))
+        : null;
 
+    if (question) {
+      renderSpot(word, card, question);
+    } else if (state.spotResult && !question) {
+      // A wrong spot check can only be re-rendered from the same card; the
+      // cached question is rebuilt deterministically below.
+      const rebuilt = buildSpotQuestion(
+        word,
+        state.all?.words ?? [],
+        state.glossLang || word.glossLang,
+        spotSeed(word),
+      );
+      if (rebuilt) renderSpot(word, card, rebuilt);
+      else renderGrades(card);
+    } else {
+      renderAnswer(word, card);
+      renderGrades(card);
+    }
+
+    container.appendChild(card);
+  }
+
+  function renderGrades(card: HTMLElement, spot = false): void {
     const grades = document.createElement("div");
     grades.className = "ilmt-review-grades";
     const buttons: Array<[LearningGrade, string]> = [
@@ -347,12 +386,48 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
       button.dataset.grade = grade;
       button.textContent = label;
       button.disabled = state.busy;
-      button.addEventListener("click", () => void submit(grade));
+      button.addEventListener("click", () => void submit(grade, { spot }));
       grades.appendChild(button);
     }
     card.appendChild(grades);
+  }
 
-    container.appendChild(card);
+  function renderSpot(word: LearningWord, card: HTMLElement, question: SpotQuestion): void {
+    const result = state.spotResult;
+    const options = document.createElement("div");
+    options.className = "ilmt-review-options";
+    question.options.forEach((meaning, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ilmt-review-option";
+      button.dataset.index = String(index);
+      button.textContent = meaning;
+      button.disabled = state.busy || result !== null;
+      if (result) {
+        if (index === question.answer) button.classList.add("is-correct");
+        if (index === result.chosen && !result.correct) button.classList.add("is-wrong");
+      }
+      button.addEventListener("click", () => void submitSpot(index, question));
+      options.appendChild(button);
+    });
+    card.appendChild(options);
+
+    if (result && !result.correct) {
+      const note = document.createElement("p");
+      note.className = "ilmt-review-spot-note";
+      note.textContent = `正确答案：${question.options[question.answer]}`;
+      card.appendChild(note);
+
+      const next = document.createElement("button");
+      next.type = "button";
+      next.className = "ilmt-review-next";
+      next.textContent = "下一张";
+      next.addEventListener("click", () => finishCard(false));
+      card.appendChild(next);
+    }
+
+    // Keep the answer one tap away for readers who want the full sentence.
+    if (!result) renderAnswer(word, card, "查看完整例句与全部释义");
   }
 
   function renderFinish(): void {
@@ -419,10 +494,12 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     if (destroyed) return;
 
     state.all = next;
+    const previousId = state.queue[0]?.id;
     const fresh = buildReviewQueue(next, { termLang: state.termLang, now: deps.now() });
     // Words answered earlier in this round are no longer due, so the fresh
     // queue is exactly the remaining work; keep the round's score separate.
     state.queue = fresh;
+    if (fresh[0]?.id !== previousId) state.spotResult = null;
     state.total = state.answered + fresh.length;
     if (fresh.length > 0) state.revealed = false;
     render();
@@ -433,7 +510,10 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     return chain;
   }
 
-  async function submit(grade: LearningGrade): Promise<void> {
+  async function submit(
+    grade: LearningGrade,
+    spot?: { spot: boolean; spotCorrect?: boolean },
+  ): Promise<void> {
     const word = current();
     if (!word || state.busy || destroyed) return;
     state.busy = true;
@@ -446,6 +526,7 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
         id: word.id,
         grade,
         glossLang: state.glossLang || word.glossLang,
+        ...(spot ? { spot: spot.spot, ...(spot.spotCorrect !== undefined ? { spotCorrect: spot.spotCorrect } : {}) } : {}),
       });
     } catch {
       response = { ok: false } as unknown as ReviewAnswerResponse;
@@ -455,10 +536,7 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
 
     if (!response || response.ok !== true) {
       render();
-      if (pendingReload) {
-        pendingReload = false;
-        void refresh();
-      }
+      flushPending();
       return;
     }
 
@@ -466,12 +544,75 @@ export function mountReview(target: HTMLElement, over: Partial<ReviewDeps> = {})
     if (grade === "good") state.correct += 1;
     state.queue.shift();
     state.revealed = false;
+    state.spotResult = null;
+    render();
+    flushPending();
+  }
+
+  async function submitSpot(choice: number, question: SpotQuestion): Promise<void> {
+    const word = current();
+    if (!word || state.busy || state.spotResult || destroyed) return;
+    const correct = choice === question.answer;
+    state.busy = true;
     render();
 
-    if (pendingReload) {
-      pendingReload = false;
-      void refresh();
+    let response: ReviewAnswerResponse;
+    try {
+      response = await deps.answer({
+        type: "review-answer",
+        id: word.id,
+        grade: correct ? "good" : "again",
+        glossLang: state.glossLang || word.glossLang,
+        spot: true,
+        spotCorrect: correct,
+      });
+    } catch {
+      response = { ok: false } as unknown as ReviewAnswerResponse;
     }
+    if (destroyed) return;
+
+    if (!response || response.ok !== true) {
+      state.busy = false;
+      render();
+      flushPending();
+      return;
+    }
+
+    if (correct) {
+      state.busy = false;
+      state.answered += 1;
+      state.correct += 1;
+      state.queue.shift();
+      state.revealed = false;
+      state.spotResult = null;
+      render();
+      flushPending();
+      return;
+    }
+
+    // Wrong: show the correct meaning and wait for "下一张". Keeping `busy`
+    // true also suppresses the storage reload that our own write triggers.
+    state.spotResult = { chosen: choice, correct: false };
+    render();
+  }
+
+  /** Advance after the user has read a wrong spot check's correction. */
+  function finishCard(correct: boolean): void {
+    if (!current()) return;
+    state.answered += 1;
+    if (correct) state.correct += 1;
+    state.queue.shift();
+    state.revealed = false;
+    state.spotResult = null;
+    state.busy = false;
+    render();
+    flushPending();
+  }
+
+  function flushPending(): void {
+    if (!pendingReload) return;
+    pendingReload = false;
+    void refresh();
   }
 
   void refresh();
