@@ -4,12 +4,21 @@
  * never wrapped or mutated; only a fixed-position card is appended.
  */
 
-import type { GlossaryNote } from "../shared/types";
+import type {
+  GlossaryNote,
+  LearnWordMessage,
+  LearnWordResponse,
+  MascotSettings,
+} from "../shared/types";
 import { findSurfaceRange } from "./glossary-range";
+import { getMascot, getMascots, pickMascot, type MascotSkin, type MascotState } from "./mascots";
+import "./mascots/gopher";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
 const SHOW_DELAY_MS = 120;
+const HIDE_DELAY_MS = 180;
 const MAX_ENTRIES = 500;
+const MASCOT_HISTORY_KEY = "ilmt:mascot-history";
 
 interface GlossEntry {
   paragraphId: string;
@@ -18,6 +27,10 @@ interface GlossEntry {
   end: number;
   range: Range;
   note: GlossaryNote;
+  termLang?: string;
+  sentence: string;
+  pageUrl: string;
+  pageTitle?: string;
 }
 
 interface NodeHit {
@@ -26,15 +39,40 @@ interface NodeHit {
   entry: GlossEntry;
 }
 
+/** Window of the source paragraph around a surface, capped for storage. */
+function sentenceAround(text: string, surface: string): string {
+  const index = text.toLocaleLowerCase().indexOf(surface.toLocaleLowerCase());
+  if (index < 0) return text.trim().slice(0, 240);
+  const from = Math.max(0, index - 80);
+  const to = Math.min(text.length, index + surface.length + 120);
+  return text.slice(from, to).trim().slice(0, 240);
+}
+
 export interface GlossController {
   start(): void;
   stop(): void;
-  setParagraph(id: string, textNodes: Node[], notes: GlossaryNote[]): void;
+  setParagraph(
+    id: string,
+    textNodes: Node[],
+    notes: GlossaryNote[],
+    termLang?: string,
+  ): void;
   removeParagraph(id: string): void;
   prune(liveIds: Set<string>): void;
   clear(): void;
   /** Number of annotated ranges currently registered for hover. */
   count(): number;
+}
+
+export interface GlossControllerDeps {
+  now?: () => number;
+  sendLearn?: (message: LearnWordMessage) => Promise<LearnWordResponse | null>;
+  /** Overrides the registry rotation entirely (used by tests). */
+  resolveMascot?: () => MascotSkin;
+  /** Live mascot settings; read when a card opens so mode changes apply. */
+  getMascotSettings?: () => MascotSettings | undefined;
+  /** Current translation language, used as the card's answer language. */
+  getGlossLang?: () => string;
 }
 
 type HighlightCtor = new (...ranges: Range[]) => unknown;
@@ -48,7 +86,10 @@ interface HighlightCSS {
   highlights?: HighlightRegistry;
 }
 
-export function createGlossController(doc: Document = document): GlossController {
+export function createGlossController(
+  doc: Document = document,
+  deps: GlossControllerDeps = {},
+): GlossController {
   const view = doc.defaultView;
   let entries: GlossEntry[] = [];
   const byNode = new Map<Text, NodeHit[]>();
@@ -56,9 +97,13 @@ export function createGlossController(doc: Document = document): GlossController
   let pendingEntry: GlossEntry | null = null;
   let currentEntry: GlossEntry | null = null;
   let showTimer: ReturnType<typeof setTimeout> | undefined;
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
+  let hoverCard = false;
   let started = false;
   let scheduled = false;
   let lastPoint: { x: number; y: number } | null = null;
+  /** Per-word outcome, so a reopened card never resends or forgets "known". */
+  const captured = new Map<string, "caught" | "known">();
 
   function highlightParts(): { css: HighlightCSS | undefined; ctor: HighlightCtor | undefined } {
     const win = (view ?? globalThis) as unknown as {
@@ -92,12 +137,106 @@ export function createGlossController(doc: Document = document): GlossController
     pendingEntry = null;
   }
 
+  function cancelHide(): void {
+    if (hideTimer !== undefined) {
+      clearTimeout(hideTimer);
+      hideTimer = undefined;
+    }
+  }
+
+  /** Leaving the word keeps the card for a moment so the pointer can reach it. */
+  function scheduleHide(): void {
+    cancelHide();
+    hideTimer = setTimeout(() => {
+      hideTimer = undefined;
+      if (!hoverCard) hideCard();
+    }, HIDE_DELAY_MS);
+  }
+
   function hideCard(): void {
     clearShowTimer();
+    cancelHide();
+    hoverCard = false;
     currentEntry = null;
     if (card) {
       card.remove();
       card = null;
+    }
+  }
+
+  function hideOrSchedule(): void {
+    if (card) scheduleHide();
+    else hideCard();
+  }
+
+  function pointInsideCard(x: number, y: number): boolean {
+    if (!card) return false;
+    const rect = card.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
+  function readMascotHistory(): string[] {
+    try {
+      const raw = view?.sessionStorage?.getItem(MASCOT_HISTORY_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((id): id is string => typeof id === "string").slice(-2);
+    } catch {
+      return [];
+    }
+  }
+
+  function writeMascotHistory(ids: string[]): void {
+    try {
+      view?.sessionStorage?.setItem(MASCOT_HISTORY_KEY, JSON.stringify(ids.slice(-2)));
+    } catch {
+      // Private mode or a blocked storage; rotation just restarts.
+    }
+  }
+
+  function nextMascot(): MascotSkin {
+    if (deps.resolveMascot) return deps.resolveMascot();
+    const settings = deps.getMascotSettings?.();
+    if (settings?.mode === "fixed" && settings.fixedId) {
+      const fixed = getMascot(settings.fixedId);
+      if (fixed) return fixed;
+    }
+    const history = readMascotHistory();
+    let skin: MascotSkin;
+    try {
+      skin = pickMascot({ enabledIds: settings?.enabledIds ?? [], lastPicks: history });
+    } catch {
+      const all = getMascots();
+      skin = all[0];
+    }
+    writeMascotHistory([...history, skin.id]);
+    return skin;
+  }
+
+  function currentTheme(): "light" | "dark" {
+    try {
+      return view?.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch {
+      return "light";
+    }
+  }
+
+  function entryKey(entry: GlossEntry): string {
+    return `${entry.termLang ?? ""}:${entry.note.surface.trim().toLocaleLowerCase()}`;
+  }
+
+  function fallbackTermLang(): string {
+    const lang = doc.documentElement.getAttribute("lang") ?? "";
+    return lang.trim().toLowerCase().split(/[-_]/)[0] || "en";
+  }
+
+  async function defaultSendLearn(message: LearnWordMessage): Promise<LearnWordResponse | null> {
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      return (response ?? null) as LearnWordResponse | null;
+    } catch {
+      return null;
     }
   }
 
@@ -145,6 +284,67 @@ export function createGlossController(doc: Document = document): GlossController
       element.appendChild(example);
     }
 
+    const skin = nextMascot();
+    const key = entryKey(entry);
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className = "ilmt-gloss-mascot";
+    button.setAttribute("aria-label", `把${skin.label}${skin.verb}下去，收录这个单词`);
+
+    const status = doc.createElement("div");
+    status.className = "ilmt-gloss-mascot-status";
+
+    const paint = (state: MascotState): void => {
+      button.replaceChildren(skin.render(state, currentTheme()));
+      status.textContent =
+        state === "caught" ? skin.caughtLabel : state === "known" ? skin.knownLabel : "";
+      status.hidden = status.textContent === "";
+    };
+    paint(captured.get(key) ?? "idle");
+
+    let busy = false;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (busy || captured.has(key)) return;
+      busy = true;
+      paint("hit");
+
+      const message: LearnWordMessage = {
+        type: "learn-word",
+        surface: entry.note.surface,
+        termLang: entry.termLang ?? fallbackTermLang(),
+        glossLang: deps.getGlossLang?.() ?? "zh-CN",
+        meaning: entry.note.meaning,
+        sentence: entry.sentence,
+        pageUrl: entry.pageUrl,
+        ...(entry.note.pos ? { pos: entry.note.pos } : {}),
+        ...(entry.note.glosses ? { glosses: entry.note.glosses } : {}),
+        ...(entry.pageTitle ? { pageTitle: entry.pageTitle } : {}),
+        mascotId: skin.id,
+      };
+      const send = deps.sendLearn ?? defaultSendLearn;
+      const settled = Promise.all([
+        send(message),
+        new Promise<void>((resolve) => setTimeout(resolve, skin.hitDurationMs)),
+      ]);
+      void settled.then(([response]) => {
+        busy = false;
+        if (response?.ok) {
+          const state = response.created ? "caught" : "known";
+          captured.set(key, state);
+          paint(state);
+        } else {
+          paint(captured.get(key) ?? "idle");
+        }
+      });
+    });
+
+    const mascot = doc.createElement("div");
+    mascot.className = "ilmt-gloss-mascot-wrap";
+    mascot.append(button, status);
+    element.appendChild(mascot);
+
     doc.body.appendChild(element);
     positionCard(element, entry.range);
     card = element;
@@ -176,7 +376,7 @@ export function createGlossController(doc: Document = document): GlossController
     }
 
     if (!node || node.nodeType !== Node.TEXT_NODE) {
-      hideCard();
+      hideOrSchedule();
       return;
     }
 
@@ -184,10 +384,13 @@ export function createGlossController(doc: Document = document): GlossController
       .get(node as Text)
       ?.find((item) => offset >= item.start && offset < item.end)?.entry;
     if (!hit) {
-      hideCard();
+      hideOrSchedule();
       return;
     }
-    if (currentEntry === hit) return;
+    if (currentEntry === hit) {
+      cancelHide();
+      return;
+    }
 
     clearShowTimer();
     hideCard();
@@ -218,6 +421,12 @@ export function createGlossController(doc: Document = document): GlossController
 
   function onPointerMove(event: PointerEvent): void {
     if (event.pointerType === "touch") return;
+    if (pointInsideCard(event.clientX, event.clientY)) {
+      hoverCard = true;
+      cancelHide();
+      return;
+    }
+    hoverCard = false;
     const selection = doc.getSelection?.();
     if (selection && !selection.isCollapsed) {
       hideCard();
@@ -293,8 +502,21 @@ export function createGlossController(doc: Document = document): GlossController
       clear();
     },
 
-    setParagraph(id: string, textNodes: Node[], notes: GlossaryNote[]): void {
+    setParagraph(
+      id: string,
+      textNodes: Node[],
+      notes: GlossaryNote[],
+      termLang?: string,
+    ): void {
       removeParagraph(id);
+
+      const paragraphText = textNodes
+        .map((text) => text.textContent ?? "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const pageUrl = doc.location?.href ?? "";
+      const pageTitle = doc.title || undefined;
 
       for (const note of notes) {
         if (entries.length >= MAX_ENTRIES) break;
@@ -321,6 +543,10 @@ export function createGlossController(doc: Document = document): GlossController
           end,
           range,
           note,
+          termLang,
+          sentence: sentenceAround(paragraphText, note.surface),
+          pageUrl,
+          ...(pageTitle ? { pageTitle } : {}),
         };
         entries.push(entry);
         const hits = byNode.get(entry.node) ?? [];

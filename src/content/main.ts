@@ -37,6 +37,8 @@ import { DEFAULT_SETTINGS, getSettings } from "../shared/storage";
 import type {
   BackgroundToClient,
   ClientToBackground,
+  GlossaryNote,
+  MascotSettings,
   OpenChatMessage,
   RecentTranslationsResponse,
 } from "../shared/types";
@@ -90,8 +92,13 @@ let active = false;
 let targetLang = DEFAULT_TARGET_LANG;
 let minParagraphLength = DEFAULT_SETTINGS.minParagraphLength;
 let contentOnly = DEFAULT_SETTINGS.contentOnly;
+let learningLangs: string[] = [...DEFAULT_SETTINGS.learningLangs];
+let mascotSettings: MascotSettings = DEFAULT_SETTINGS.mascot;
 let registry = new ParagraphRegistry();
-const gloss = createGlossController();
+const gloss = createGlossController(document, {
+  getMascotSettings: () => mascotSettings,
+  getGlossLang: () => targetLang,
+});
 let portClient: TranslatePortClient | null = null;
 let currentRequestId: string | null = null;
 /** Lets a late `result` for a request that errored first still render. */
@@ -283,6 +290,8 @@ async function collectAndQueue(generation: number): Promise<void> {
   targetLang = prefs.targetLang;
   minParagraphLength = prefs.minParagraphLength;
   contentOnly = prefs.contentOnly;
+  learningLangs = prefs.learningLangs;
+  mascotSettings = prefs.mascot;
 
   const nodes = await collectParagraphs(body, {
     targetLang,
@@ -527,8 +536,45 @@ function handleDelta(msg: Extract<BackgroundToClient, { type: "delta" }>): void 
   renderTranslation({ root, anchor, heading: rec.heading }, msg.id, buffered, targetLang);
 }
 
-function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): void {
-  const isCurrent = msg.requestId === currentRequestId;
+/**
+ * Annotate only paragraphs whose language is a learning target. Detection is
+ * usually cached from collection, so this stays synchronous on the common path;
+ * an uncached verdict upgrades or removes the card when it arrives.
+ */
+function registerGlossary(
+  id: string,
+  sourceText: string,
+  textNodes: Node[],
+  notes: GlossaryNote[],
+): void {
+  if (notes.length === 0) {
+    gloss.removeParagraph(id);
+    return;
+  }
+
+  const apply = (termLang: string | undefined): void => {
+    if (termLang && !learningLangs.includes(termLang)) {
+      gloss.removeParagraph(id);
+      return;
+    }
+    gloss.setParagraph(id, textNodes, notes, termLang);
+  };
+
+  const cached = langCache.get(sourceText);
+  const cachedPrefix = cached ? languagePrefix(cached.language) : undefined;
+  apply(cachedPrefix);
+
+  if (!cached) {
+    void detectLang(sourceText).then((detected) => {
+      if (!detected) return;
+      const prefix = languagePrefix(detected.language);
+      if (!learningLangs.includes(prefix)) gloss.removeParagraph(id);
+      else gloss.setParagraph(id, textNodes, notes, prefix);
+    });
+  }
+}
+
+function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): void {  const isCurrent = msg.requestId === currentRequestId;
   if (!isCurrent && msg.requestId !== lastCompletedRequestId) return;
   for (const item of msg.items) {
     const rec = registry.get(item.id);
@@ -542,7 +588,7 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
     const textNodes = rec.textNodes
       .map((ref) => ref.deref())
       .filter((node): node is Node => node !== undefined && node.isConnected);
-    gloss.setParagraph(item.id, textNodes, notes);
+    registerGlossary(item.id, rec.sourceText, textNodes, notes);
     registry.setGlossary(item.id, notes);
     registry.setStatus(item.id, "done");
     registry.setTranslation(item.id, item.text);
@@ -1059,6 +1105,8 @@ interface CollectPrefs {
   targetLang: string;
   minParagraphLength: number;
   contentOnly: boolean;
+  learningLangs: string[];
+  mascot: MascotSettings;
 }
 
 async function readCollectPrefs(): Promise<CollectPrefs> {
@@ -1071,6 +1119,8 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
           : DEFAULT_TARGET_LANG,
       minParagraphLength: s.minParagraphLength,
       contentOnly: s.contentOnly,
+      learningLangs: s.learningLangs,
+      mascot: s.mascot,
     };
   } catch {
     // Missing or unreadable storage: keep the documented defaults.
@@ -1078,6 +1128,8 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
       targetLang: DEFAULT_TARGET_LANG,
       minParagraphLength: DEFAULT_SETTINGS.minParagraphLength,
       contentOnly: DEFAULT_SETTINGS.contentOnly,
+      learningLangs: [...DEFAULT_SETTINGS.learningLangs],
+      mascot: DEFAULT_SETTINGS.mascot,
     };
   }
 }

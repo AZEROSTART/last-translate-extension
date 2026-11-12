@@ -138,6 +138,7 @@ describe("createGlossController", () => {
 
     stubCaret(text, 0);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+    vi.advanceTimersByTime(180);
     expect(document.querySelector("[role=tooltip]")).toBeNull();
   });
 
@@ -199,5 +200,139 @@ describe("createGlossController", () => {
 
     controller.setParagraph("p_1", [text], []);
     expect(registry.has("ilmt-gloss")).toBe(false);
+  });
+});
+
+function openCard(termLang?: string): HTMLElement {
+  stubFrame();
+  stubHighlights();
+  document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+  const text = document.querySelector("p")!.firstChild!;
+  const controller = createGlossController(document);
+  controller.start();
+  controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], termLang);
+  stubRangeRect();
+  stubCaret(text, 20);
+  document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }));
+  vi.advanceTimersByTime(150);
+  return document.querySelector("[role=tooltip]") as HTMLElement;
+}
+
+describe("hover intent", () => {
+  it("keeps the card open while the pointer is inside it", () => {
+    const card = openCard();
+    Object.defineProperty(card, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left: 200, top: 200, right: 400, bottom: 300, width: 200, height: 100, x: 200, y: 200 }),
+    });
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 250, clientY: 250 }));
+    vi.advanceTimersByTime(300);
+    expect(document.querySelector("[role=tooltip]")).toBeTruthy();
+  });
+
+  it("hides 180ms after leaving both the word and the card", () => {
+    openCard();
+    stubCaret(document.querySelector("p")!.firstChild!, 0);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+    vi.advanceTimersByTime(179);
+    expect(document.querySelector("[role=tooltip]")).toBeTruthy();
+    vi.advanceTimersByTime(1);
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+});
+
+describe("mascot capture", () => {
+  it("sends learn-word once when the mascot is clicked", async () => {
+    const sendLearn = vi.fn().mockResolvedValue({
+      ok: true,
+      created: true,
+      dueAt: 123,
+      nextDueLabel: "10 分钟后",
+    });
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document, { sendLearn });
+    controller.start();
+    controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+    vi.advanceTimersByTime(150);
+
+    const button = document.querySelector<HTMLButtonElement>("[role=tooltip] button")!;
+    button.click();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(sendLearn).toHaveBeenCalledTimes(1);
+    expect(sendLearn.mock.calls[0][0]).toMatchObject({
+      type: "learn-word",
+      termLang: "en",
+      surface: "outlive",
+      meaning: "比……存在得更久",
+    });
+    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已抓住");
+  });
+
+  it("renders the known state without resending", async () => {
+    const sendLearn = vi.fn().mockResolvedValue({
+      ok: true,
+      created: false,
+      dueAt: 123,
+      nextDueLabel: "10 分钟后",
+    });
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document, { sendLearn });
+    controller.start();
+    controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+    vi.advanceTimersByTime(150);
+
+    document.querySelector<HTMLButtonElement>("[role=tooltip] button")!.click();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已在学习中");
+
+    stubCaret(text, 0);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+    vi.advanceTimersByTime(200);
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+
+    stubCaret(text, 20);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+    vi.advanceTimersByTime(150);
+    document.querySelector<HTMLButtonElement>("[role=tooltip] button")!.click();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(sendLearn).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已在学习中");
+  });
+
+  it("does not put extra-language glosses on the card", () => {
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document);
+    controller.start();
+    controller.setParagraph(
+      "p_1",
+      [text],
+      [{ surface: "outlive", meaning: "比……存在得更久", glosses: { es: "sobrevivir" } }],
+      "en",
+    );
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+    vi.advanceTimersByTime(150);
+
+    const card = document.querySelector("[role=tooltip]")!;
+    expect(card.textContent).toContain("比……存在得更久");
+    expect(card.textContent).not.toContain("sobrevivir");
   });
 });
