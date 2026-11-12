@@ -26,6 +26,42 @@ export function buildEffectiveSystemPrompt(systemPrompt: string, glossaryEnabled
   return systemPrompt ? `${systemPrompt}\n\n${GLOSSARY_INSTRUCTIONS}` : GLOSSARY_INSTRUCTIONS;
 }
 
+/** Developer-owned format contract version; bump when the contract changes. */
+export const FORMAT_VERSION = 2;
+
+export interface FormatOptions {
+  targetLang: string;
+  glossaryEnabled: boolean;
+  /** Extra gloss languages (max 3); never part of the prompt version hash. */
+  glossLangs: string[];
+}
+
+const FORMAT_RULES = `你是一个翻译引擎。把用户给出的编号段落翻译成{{targetLang}}。
+输出格式（必须严格遵守，任何偏好都不得改变它）：
+1. 只输出 \`[编号] 译文\`，逐行对应；不解释、不合并、不遗漏、不调整顺序。
+2. 保留原文的专有名词、代码、URL、数字、单位与变量名。
+3. 不使用 Markdown 代码块，不输出前言、后语或说明性空行。`;
+
+const MAX_GLOSS_LENGTH = 12;
+
+/**
+ * The fixed half of the system prompt. Parsers only trust this layer, so no
+ * user preference may ever override it.
+ */
+export function buildFormatPrompt(options: FormatOptions): string {
+  const parts = [FORMAT_RULES];
+  if (options.glossaryEnabled) {
+    parts.push(GLOSSARY_INSTRUCTIONS);
+    const langs = options.glossLangs.filter((lang) => typeof lang === "string" && lang.trim());
+    if (langs.length > 0) {
+      parts.push(
+        `额外释义语言：${langs.join(", ")}。每个注释在这几种语言下各给一条不超过 ${MAX_GLOSS_LENGTH} 字的释义；缺失则省略该语言。`,
+      );
+    }
+  }
+  return parts.join("\n\n");
+}
+
 /**
  * Lowercase SHA-256 hex of the effective system prompt. Used as the cache
  * `promptVersion`; identical prompt text must always yield the same value.
@@ -201,12 +237,33 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
   }
 }
 
+function parseNoteGlosses(
+  value: unknown,
+  glossLangs: string[],
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const allowed = new Set(glossLangs);
+  const glosses: Record<string, string> = {};
+  for (const [lang, raw] of Object.entries(value)) {
+    if (!allowed.has(lang)) continue;
+    if (typeof raw !== "string") continue;
+    const meaning = raw.trim();
+    if (!meaning || meaning.length > MAX_GLOSS_LENGTH) continue;
+    glosses[lang] = meaning;
+  }
+  return Object.keys(glosses).length > 0 ? glosses : undefined;
+}
+
 /**
  * Validate and normalize the model's glossary object. Every failure is
  * non-fatal: invalid keys, unknown surfaces, duplicates, malformed entries and
  * excess notes are simply dropped. The result only contains non-empty arrays.
  */
-export function parseGlossaryNotes(raw: string, items: Segment[]): Map<string, GlossaryNote[]> {
+export function parseGlossaryNotes(
+  raw: string,
+  items: Segment[],
+  glossLangs: string[] = [],
+): Map<string, GlossaryNote[]> {
   const result = new Map<string, GlossaryNote[]>();
   const parsed = parseJsonObject(raw);
   if (!parsed) return result;
@@ -242,6 +299,8 @@ export function parseGlossaryNotes(raw: string, items: Segment[]): Map<string, G
       if (typeof candidate.example === "string" && candidate.example.trim()) {
         note.example = candidate.example.trim();
       }
+      const glosses = parseNoteGlosses(candidate.glosses, glossLangs);
+      if (glosses) note.glosses = glosses;
 
       seen.add(dedupeKey);
       notes.push(note);
@@ -318,7 +377,11 @@ function extractGlossaryBlock(raw: string): { text: string; notesRaw: string } {
  * Parse translations plus optional annotations. Translation parsing remains
  * strict; any glossary failure degrades to an empty map.
  */
-export function parseAnnotatedResponse(raw: string, items: Segment[]): AnnotatedParseResult {
+export function parseAnnotatedResponse(
+  raw: string,
+  items: Segment[],
+  glossLangs: string[] = [],
+): AnnotatedParseResult {
   const ids = items.map((item) => item.id);
   const markerIndex = raw.indexOf(GLOSSARY_MARKER);
 
@@ -353,7 +416,7 @@ export function parseAnnotatedResponse(raw: string, items: Segment[]): Annotated
   }
 
   const glossary = notesRaw.trim()
-    ? parseGlossaryNotes(notesRaw, items)
+    ? parseGlossaryNotes(notesRaw, items, glossLangs)
     : new Map<string, GlossaryNote[]>();
   return { translations, glossary };
 }

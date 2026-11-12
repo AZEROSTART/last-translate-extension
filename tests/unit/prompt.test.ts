@@ -4,6 +4,7 @@ import {
   GLOSSARY_INSTRUCTIONS,
   GLOSSARY_MARKER,
   buildEffectiveSystemPrompt,
+  buildFormatPrompt,
   buildTranslateMessages,
   groupSegments,
   parseAnnotatedResponse,
@@ -276,5 +277,47 @@ describe("parseAnnotatedResponse", () => {
     expect(() => parseAnnotatedResponse("[1] 甲\n" + GLOSSARY_MARKER, items)).toThrow(
       PromptParseError,
     );
+  });
+});
+
+describe("buildFormatPrompt", () => {
+  it("always carries the format contract", () => {
+    const p = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: false, glossLangs: [] });
+    expect(p).toContain("[编号]");
+    expect(p).toContain("{{targetLang}}");
+    expect(p).not.toContain(GLOSSARY_MARKER);
+  });
+
+  it("lists extra gloss languages in the format layer", () => {
+    const p = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: true, glossLangs: ["es", "ja"] });
+    expect(p).toContain(GLOSSARY_MARKER);
+    expect(p).toContain("es");
+    expect(p).toContain("ja");
+  });
+});
+
+describe("parseAnnotatedResponse glosses", () => {
+  it("keeps only whitelisted gloss languages", () => {
+    const items = [{ id: "p_1", text: "Small tools often outlive their rivals." }];
+    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":{"es":"sobrevivir","xx":"bad"}}]}`;
+    expect(parseAnnotatedResponse(raw, items, ["es"]).glossary.get("p_1")?.[0].glosses).toEqual({
+      es: "sobrevivir",
+    });
+  });
+
+  it("drops a malformed glosses object without losing the note", () => {
+    const items = [{ id: "p_1", text: "Small tools often outlive their rivals." }];
+    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":"nope"}]}`;
+    const note = parseAnnotatedResponse(raw, items, ["es"]).glossary.get("p_1")?.[0];
+    expect(note?.meaning).toBe("比…活得久");
+    expect(note?.glosses).toBeUndefined();
+  });
+
+  it("drops overlong or empty gloss values one by one", () => {
+    const items = [{ id: "p_1", text: "Small tools often outlive their rivals." }];
+    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":{"es":"sobrevivir","ja":"   ","fr":"这是一个明显超过十二个字符限制的释义文本"}}]}`;
+    expect(parseAnnotatedResponse(raw, items, ["es", "ja", "fr"]).glossary.get("p_1")?.[0].glosses).toEqual({
+      es: "sobrevivir",
+    });
   });
 });
