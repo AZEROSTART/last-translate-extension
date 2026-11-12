@@ -6,6 +6,7 @@
  */
 
 import { createDeps, handleChat, handleTranslate } from "./dispatch";
+import { handleLearningMessage, isLearningMessageType } from "./learning";
 import type {
   BackgroundToClient,
   ChatBackgroundToClient,
@@ -209,9 +210,19 @@ function createSettingsTab(): void {
  * then open the panel for the sender's tab. `sidePanel.open` requires a user
  * gesture and may reject; that failure must never surface to the page.
  */
-chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender) => {
+chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender, sendResponse) => {
   if (!message || typeof message !== "object") return;
   const msg = message as { type?: unknown };
+
+  // Learning writes are serialized in the background; answer asynchronously.
+  if (isLearningMessageType(msg.type)) {
+    if (!isTrustedSender(sender)) return;
+    void handleLearningMessage(message)
+      .then((result) => sendResponse(result ?? undefined))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   if (msg.type !== "open-chat" && msg.type !== "open-options") return;
   if (!isTrustedSender(sender)) return;
 
