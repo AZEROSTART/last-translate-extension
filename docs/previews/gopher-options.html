@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>悬停卡片里的地鼠 · 三选一</title>
+    <style>
+      :root {
+        --bg: #f3f2ef;
+        --panel: #ffffff;
+        --text: #1f2328;
+        --muted: #6e7781;
+        --line: rgba(0, 0, 0, 0.12);
+        --soft: rgba(0, 0, 0, 0.06);
+        --accent: #2dd4bf;
+        --accent-ink: #0f766e;
+        --fur: #d3a274;
+        --fur-light: #ecd0ad;
+        --belly: #fbe7cd;
+        --ink: #4a3423;
+        --hole: #33261a;
+        color-scheme: light;
+      }
+      html[data-theme="dark"] {
+        --bg: #0f1318;
+        --panel: #1a2027;
+        --text: #e6edf3;
+        --muted: #9aa4af;
+        --line: rgba(255, 255, 255, 0.14);
+        --soft: rgba(255, 255, 255, 0.07);
+        --fur: #c3966c;
+        --fur-light: #e0bd97;
+        --belly: #edd4b4;
+        --ink: #2b1d12;
+        --hole: #080b0f;
+        --accent-ink: #5eead4;
+        color-scheme: dark;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 40px 24px 90px;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      }
+      .page { max-width: 980px; margin: 0 auto; }
+      header {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 20px; flex-wrap: wrap; margin-bottom: 26px;
+      }
+      h1 { margin: 0 0 6px; font-size: 21px; }
+      .sub { margin: 0; color: var(--muted); font-size: 13px; max-width: 66ch; }
+      .theme-toggle {
+        border: 1px solid var(--line); background: var(--panel); color: var(--text);
+        border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px;
+        cursor: pointer; white-space: nowrap;
+      }
+
+      .stage {
+        display: grid; grid-template-columns: repeat(3, minmax(280px, 1fr));
+        gap: 18px; align-items: start;
+      }
+      @media (max-width: 940px) { .stage { grid-template-columns: 1fr; } }
+
+      .slot { display: flex; flex-direction: column; gap: 8px; }
+      .slot h2 { margin: 0; font-size: 14px; letter-spacing: .02em; }
+      .slot .note { margin: 0 0 4px; color: var(--muted); font-size: 12.5px; }
+
+      /* ---- the hover card (mirrors .ilmt-card) ---- */
+      .card {
+        position: relative;
+        width: 100%;
+        max-width: 288px;
+        padding: 12px 12px 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .a .card { padding-top: 38px; }
+      .c .card { padding-top: 50px; }
+      .b .card { padding-bottom: 12px; }
+
+      .head {
+        position: relative;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        font-size: 15px;
+      }
+      .b .head { margin-bottom: 48px; }
+
+      .surface { font-weight: 700; letter-spacing: .01em; }
+      .pos { color: var(--muted); font-size: 11.5px; }
+      .meaning { margin-top: 4px; }
+      .example {
+        margin-top: 7px; padding-top: 7px;
+        border-top: 1px solid var(--soft);
+        color: var(--muted); font-size: 12px;
+      }
+      .example b { color: inherit; font-weight: 600; }
+      .foot {
+        display: flex; align-items: center; justify-content: flex-end;
+        gap: 6px; margin-top: 8px; min-height: 18px;
+        color: var(--muted); font-size: 11.5px;
+      }
+      .foot .done { color: var(--accent-ink); display: none; }
+      .is-caught .foot .hint-txt { display: none; }
+      .is-caught .foot .done { display: inline; }
+
+      /* ---- mascot: anchored to the surface word inside the card ---- */
+      .mascot {
+        position: absolute;
+        left: -6px;
+        z-index: 2;
+        width: 44px; height: 44px;
+        display: flex; align-items: flex-end; justify-content: center;
+        padding: 0; border: 0; background: transparent;
+        cursor: pointer; line-height: 0;
+        transition: filter .16s ease;
+      }
+      .mascot svg { display: block; overflow: visible; }
+      .mascot:hover { filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.22)); }
+      .mascot:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 12px; }
+
+      /* A — perched on the word's top edge, paws hanging over it */
+      .a .mascot { bottom: calc(100% - 6px); }
+      /* C — sticker sitting above the word, hugging a block */
+      .c .mascot { bottom: calc(100% + 2px); }
+      /* B — hole under the word, head poking out (never covers the word) */
+      .b .mascot { top: 100%; margin-top: -2px; align-items: flex-start; }
+
+      /* idle life */
+      .a .g-body, .c .g-body { animation: breathe 3.4s ease-in-out infinite; transform-origin: 50% 90%; }
+      .a .g-tail { animation: tail 2.8s ease-in-out infinite; transform-origin: 12px 34px; }
+      .b .g-body { animation: peek 3.6s ease-in-out infinite; transform-origin: 28px 36px; }
+
+      /* after the hit the gopher stays down inside the hole */
+      .b.is-caught .g-body { animation: none !important; transform: translateY(22px) scale(.92); }
+      @keyframes breathe {
+        0%, 100% { transform: translateY(0) scale(1, 1); }
+        50% { transform: translateY(-1.2px) scale(1.015, 0.985); }
+      }
+      @keyframes tail {
+        0%, 100% { transform: rotate(-13deg); }
+        50% { transform: rotate(13deg); }
+      }
+      @keyframes peek {
+        0%, 100% { transform: translateY(0); }
+        55% { transform: translateY(1.5px); }
+      }
+
+      /* ---- hit: squash + stretch, ring, sparks (all three) ---- */
+      .is-hit .g-body { animation: squash 440ms cubic-bezier(.34, 1.56, .5, 1) both !important; }
+      @keyframes squash {
+        0% { transform: scale(1, 1) translateY(0); }
+        20% { transform: scale(1.2, .58) translateY(6px); }
+        48% { transform: scale(.86, 1.16) translateY(-5px); }
+        72% { transform: scale(1.05, .95) translateY(1px); }
+        100% { transform: scale(1, 1) translateY(0); }
+      }
+      .b.is-hit .g-body { animation: dive 620ms cubic-bezier(.34, .72, .3, 1) both !important; }
+      /* one way only: knocked up a hair, then slammed down and left there */
+      @keyframes dive {
+        0% { transform: translateY(0) scale(1, 1); }
+        10% { transform: translateY(-4px) scale(1.12, .9); }
+        40% { transform: translateY(9px) scale(1.06, .94); }
+        68% { transform: translateY(24px) scale(1.14, .78); }
+        84% { transform: translateY(20.5px) scale(.97, 1.03); }
+        100% { transform: translateY(22px) scale(.92); }
+      }
+
+      /* eyes swap to a dizzy X once it is inside */
+      .g-dizzy { opacity: 0; transition: opacity .16s ease .12s; }
+      .is-caught .g-dizzy { opacity: 1; }
+      .is-caught .g-open-eye { opacity: 0; transition: opacity .12s ease; }
+
+      .sparks { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+      .b .sparks { top: 62%; }
+      .spark {
+        position: absolute; left: -3.5px; top: -3.5px; width: 7px; height: 7px;
+        border-radius: 50%; background: var(--accent); opacity: 0;
+      }
+      .is-hit .spark { animation: spark 560ms ease-out forwards; }
+      .spark:nth-child(1) { --dx: -22px; --dy: -20px; animation-delay: 30ms; }
+      .spark:nth-child(2) { --dx: -4px; --dy: -30px; animation-delay: 80ms; }
+      .spark:nth-child(3) { --dx: 20px; --dy: -22px; animation-delay: 50ms; }
+      .spark:nth-child(4) { --dx: -24px; --dy: 4px; animation-delay: 100ms; }
+      .spark:nth-child(5) { --dx: 23px; --dy: 2px; animation-delay: 70ms; }
+      @keyframes spark {
+        0% { opacity: 1; transform: translate(0, 0) scale(.35); }
+        100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1.05); }
+      }
+
+      .plus {
+        position: absolute; left: 50%; top: 2px; transform: translate(-50%, -100%);
+        font-size: 11.5px; font-weight: 800; color: var(--accent-ink);
+        white-space: nowrap; opacity: 0; pointer-events: none;
+      }
+      .b .plus { top: 28px; bottom: auto; left: 100%; transform: translate(6px, -50%); }
+      .is-caught .plus { animation: plus 900ms ease-out forwards; }
+      .b.is-caught .plus { animation: plus-side 1100ms ease-out forwards; }
+      @keyframes plus {
+        0% { opacity: 0; transform: translate(-50%, -60%) scale(.8); }
+        25% { opacity: 1; transform: translate(-50%, -100%) scale(1.06); }
+        70% { opacity: 1; transform: translate(-50%, -140%) scale(1); }
+        100% { opacity: 0; transform: translate(-50%, -180%) scale(1); }
+      }
+      @keyframes plus-side {
+        0% { opacity: 0; transform: translate(6px, -40%) scale(.8); }
+        22% { opacity: 1; transform: translate(6px, -56%) scale(1.04); }
+        78% { opacity: 1; transform: translate(6px, -64%) scale(1); }
+        100% { opacity: 0; transform: translate(6px, -76%) scale(1); }
+      }
+
+      /* B — dust from the hole */
+      .dust {
+        position: absolute; left: 50%; top: 28px; width: 6px; height: 6px;
+        border-radius: 50%; background: #b9a184; opacity: 0; pointer-events: none;
+      }
+      .b .dust:nth-of-type(2) { animation-delay: 90ms; --dx: -16px; }
+      .b.is-hit .dust { animation: dust 620ms ease-out 180ms forwards; }
+      @keyframes dust {
+        0% { opacity: .95; transform: translate(0, 0) scale(.35); }
+        100% { opacity: 0; transform: translate(var(--dx, 14px), -14px) scale(1); }
+      }
+
+      /* C — the hugged block shatters, glasses appear */
+      .c.is-hit .g-block { animation: shatter 420ms ease-out forwards; }
+      @keyframes shatter {
+        0% { opacity: 1; transform: scale(1); }
+        100% { opacity: 0; transform: scale(.45) translateY(7px); }
+      }
+      .g-glasses { opacity: 0; transition: opacity .22s ease .22s; }
+      .is-caught .g-glasses { opacity: 1; }
+
+      .controls { display: flex; align-items: center; gap: 8px; }
+      .controls button {
+        border: 1px solid var(--line); background: transparent; color: var(--text);
+        border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+      }
+      .controls span { color: var(--muted); font-size: 12px; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .g-body, .g-tail, .spark, .dust, .plus, .g-block { animation: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div>
+          <h1>悬停卡片里的地鼠 · 三选一</h1>
+          <p class="sub">
+            地鼠只在悬停释义卡片里出现，趴在卡片上那个词的位置，不会跑到正文的原词上。
+            点地鼠看「打下去」的动画，右上角可切深色。
+          </p>
+        </div>
+        <button class="theme-toggle" type="button" id="theme">切换深色</button>
+      </header>
+
+      <div class="stage">
+        <section class="slot a" data-demo="a">
+          <h2>A · 趴边地鼠</h2>
+          <p class="note">趴在词的上沿，两只爪子垂下来搭住文字，尾巴在左边晃。</p>
+          <div class="card">
+            <div class="head">
+              <span class="surface">outlive</span><span class="pos">verb</span>
+            </div>
+            <div class="meaning">比……存在得更久；比……更耐久</div>
+            <div class="example">Small tools often <b>outlive</b> their larger competitors.</div>
+            <div class="foot"><span class="hint-txt">点地鼠收录</span><span class="done">已收录</span></div>
+          </div>
+          <div class="controls"><button type="button" data-reset>重来</button><span>点击地鼠</span></div>
+        </section>
+
+        <section class="slot b" data-demo="b">
+          <h2>B · 洞口探头（推荐）</h2>
+          <p class="note">词的下方开个小洞，只探出上半身；点一下就一路沉进洞里待着，眼睛变成 ×，不再弹回来。</p>
+          <div class="card">
+            <div class="head">
+              <span class="surface">outlive</span><span class="pos">verb</span>
+            </div>
+            <div class="meaning">比……存在得更久；比……更耐久</div>
+            <div class="example">Small tools often <b>outlive</b> their larger competitors.</div>
+            <div class="foot"><span class="hint-txt">点地鼠收录</span><span class="done">已收录</span></div>
+          </div>
+          <div class="controls"><button type="button" data-reset>重来</button><span>点击地鼠</span></div>
+        </section>
+
+        <section class="slot c" data-demo="c">
+          <h2>C · 贴纸捧词</h2>
+          <p class="note">像贴纸坐在词的正上方，抱着一块代表这个词的小方块；收录后变学霸地鼠。</p>
+          <div class="card">
+            <div class="head">
+              <span class="surface">outlive</span><span class="pos">verb</span>
+            </div>
+            <div class="meaning">比……存在得更久；比……更耐久</div>
+            <div class="example">Small tools often <b>outlive</b> their larger competitors.</div>
+            <div class="foot"><span class="hint-txt">点地鼠收录</span><span class="done">已收录</span></div>
+          </div>
+          <div class="controls"><button type="button" data-reset>重来</button><span>点击地鼠</span></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const NS = "http://www.w3.org/2000/svg";
+      const el = (name, attrs = {}, cls) => {
+        const node = document.createElementNS(NS, name);
+        for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+        if (cls) node.setAttribute("class", cls);
+        return node;
+      };
+      const svg = (children, viewBox, w, h) => {
+        const root = el("svg", { viewBox, width: String(w), height: String(h), "aria-hidden": "true" });
+        root.append(...children);
+        return root;
+      };
+      const OUTLINE = { stroke: "#8a5f3b", "stroke-width": "1.1" };
+
+      /** Eyes: open dots by default, happy arcs once the word is claimed. */
+      function eyes(cx1, cy1, cx2, cy2, caught) {
+        const g = el("g");
+        if (caught) {
+          for (const [cx, cy] of [[cx1, cy1], [cx2, cy2]]) {
+            g.append(
+              el("path", {
+                d: `M${cx - 3.2} ${cy} q3.2 -3.6 6.4 0`,
+                fill: "none",
+                stroke: "#2b1d12",
+                "stroke-width": "1.7",
+                "stroke-linecap": "round",
+              }),
+            );
+          }
+          return g;
+        }
+        for (const [cx, cy] of [[cx1, cy1], [cx2, cy2]]) {
+          g.append(el("circle", { cx, cy, r: 3.2, fill: "#2b1d12" }));
+          g.append(el("circle", { cx: cx - 1, cy: cy - 1.1, r: 1, fill: "#fff" }));
+        }
+        return g;
+      }
+
+      /** Muzzle: belly patch, blush, nose, mouth and the two front teeth. */
+      function face(cx, cy) {
+        const g = el("g");
+        g.append(el("ellipse", { cx, cy: cy + 3.4, rx: 8.6, ry: 6.4, fill: "var(--belly)" }));
+        g.append(el("ellipse", { cx: cx - 5.8, cy: cy + 1.6, rx: 2.2, ry: 1.5, fill: "#f19aa2", opacity: ".6" }));
+        g.append(el("ellipse", { cx: cx + 5.8, cy: cy + 1.6, rx: 2.2, ry: 1.5, fill: "#f19aa2", opacity: ".6" }));
+        g.append(el("ellipse", { cx, cy: cy + 1.2, rx: 1.8, ry: 1.35, fill: "#2b1d12" }));
+        g.append(
+          el("path", {
+            d: `M${cx} ${cy + 2.6} q0 3.2 2.8 3.2`,
+            fill: "none",
+            stroke: "#2b1d12",
+            "stroke-width": "1.1",
+            "stroke-linecap": "round",
+          }),
+        );
+        for (const dx of [-2.2, 0.4]) {
+          g.append(
+            el("rect", {
+              x: cx + dx, y: cy + 3.6, width: 1.8, height: 2.6, rx: 0.6,
+              fill: "#fff", stroke: "#2b1d12", "stroke-width": ".55",
+            }),
+          );
+        }
+        return g;
+      }
+
+      const ear = (cx, cy) => el("circle", { cx, cy, r: 3.5, fill: "var(--fur)", ...OUTLINE });
+      const paw = (cx, cy, rx = 3.7, ry = 2.6) =>
+        el("ellipse", { cx, cy, rx, ry, fill: "var(--fur-light)", ...OUTLINE });
+
+      /** A — perched on the word's top edge; paws hang over the word itself. */
+      function gopherA(caught) {
+        const body = el("g", {}, "g-body");
+        body.append(paw(17, 44), paw(39, 44));
+        body.append(ear(17, 14), ear(39, 14));
+        body.append(el("circle", { cx: 28, cy: 24, r: 16, fill: "var(--fur)", ...OUTLINE }));
+        body.append(face(28, 25));
+        body.append(eyes(21.5, 21.5, 34.5, 21.5, caught));
+        const g = el("g");
+        g.append(
+          el("path", {
+            d: "M13 33 q-9 3 -10 11 q7 -1 11 -6",
+            fill: "none", stroke: "var(--fur)", "stroke-width": "3.4",
+            "stroke-linecap": "round", class: "g-tail",
+          }),
+        );
+        g.append(body);
+        return svg([g], "0 0 56 50", 44, 39);
+      }
+
+      /**
+       * B — head out of a hole right below the word; never covers the word.
+       * The body is masked to "above the rim OR inside the opening", so a
+       * translated body really disappears into the hole instead of sliding
+       * under the fur of the card.
+       */
+      function gopherB() {
+        const defs = el("defs");
+        const mask = el("mask", {
+          id: "gopher-b-rim",
+          maskUnits: "userSpaceOnUse",
+          maskContentUnits: "userSpaceOnUse",
+          x: 0, y: 0, width: 56, height: 70,
+        });
+        mask.append(el("rect", { x: 0, y: 0, width: 56, height: 36, fill: "#fff" }));
+        mask.append(el("ellipse", { cx: 28, cy: 36, rx: 17, ry: 7.5, fill: "#fff" }));
+
+        defs.append(mask);
+
+        const g = el("g");
+        g.append(el("ellipse", { cx: 28, cy: 36, rx: 17, ry: 7.5, fill: "var(--hole)" }));
+        g.append(el("ellipse", { cx: 28, cy: 33.4, rx: 13, ry: 3.8, fill: "#5b4630", opacity: ".38" }));
+        // the far rim is behind the gopher: drawn before the body, so the
+        // body hides it — both standing up and sunk into the hole
+        g.append(
+          el("path", {
+            d: "M11 36 a 17 7.5 0 0 1 34 0", fill: "none",
+            stroke: "#19120b", "stroke-width": "1.3", opacity: ".7",
+          }),
+        );
+
+        const body = el("g", {}, "g-body");
+        body.append(
+          el("path", { d: "M15 44 q0 -27 13 -27 q13 0 13 27 z", fill: "var(--fur)", ...OUTLINE }),
+        );
+        body.append(ear(18, 10), ear(38, 10));
+        body.append(el("circle", { cx: 28, cy: 17, r: 14.6, fill: "var(--fur)", ...OUTLINE }));
+        body.append(face(28, 18));
+
+        const open = el("g", {}, "g-open-eye");
+        open.append(eyes(21.8, 14.8, 34.2, 14.8, false));
+
+        const dizzy = el("g", {}, "g-dizzy");
+        for (const [cx, cy] of [[21.8, 14.8], [34.2, 14.8]]) {
+          dizzy.append(
+            el("path", {
+              d: `M${cx - 2.6} ${cy - 2.6} l5.2 5.2`, stroke: "#2b1d12",
+              "stroke-width": "1.8", "stroke-linecap": "round",
+            }),
+            el("path", {
+              d: `M${cx + 2.6} ${cy - 2.6} l-5.2 5.2`, stroke: "#2b1d12",
+              "stroke-width": "1.8", "stroke-linecap": "round",
+            }),
+          );
+        }
+        body.append(open, dizzy);
+        body.append(paw(12, 32, 3.4, 2.4), paw(44, 32, 3.4, 2.4));
+
+        // the mask sits outside the transform, so it stays put while the body sinks
+        const masked = el("g", { mask: "url(#gopher-b-rim)" });
+        masked.append(body);
+        g.append(masked);
+        // the near rim is closer to the viewer than the gopher, so it stays on top
+        g.append(
+          el("path", {
+            d: "M11 36 a 17 7.5 0 0 0 34 0", fill: "none",
+            stroke: "#19120b", "stroke-width": "1.4", opacity: ".9",
+          }),
+        );
+        return svg([defs, g], "0 0 56 70", 50, 62.5);
+      }
+
+      /** C — sticker on top, hugging a block; turns into a scholar once claimed. */
+      function gopherC(caught) {
+        const g = el("g");
+        const body = el("g", {}, "g-body");
+        body.append(
+          el("rect", {
+            x: 20, y: 31, width: 16, height: 13, rx: 3.5,
+            fill: "var(--fur-light)", ...OUTLINE, class: "g-block",
+          }),
+        );
+        body.append(el("circle", { cx: 24, cy: 37.5, r: 1.4, fill: "#8a5f3b" }));
+        body.append(el("circle", { cx: 28, cy: 37.5, r: 1.4, fill: "#8a5f3b" }));
+        body.append(el("circle", { cx: 32, cy: 37.5, r: 1.4, fill: "#8a5f3b" }));
+        body.append(ear(18.5, 10), ear(37.5, 10));
+        body.append(el("circle", { cx: 28, cy: 18.5, r: 14.6, fill: "var(--fur)", ...OUTLINE }));
+        body.append(face(28, 19.5));
+        body.append(eyes(22, 16.4, 34, 16.4, caught));
+        const glasses = el("g", {}, "g-glasses");
+        glasses.append(
+          el("circle", { cx: 22, cy: 16.4, r: 5.2, fill: "none", stroke: "#2b1d12", "stroke-width": "1.2" }),
+          el("circle", { cx: 34, cy: 16.4, r: 5.2, fill: "none", stroke: "#2b1d12", "stroke-width": "1.2" }),
+          el("path", { d: "M27.2 16.4 h1.6", stroke: "#2b1d12", "stroke-width": "1.2" }),
+          el("path", { d: "M16.8 15.4 l-3.4 -1.2", stroke: "#2b1d12", "stroke-width": "1.1" }),
+          el("path", { d: "M39.2 15.4 l3.4 -1.2", stroke: "#2b1d12", "stroke-width": "1.1" }),
+        );
+        body.append(glasses);
+        body.append(paw(20, 31, 3.3, 2.2), paw(36, 31, 3.3, 2.2));
+        body.append(
+          el("path", {
+            d: "M22 45 q0 5 -3 5.5", fill: "none", stroke: "var(--fur)",
+            "stroke-width": "2.6", "stroke-linecap": "round",
+          }),
+          el("path", {
+            d: "M34 45 q0 5 3 5.5", fill: "none", stroke: "var(--fur)",
+            "stroke-width": "2.6", "stroke-linecap": "round",
+          }),
+        );
+        g.append(body);
+        return svg([g], "0 0 56 52", 44, 41);
+      }
+
+      const BUILD = { a: gopherA, b: gopherB, c: gopherC };
+
+      for (const demo of document.querySelectorAll("[data-demo]")) {
+        const kind = demo.dataset.demo;
+        const slot = demo;
+        const head = demo.querySelector(".head");
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mascot";
+        button.setAttribute("aria-label", "把地鼠打下去，收录这个单词");
+
+        const sparks = document.createElement("span");
+        sparks.className = "sparks";
+        for (let i = 0; i < 5; i += 1) {
+          const spark = document.createElement("i");
+          spark.className = "spark";
+          sparks.append(spark);
+        }
+        const plus = document.createElement("span");
+        plus.className = "plus";
+        plus.textContent = "+1 已收录";
+        const dustA = document.createElement("i");
+        dustA.className = "dust";
+        const dustB = document.createElement("i");
+        dustB.className = "dust";
+
+        button.append(sparks, plus, dustA, dustB);
+        head.prepend(button);
+
+        const draw = (caught) => {
+          button.replaceChildren(sparks, plus, dustA, dustB, BUILD[kind](caught));
+        };
+        draw(false);
+
+        button.addEventListener("click", () => {
+          if (slot.classList.contains("is-caught")) return;
+          slot.classList.remove("is-caught");
+          slot.classList.add("is-hit");
+          window.setTimeout(() => {
+            slot.classList.remove("is-hit");
+            slot.classList.add("is-caught");
+            // B stays in the hole: the sunk position comes from the caught
+            // class, so redrawing would only make the eyes pop back.
+            if (kind !== "b") draw(true);
+          }, kind === "b" ? 620 : 440);
+        });
+
+        demo.querySelector("[data-reset]").addEventListener("click", () => {
+          slot.classList.remove("is-hit", "is-caught");
+          draw(false);
+        });
+      }
+
+      const theme = document.getElementById("theme");
+      theme.addEventListener("click", () => {
+        const dark = document.documentElement.getAttribute("data-theme") === "dark";
+        document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+        theme.textContent = dark ? "切换深色" : "切换浅色";
+      });
+    </script>
+  </body>
+</html>
