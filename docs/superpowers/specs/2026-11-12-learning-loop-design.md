@@ -252,6 +252,8 @@ Small tools often outlive their larger competitors.
 
 ### 5.2 复习态：侧栏
 
+> 2026-11-13 修订：点「忘了 / 模糊 / 认识」后原地揭晓释义与完整例句，可改判，点「下一张」才计入间隔。见 `2026-11-12-review-reveal-after-grade-design.md`。
+
 侧栏顶部新增分段控件：`对话 | 复习 (3)`，括号内是今日到期数。
 
 复习视图顶部有一行**语言筛选**（只有库里出现 2 种及以上 `termLang` 时才显示）：
