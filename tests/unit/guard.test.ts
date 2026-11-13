@@ -33,6 +33,10 @@ beforeEach(async () => {
   if (previous) document.removeEventListener("mouseup", previous);
   delete (globalThis as { __ilmtMouseupHandler?: unknown }).__ilmtMouseupHandler;
   (globalThis as { __ilmtImport?: unknown }).__ilmtImport = loadMain;
+  (chrome.runtime as { id?: string }).id = "test-extension-id";
+  (chrome.runtime.getURL as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+    (path: string) => `chrome-extension://test-extension-id/${path}`,
+  );
   window.getSelection()?.removeAllRanges();
 });
 
@@ -182,6 +186,47 @@ describe("content script guard", () => {
       await settle();
 
       expect(loadMain).not.toHaveBeenCalled();
+    });
+
+    it("does not throw when the extension context was invalidated", async () => {
+      await import("../../src/content/guard");
+      const handler = (globalThis as { __ilmtMouseupHandler?: () => void }).__ilmtMouseupHandler;
+      expect(handler, "the guard must bind its own mouseup handler").toBeTypeOf("function");
+
+      // What a reloaded/removed extension leaves behind: `getURL` throws
+      // synchronously and `runtime.id` is gone.
+      (chrome.runtime as { id?: string }).id = undefined;
+      (chrome.runtime.getURL as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        throw new Error("Extension context invalidated.");
+      });
+
+      selectParagraph("Hello world");
+      expect(() => handler!()).not.toThrow();
+      await settle();
+
+      expect(loadMain).not.toHaveBeenCalled();
+      // One failed attempt, then the dead listener is dropped instead of
+      // repeating the throw on every later mouseup.
+      expect(chrome.runtime.getURL).toHaveBeenCalledTimes(1);
+      expect(
+        (globalThis as { __ilmtMouseupHandler?: unknown }).__ilmtMouseupHandler,
+      ).toBeUndefined();
+    });
+
+    it("retries the load after a transient failure", async () => {
+      loadMain.mockRejectedValueOnce(new Error("Failed to fetch dynamically imported module"));
+
+      await import("../../src/content/guard");
+      const listener = lastListener();
+      listener({ type: "activate" }, { id: chrome.runtime.id, tab: { id: 1 } }, () => {});
+      await settle();
+      expect(runContentMain).not.toHaveBeenCalled();
+
+      listener({ type: "activate" }, { id: chrome.runtime.id, tab: { id: 1 } }, () => {});
+      await settle();
+
+      expect(loadMain).toHaveBeenCalledTimes(2);
+      expect(runContentMain).toHaveBeenCalledTimes(1);
     });
   });
 

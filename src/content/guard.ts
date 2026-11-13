@@ -69,15 +69,47 @@ function startMain(): Promise<void> {
   });
 }
 
-/** Load the main bundle at most once, then replay whichever trigger asked for it. */
+/** True while this document's copy of the extension still owns a live context. */
+function contextAlive(): boolean {
+  try {
+    return Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A reloaded or removed extension leaves the old content script behind: every
+ * `chrome.*` call then throws `Error: Extension context invalidated.`, and
+ * `getURL` does it synchronously. Nothing can be loaded until the document is
+ * reloaded, so drop the listener rather than throwing from every mouseup.
+ */
+function stopOnDeadContext(): void {
+  detachMouseUp();
+  console.warn("[ilmt] extension context invalidated; reload the page to keep using it");
+}
+
+function handleStartFailure(error: unknown): void {
+  if (!contextAlive()) {
+    stopOnDeadContext();
+    return;
+  }
+  console.error("[ilmt] failed to start content main", error);
+  loadPromise = null;
+  scope.__ilmtGuard = false;
+}
+
+/**
+ * Load the main bundle at most once, then replay whichever trigger asked for it.
+ * A synchronous throw (`getURL` on a dead context) must become a rejection here:
+ * otherwise it escapes the DOM event listener uncaught.
+ */
 function ensureMain(): Promise<void> {
   if (!loadPromise) {
     scope.__ilmtGuard = true;
-    loadPromise = startMain().catch((error) => {
-      console.error("[ilmt] failed to start content main", error);
-      loadPromise = null;
-      scope.__ilmtGuard = false;
-    });
+    loadPromise = Promise.resolve()
+      .then(startMain)
+      .catch(handleStartFailure);
   }
   return loadPromise.then(dispatchPending);
 }
@@ -107,9 +139,14 @@ function handleGuardMouseUp(): void {
   void ensureMain();
 }
 
-function bindMouseUp(): void {
+function detachMouseUp(): void {
   const previous = scope.__ilmtMouseupHandler;
   if (previous) document.removeEventListener("mouseup", previous);
+  scope.__ilmtMouseupHandler = undefined;
+}
+
+function bindMouseUp(): void {
+  detachMouseUp();
   document.addEventListener("mouseup", handleGuardMouseUp);
   scope.__ilmtMouseupHandler = handleGuardMouseUp;
 }

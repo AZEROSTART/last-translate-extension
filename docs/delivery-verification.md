@@ -161,7 +161,7 @@ P0 交付验证：通过 / 未通过
 - `opencli` 驱动的是真实 Chrome，不是无头浏览器；快捷键和 popup 需要 Chrome 在前台。
 - Chrome 有多个窗口时，快捷键发给最后聚焦的窗口。测试页没反应时，先点测试页所在窗口。
 - `opencli` 能自动验证页面 DOM；popup 是浏览器工具栏 UI，需点击图标确认，稳定做法是固定扩展图标。
-- 重构 `dist` 后必须重载扩展并刷新测试页，否则旧 content script 会让结果失真。
+- 重构 `dist` 后必须重载扩展并刷新测试页，否则旧 content script 会让结果失真；页面里遗留的旧脚本现在只会 `console.warn`（不再抛 `Extension context invalidated.`），但仍需刷新页面才能恢复功能。
 - 本地测试页服务器用完要关闭，避免端口占用。
 
 ## 6. 本次验证记录（2026-11-11）
@@ -261,3 +261,22 @@ P0 交付验证：通过 / 未通过
 - 地鼠卡片的真机肉眼确认：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`（opencli 拒绝 `chrome://` scheme，无法代点），再按一次 `⌥A`（按 2026-11-13 约定，agent 不注入真实快捷键）。同一份 `dist/` 的卡片、收录、已收录状态由 Playwright E2E 覆盖。
 
 **已知限制**：特效 CSS 以 `<style>` 注入页面文档（spec §3.4），页面若启用严格 `style-src` 会让造型/动画失效（写库仍成功）；备选方案是从后台 `chrome.scripting.insertCSS`。
+
+## 13. 本次验证记录（2026-11-13，扩展重载后的 `Extension context invalidated`）
+
+**现象**：`chrome://extensions` 的「错误」面板出现 `Uncaught Error: Extension context invalidated.`，堆栈指向 `content_guard.js`（`at a → at o → at HTMLDocument.s`）。
+
+**根因**：重载扩展（重建 `dist` 后点「重新加载」、禁用再启用）时，已打开页面里的旧 `content_guard.js` 仍在监听 `mouseup`。再次划词会走到 `ensureMain() → startMain() → chrome.runtime.getURL(...)`，而失效上下文里的 `getURL` 是**同步抛错**；原实现只给返回的 promise 挂了 `.catch`，同步异常直接窜出 DOM 事件监听器，变成未捕获错误。
+
+**改动**（`src/content/guard.ts`）：
+- `ensureMain()` 改成 `Promise.resolve().then(startMain).catch(handleStartFailure)`，把同步抛错转成 rejection
+- 新增 `contextAlive()`（读 `chrome.runtime?.id`）：上下文失效时不再重试，`console.warn` 一行提示（不写进扩展 Errors 面板），并 `detachMouseUp()`，避免之后每次划词重复抛错
+- 非失效失败（例如构建窗口期 `content_main.js` 取不到）保持原行为：记录错误、重置后允许重试
+- 单测：`does not throw when the extension context was invalidated`（修复前失败于 `Error: Extension context invalidated.`）、`retries the load after a transient failure`
+
+**验证**：
+- 自动门禁：通过（639/639 单测、41 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（12/12）
+- 真机复现（headless Chromium，`chrome.runtime.reload()` 后在旧页划词）：
+  - 修复前：`Runtime.exceptionThrown` 两次 `Error: Extension context invalidated. at a (content_guard.js:1:480) … at HTMLDocument.s`
+  - 修复后：无异常，仅 `console.warning: [ilmt] extension context invalidated; reload the page to keep using it`
