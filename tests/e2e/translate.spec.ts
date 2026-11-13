@@ -202,6 +202,27 @@ test.describe("loaded extension", () => {
     expect(mockServer.requests).toHaveLength(0);
   }
 
+  test("advertises the real shortcut bindings without an OS keystroke", async () => {
+    try {
+      extension = await launchExtension();
+
+      const shortcuts = await extension.worker.evaluate(async () => {
+        const commands = await chrome.commands.getAll();
+        return Object.fromEntries(commands.map((command) => [command.name, command.shortcut ?? ""]));
+      });
+
+      // Chrome resolves the manifest's suggested keys; an empty string means the
+      // binding was rejected or overridden, which the OS would swallow silently.
+      // macOS reports the Option key as ⌥, other platforms as Alt.
+      const key = (name: string) => (shortcuts[name] ?? "").replace("⌥", "Alt+");
+      expect(key("translate-page")).toBe("Alt+A");
+      expect(key("ask-selection")).toBe("Alt+Q");
+      expect(key("toggle-side-panel")).toBe("Alt+S");
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("translates an English article and restores it", async () => {
     try {
       server = await startMockServer();
@@ -216,10 +237,31 @@ test.describe("loaded extension", () => {
       await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
       await expect(page.locator(".ilmt-tr")).toHaveCount(10);
       await expect(page.locator(".ilmt-tr").first()).toContainText("译文");
+
+      // 双语：每条原文都还在，译文非空、紧跟在原文之后、位置在原文下方。
+      const rows = await page.locator("#article p").evaluateAll((nodes) =>
+        nodes.map((node) => {
+          const tr = node.querySelector(":scope > .ilmt-tr");
+          const clone = node.cloneNode(true) as HTMLElement;
+          clone.querySelectorAll(".ilmt-tr").forEach((n) => n.remove());
+          return {
+            source: clone.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            trText: tr?.textContent?.trim() ?? "",
+            below: !!tr && tr.getBoundingClientRect().top >= node.getBoundingClientRect().top,
+            loading: tr?.getAttribute("data-loading") === "1",
+          };
+        }),
+      );
+      expect(rows).toHaveLength(10);
+      expect(rows.filter((row) => !row.source || !row.trText || !row.below || row.loading)).toEqual(
+        [],
+      );
       expect(server.requests.some((request) => request.method === "POST")).toBe(true);
 
-      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      // 第二次激活走的是命令行/快捷键的同一条路径。
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
       await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await expect(page.locator("#article p")).toHaveCount(10);
     } finally {
       await cleanup();
     }

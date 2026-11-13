@@ -5,6 +5,8 @@
 - 原则：只覆盖核心用户路径；边界场景放回归检查，不塞进主流程
 - 变更规则：除非用户明确要求，不修改本流程的步骤和判定标准
 
+> 2026-11-13 修订（用户明确要求）：P0 不再由 agent 用 `osascript` 注入 `⌥A`，也不再 `--window foreground`。快捷键绑定改由 Playwright 通过 `chrome.commands.getAll()` 断言，翻译/恢复/popup/复习由自动用例覆盖，避免抢用户焦点、避免按键打进别的应用。
+
 当前扩展：`dist/` 未打包扩展，ID `dnhebcbngmcmfccnelmimfnkponmaifa`。
 
 ## 0. 自动门禁（每次必跑）
@@ -41,121 +43,80 @@ node scripts/check-build.mjs
    python3 -m http.server 4173 --directory tests/fixtures
    ```
 
-4. 用 opencli 打开英文测试页（带时间戳，强制新页面，避免旧 content script）：
+4. 需要看真实页面时，用 opencli 在后台窗口打开英文测试页（带时间戳，强制新页面，避免旧 content script）：
 
    ```bash
-   opencli browser delivery open \
-     "http://127.0.0.1:4173/article.html?delivery=$(date +%s)" \
-     --window foreground
+   opencli browser delivery --window background open \
+     "http://127.0.0.1:4173/article.html?delivery=$(date +%s)"
    ```
 
-5. 确认当前 provider 可用（popup 里显示当前 provider/model；交付验证用真实 provider，不用 mock）。
-6. 确认测试页所在的 Chrome 窗口在前台。快捷键没反应时，先点一下测试页再按；并在 `chrome://extensions/shortcuts` 确认「翻译当前页面」是 `⌥A`。
+   `--window background` 不会把 Chrome 提到前台，不打断用户正在做的事。
+
+5. 确认当前 provider 可用（popup 里显示当前 provider/model；真实页面抽查用真实 provider，不用 mock）。
+
+> 焦点约定：agent 不用 `osascript activate`，也不注入任何物理按键。Chrome 快捷键由下面的自动用例验证；需要人工确认时，请用户自己按一次 `⌥A`。
 
 ## 2. P0 检查
 
-### 2.1 Opt+A 开始翻译
-
-让 Chrome 前台，发送真实快捷键：
+### 2.1 快捷键绑定（自动，无需前台焦点）
 
 ```bash
-osascript -e 'tell application "Google Chrome" to activate' \
-  -e 'delay 0.3' \
-  -e 'tell application "System Events" to key code 0 using option down'
+npm run test:e2e
 ```
 
-等待 2～3 秒后检查：
+其中 `translate.spec.ts › advertises the real shortcut bindings without an OS keystroke` 断言 Chrome 已解析 manifest 里的快捷键：
+
+- `translate-page` → `⌥A`（非 macOS 平台是 `Alt+A`）
+- `ask-selection` → `⌥Q`
+- `toggle-side-panel` → `⌥S`
+
+通过：`shortcut` 非空且与上述一致。空字符串表示绑定被拒绝或被其它扩展占用——真实按键会静默失效，所以这一条比手动按键更可靠。
+
+> 真实按键从 Chrome 到扩展的派发属于浏览器内部行为，无法在页面里断言。我们验证的是「绑定已注册」+「命令处理函数正确」两段：前者由上面的用例覆盖，后者由 `tests/unit/background-index.test.ts` 与 2.2 的 activate 链路覆盖。
+
+### 2.2 翻译、双语位置与恢复（自动）
+
+`npm run test:e2e` 里的 `translates an English article and restores it` 断言：
+
+- 激活后 `#article p` 中 10 段都插入 `.ilmt-tr`，译文非空
+- 每条原文仍在，译文节点在原文之下，且没有残留 `data-loading="1"`
+- 再次激活（与快捷键走同一条 `activate` 路径）后译文清空，原文 10 段仍在
+
+通过：用例全绿，且 `requests` 中确实有发往 provider 的 POST。
+
+### 2.3 popup
+
+`npm run test:e2e` 里的 `shows settings sections and the active provider in the popup` 断言 popup 渲染出分区与当前 provider/model。
+
+通过：用例全绿；需要肉眼确认时再手动点图标。
+
+### 2.4 划词「解释」（手动，CDP 触发，不抢焦点）
 
 ```bash
-opencli browser delivery eval '({count: document.querySelectorAll(".ilmt-tr").length, banner: document.querySelector(".ilmt-active-banner")?.textContent ?? null, error: document.querySelector(".ilmt-error-banner")?.textContent ?? null})'
-```
-
-通过：
-
-- `count` 为 10（`tests/fixtures/article.html` 有 10 个正文段落）
-- `banner` 包含「翻译已开启」
-- `error` 为 `null`
-
-### 2.2 译文在原文下方，双语同时存在
-
-```bash
-opencli browser delivery eval '(() => {
-  const rows = [...document.querySelectorAll("#article p")].map((p) => {
-    const tr = p.querySelector(":scope > .ilmt-tr");
-    const clone = p.cloneNode(true);
-    clone.querySelectorAll(".ilmt-tr").forEach((n) => n.remove());
-    return {
-      id: p.id,
-      source: clone.textContent.replace(/\s+/g, " ").trim(),
-      hasTr: !!tr,
-      trText: (tr?.textContent || "").trim(),
-      below: !!tr && tr.getBoundingClientRect().top >= p.getBoundingClientRect().top,
-      loading: tr?.getAttribute("data-loading") === "1",
-    };
-  });
-  return {
-    count: document.querySelectorAll(".ilmt-tr").length,
-    bad: rows.filter((r) => !r.hasTr || !r.source || !r.trText || !r.below || r.loading),
-  };
+opencli browser delivery --window background eval '(() => {
+  const p = document.querySelector("#article-p1");
+  const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  const node = walker.nextNode();
+  const range = document.createRange();
+  range.setStart(node, 0);
+  range.setEnd(node, Math.min(30, node.data.length));
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  return "selected";
 })()'
 ```
 
-通过：
-
-- `count` 为 10
-- `bad` 为空数组
-- 每条原文还在，译文非空，译文位置在原文下方
-- 没有残留 `data-loading="1"` 骨架
-
-### 2.3 再按 Opt+A 恢复原文
-
-```bash
-osascript -e 'tell application "Google Chrome" to activate' \
-  -e 'delay 0.3' \
-  -e 'tell application "System Events" to key code 0 using option down'
-```
-
-然后检查：
-
-```bash
-opencli browser delivery eval '({count: document.querySelectorAll(".ilmt-tr").length, banner: document.querySelector(".ilmt-active-banner")?.textContent ?? null, sources: document.querySelectorAll("#article p").length})'
-```
+然后点击浮出的「解释」，等待侧栏返回。
 
 通过：
 
-- `count` 为 0
-- `banner` 为 `null`
-- `sources` 为 10（原文段落仍在）
+- 气泡出现「解释 / 追问」
+- 侧栏打开，用户消息里出现本次选中的原文引用
+- 出现助手回答，无红色报错横幅
 
-### 2.4 点击扩展图标出现 popup
-
-1. 点击 Chrome 工具栏里的扩展图标（未固定时从拼图菜单里点）。
-2. 检查 popup 是否正常出现，而不是空白或报错。
-3. 检查是否显示：
-   - 标题「翻译设置」
-   - 当前 provider（例如 `DeepSeek (当前)`）
-   - 当前 model
-   - 脱敏后的 API Key（例如 `已保存（sk-****...）`）
-   - 「保存」「测试连接」「打开翻译侧栏」等按钮
-4. 按 `Esc` 关闭 popup。
-
-通过：popup 正常渲染，当前 provider/model 可见，无空白、无错误提示。
-
-### 2.5 划词「解释」打开侧栏并自动发送
-
-1. 在英文正文里选中一段文字。
-2. 点击浮出的「解释」。
-3. 等待侧栏打开并返回回答。
-4. 如果侧栏提示「上下文已失效」，点「针对新页面重新会话」后重试一次。
-
-通过：
-
-- 侧栏打开
-- 用户消息里出现本次选中的原文引用
-- 出现助手回答（有明确错误提示也算链路失败，需要修复）
-- 不出现红色报错横幅
-
-### 2.6 控制台检查
+### 2.5 控制台检查
 
 ```bash
 opencli browser delivery console
@@ -174,9 +135,8 @@ opencli browser delivery console
 ```text
 P0 交付验证：通过 / 未通过
 - 自动门禁：通过 / 失败（哪一步）
-- Opt+A 翻译：通过 / 失败（count、banner）
-- 双语在原文下方：通过 / 失败（bad 数量）
-- 再按 Opt+A 恢复：通过 / 失败
+- 快捷键绑定：通过 / 失败（⌥A / ⌥Q / ⌥S 是否被 Chrome 解析）
+- 翻译与恢复：通过 / 失败（10/10、bad 数量、恢复后原文段数）
 - popup：通过 / 失败（provider/model 是否显示）
 - 侧栏解释：通过 / 失败
 - 控制台：通过 / 有报错
@@ -272,3 +232,19 @@ P0 交付验证：通过 / 未通过
 - E2E：通过（9/9，真实 Chromium + 新构建 `dist/`）
 - 真实模型：通过（修复后 5 条注释全部返回 `glosses.en` 与 `glosses.ja`，解析器全部保留）
 - 手动 Chrome P0（`Opt+A`）：未执行——宿主桌面焦点被 Paseo / WeChat 反复抢占，`osascript activate` 无法稳定把 Chrome 切到前台，`Opt+A` 落不到文章页；同一份 `dist/` 的翻译、恢复、hover 注释、popup 由 Playwright 覆盖。已装扩展需在 `chrome://extensions` 重新加载后才能用上新 prompt。
+
+## 11. 本次验证记录（2026-11-13，P0 去焦点化）
+
+**动机**：之前的 P0 会用 `osascript activate` + `System Events` 注入 `⌥A`，并且 Playwright 默认 headful。两者都会抢用户焦点，按键还可能打进前台的其他应用。
+
+**改动**：
+- `package.json`：`test:e2e` 默认 `ILMT_E2E_HEADLESS=1`；新增 `test:e2e:headed` 供需要肉眼看界面时使用
+- `translate.spec.ts` 新增 `advertises the real shortcut bindings without an OS keystroke`：从 service worker 读 `chrome.commands.getAll()`，断言 `translate-page=⌥A`、`ask-selection=⌥Q`、`toggle-side-panel=⌥S`（macOS 返回 ⌥，其它平台 Alt）
+- `translates an English article and restores it` 增强：逐段断言原文保留、译文非空且在原文下方、无 loading 残留，并用第二次 `activate`（与快捷键同一条路径）验证恢复
+- P0 文档与 `AGENTS.md` 去掉快捷键注入步骤；opencli 改用 `--window background`
+
+**验证**：
+- `npm run test:e2e`（headless）：通过（10/10，9.5s，无可见窗口）
+- 自动门禁：通过（596/596 单测、`tsc`、build、`check-build`）
+- `opencli browser delivery --window background open …` + `eval`：通过（页面可读，不抬窗口）
+- 真实按键派发属于 Chrome 内部行为，不再作为交付门槛；需要人工确认时由用户自己按一次 `⌥A`
