@@ -121,6 +121,8 @@ export interface ClaimEffect {
 - 类名继续用构建期前缀 `ilmt-gloss-`，与 `inject.css` 一致，避免与页面样式撞名。
 - 深色：宿主在特效根节点上写 `data-ilmt-theme="light|dark"`，特效 CSS 用 `[data-ilmt-theme="dark"]` 覆盖颜色，不再依赖 JS 传值。
 
+注意：样式以 `<style>` 元素注入页面文档，页面若启用严格的 `style-src`，特效会渲染成无样式（收录写入本身不受影响）。真在意时再从 background 走 `chrome.scripting.insertCSS` 注入。
+
 ### 3.5 注册表
 
 `src/content/mascots/` → `src/content/effects/`：

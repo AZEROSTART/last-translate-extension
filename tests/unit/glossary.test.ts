@@ -379,6 +379,31 @@ describe("claim effect", () => {
     expect(document.querySelector("[role=tooltip]")?.textContent).not.toContain("已抓住");
   });
 
+  it("falls back to the first registered effect for a legacy fixed id", () => {
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document, {
+      getEffectSettings: () => ({
+        mode: "fixed",
+        fixedId: "gopher",
+        enabledIds: [],
+        animations: true,
+      }),
+    });
+    controller.start();
+    controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+    vi.advanceTimersByTime(150);
+
+    expect(
+      document.querySelector('[role=tooltip] [data-ilmt-effect="gopher-hole"]'),
+    ).toBeTruthy();
+  });
+
   it("does not put extra-language glosses on the card", () => {
     stubFrame();
     stubHighlights();

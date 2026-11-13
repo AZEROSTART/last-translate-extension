@@ -716,12 +716,15 @@ function handleSend(): void {
   const text = input.value.trim();
   const quote = pendingQuote?.text;
   const selectionContext = pendingQuote?.context;
-  // A typed follow-up must never auto-claim, even when it carries a quote.
+  // A typed follow-up must never auto-claim, even when it carries a quote. An
+  // explain quote still auto-claims when it is sent from the chip: the request
+  // originated from 划词「解释」, auto-send was just blocked.
   const termLang = pendingQuote?.termLang;
+  const explain = pendingQuote?.mode === "explain" ? true : undefined;
   if (!text || streaming) return;
   clearQuoteChip();
   input.value = "";
-  void sendRequest({ text, quote, selectionContext, termLang, appendUser: true });
+  void sendRequest({ text, quote, selectionContext, termLang, explain, appendUser: true });
 }
 
 interface SendRequestOptions {

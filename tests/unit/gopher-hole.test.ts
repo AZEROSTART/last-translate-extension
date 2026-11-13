@@ -54,12 +54,13 @@ describe("gopher-hole effect", () => {
     expect(ctx.announce).toHaveBeenCalledWith("这个词已经在学习库里了");
   });
 
-  it("returns to idle when the write fails", async () => {
+  it("returns to idle and announces the failure when the write fails", async () => {
     const ctx = context({ claim: vi.fn().mockResolvedValue({ ok: false, created: false }) });
     gopherHoleEffect.mount(ctx);
     ctx.root.querySelector("button")!.click();
     await vi.advanceTimersByTimeAsync(620);
     expect(ctx.root.dataset.ilmtState).toBe("idle");
+    expect(ctx.announce).toHaveBeenCalledWith("收录失败");
   });
 
   it("does not animate when animations are off", async () => {

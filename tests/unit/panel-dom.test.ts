@@ -1009,6 +1009,38 @@ it("claims a short selected term after an explain answer finishes", async () => 
   });
 });
 
+it("claims an explain quote sent from the chip when auto-send was blocked", async () => {
+  const { chrome, sent, messageListeners } = installChrome({
+    tab: null,
+    tabGet: null,
+    pendingQuote: explainQuote,
+  });
+  await boot();
+  await flush();
+
+  // The quote's tab is gone, so the explain request waits in the composer as a
+  // chip instead of auto-sending.
+  expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(false);
+
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  expect(chat).toBeTruthy();
+  messageListeners[0]({
+    type: "delta",
+    requestId: chat.requestId,
+    text: "比……存在得更久。例：Small tools outlive their larger competitors.",
+  });
+  messageListeners[0]({ type: "finish", requestId: chat.requestId });
+  await flush();
+
+  const claims = learnWordCalls(chrome);
+  expect(claims).toHaveLength(1);
+  expect(claims[0]).toMatchObject({ type: "learn-word", surface: "outlive", termLang: "en" });
+});
+
 it("does not claim when the user types a follow-up around a quote", async () => {
   const { chrome, sent, messageListeners } = installChrome({
     pendingQuote: { ...explainQuote, mode: "follow-up" },

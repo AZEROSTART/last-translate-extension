@@ -482,6 +482,7 @@ export const gopherHoleEffect: ClaimEffect = {
       if (!result.ok) {
         phase = "idle";
         paint();
+        ctx.announce("收录失败");
         return;
       }
       phase = result.created ? "settled" : "known";
