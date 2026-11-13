@@ -136,7 +136,7 @@ export async function findContentMainContext(
         // The context was destroyed between enumeration and evaluation.
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((done) => setTimeout(done, 100));
   }
 
   throw new Error("content main did not expose __ilmtMain in any execution context");

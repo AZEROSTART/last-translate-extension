@@ -25,11 +25,13 @@ test("previews a claim effect without claiming a word", async () => {
     // Only the model section starts open, so the learning section's preview
     // button is not reachable until its accordion is expanded.
     await page.locator('details[data-section="learning"] summary').click();
+    // Nothing is mounted until "试一试" opens exactly one preview slot.
+    await expect(page.locator(".effect-preview:not([hidden])")).toHaveCount(0);
     await page.locator('.effect-try[data-effect="gopher-hole"]').click();
 
     const preview = page.locator(".effect-preview:not([hidden])");
     await expect(preview.locator('[data-ilmt-effect="gopher-hole"]')).toBeVisible();
-    await preview.locator("button").click();
+    await preview.locator('[data-ilmt-effect="gopher-hole"] button').click();
     await expect(preview.locator('[data-ilmt-effect="gopher-hole"]')).toHaveAttribute(
       "data-ilmt-state",
       "settled",
