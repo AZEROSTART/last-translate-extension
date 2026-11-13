@@ -97,7 +97,7 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
   const registeredIds = new Set(registered.map((effect) => effect.id));
 
   /**
-   * Stored ids may predate the current registry (legacy mascots). Unknown ids
+   * Stored ids may predate the current registry (legacy skin ids). Unknown ids
    * are ignored; when none survive, fall back to every effect — same rule as
    * `pickEffect`, so a legacy store never renders an all-unchecked page.
    */
