@@ -430,7 +430,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         if (index === question.answer) button.classList.add("is-correct");
         if (index === result.chosen && !result.correct) button.classList.add("is-wrong");
       }
-      button.addEventListener("click", () => void submitSpot(index, question));
+      button.addEventListener("click", () => pickSpotOption(index, question));
       options.appendChild(button);
     });
     card.appendChild(options);
@@ -440,17 +440,12 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       note.className = "ilmt-review-spot-note";
       note.textContent = `正确答案：${question.options[question.answer]}`;
       card.appendChild(note);
-
-      const next = document.createElement("button");
-      next.type = "button";
-      next.className = "ilmt-review-next";
-      next.textContent = "下一张";
-      next.addEventListener("click", () => finishCard(false));
-      card.appendChild(next);
     }
 
-    // Keep the answer one tap away for readers who want the full sentence.
-    if (!result) renderAnswer(word, card, "查看完整例句与全部释义");
+    // One tap away before the check; always open once the card is graded.
+    renderAnswer(word, card, "查看完整例句与全部释义");
+
+    if (result) renderNext(card);
   }
 
   function renderFinish(): void {
@@ -622,64 +617,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     render();
   }
 
-  async function submitSpot(choice: number, question: SpotQuestion): Promise<void> {
-    const word = current();
-    if (!word || state.busy || state.spotResult || destroyed) return;
+  /** Pick a spot option: the grade is derived from correctness and locked. */
+  function pickSpotOption(choice: number, question: SpotQuestion): void {
+    if (!current() || state.busy || state.spotResult || destroyed) return;
     const correct = choice === question.answer;
-    state.busy = true;
+    state.spotResult = { chosen: choice, correct };
+    state.pending = correct ? "good" : "again";
     render();
-
-    let response: ReviewAnswerResponse;
-    try {
-      response = await deps.answer({
-        type: "review-answer",
-        id: word.id,
-        grade: correct ? "good" : "again",
-        glossLang: state.glossLang || word.glossLang,
-        spot: true,
-        spotCorrect: correct,
-      });
-    } catch {
-      response = { ok: false } as unknown as ReviewAnswerResponse;
-    }
-    if (destroyed) return;
-
-    if (!response || response.ok !== true) {
-      state.busy = false;
-      render();
-      flushPending();
-      return;
-    }
-
-    if (correct) {
-      state.busy = false;
-      state.answered += 1;
-      state.correct += 1;
-      state.queue.shift();
-      state.revealed = false;
-      state.spotResult = null;
-      render();
-      flushPending();
-      return;
-    }
-
-    // Wrong: show the correct meaning and wait for "下一张". Keeping `busy`
-    // true also suppresses the storage reload that our own write triggers.
-    state.spotResult = { chosen: choice, correct: false };
-    render();
-  }
-
-  /** Advance after the user has read a wrong spot check's correction. */
-  function finishCard(correct: boolean): void {
-    if (!current()) return;
-    state.answered += 1;
-    if (correct) state.correct += 1;
-    state.queue.shift();
-    state.revealed = false;
-    state.spotResult = null;
-    state.busy = false;
-    render();
-    flushPending();
   }
 
   function flushPending(): void {
