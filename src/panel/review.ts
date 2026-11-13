@@ -113,6 +113,10 @@ interface ReviewState {
   termLang: string;
   glossLang: string;
   busy: boolean;
+  /** Grade picked on the current card; written to storage only on 下一张. */
+  pending: LearningGrade | null;
+  /** True after "结束": a late storage reload must not resurrect the queue. */
+  ended: boolean;
   /** Chosen option after a wrong spot check; the card waits for "下一张". */
   spotResult: { chosen: number; correct: boolean } | null;
 }
@@ -139,6 +143,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     termLang: readSession(TERM_LANG_KEY) || ALL,
     glossLang: readSession(GLOSS_LANG_KEY) || (over.defaultGlossLang?.() ?? ""),
     busy: false,
+    pending: null,
+    ended: false,
     spotResult: null,
   };
 
@@ -197,6 +203,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         chip.addEventListener("click", () => {
           state.termLang = lang;
           writeSession(TERM_LANG_KEY, lang);
+          state.ended = false;
           state.answered = 0;
           state.correct = 0;
           state.revealed = false;
@@ -241,8 +248,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return nodes;
   }
 
+  /** The answer opens on demand (看答案) or as soon as a grade is picked. */
+  function answerShown(): boolean {
+    return state.revealed || state.pending !== null;
+  }
+
   function renderAnswer(word: LearningWord, card: HTMLElement, label = "想不起来，看答案"): void {
-    if (!state.revealed) {
+    if (!answerShown()) {
       const reveal = document.createElement("button");
       reveal.type = "button";
       reveal.className = "ilmt-review-reveal";
@@ -264,6 +276,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
 
     const answer = document.createElement("div");
     answer.className = "ilmt-review-answer";
+    answer.setAttribute("aria-live", "polite");
 
     const meaning = document.createElement("div");
     meaning.className = "ilmt-review-meaning";
@@ -306,11 +319,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     end.type = "button";
     end.className = "ilmt-review-end";
     end.textContent = "结束";
-    end.addEventListener("click", () => {
-      state.queue = [];
-      state.revealed = false;
-      render();
-    });
+    end.addEventListener("click", () => void endRound());
     head.append(progress, end);
     card.appendChild(head);
 
@@ -350,33 +359,29 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     sentence.textContent = blanked;
     card.appendChild(sentence);
 
-    const question =
-      shouldSpotCheck(word) && state.spotResult === null
-        ? buildSpotQuestion(word, state.all?.words ?? [], state.glossLang || word.glossLang, spotSeed(word))
-        : null;
+    // The seed is stable per word, so rebuilding an answered spot card yields
+    // the same options instead of reshuffling them.
+    const question = shouldSpotCheck(word)
+      ? buildSpotQuestion(
+          word,
+          state.all?.words ?? [],
+          state.glossLang || word.glossLang,
+          spotSeed(word),
+        )
+      : null;
 
     if (question) {
       renderSpot(word, card, question);
-    } else if (state.spotResult && !question) {
-      // A wrong spot check can only be re-rendered from the same card; the
-      // cached question is rebuilt deterministically below.
-      const rebuilt = buildSpotQuestion(
-        word,
-        state.all?.words ?? [],
-        state.glossLang || word.glossLang,
-        spotSeed(word),
-      );
-      if (rebuilt) renderSpot(word, card, rebuilt);
-      else renderGrades(card);
     } else {
       renderAnswer(word, card);
       renderGrades(card);
+      if (state.pending !== null) renderNext(card);
     }
 
     container.appendChild(card);
   }
 
-  function renderGrades(card: HTMLElement, spot = false): void {
+  function renderGrades(card: HTMLElement): void {
     const grades = document.createElement("div");
     grades.className = "ilmt-review-grades";
     const buttons: Array<[LearningGrade, string]> = [
@@ -391,10 +396,23 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       button.dataset.grade = grade;
       button.textContent = label;
       button.disabled = state.busy;
-      button.addEventListener("click", () => void submit(grade, { spot }));
+      const active = state.pending === grade;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.addEventListener("click", () => pickGrade(grade));
       grades.appendChild(button);
     }
     card.appendChild(grades);
+  }
+
+  function renderNext(card: HTMLElement): void {
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "ilmt-review-next";
+    next.textContent = "下一张";
+    next.disabled = state.busy;
+    next.addEventListener("click", () => void commit());
+    card.appendChild(next);
   }
 
   function renderSpot(word: LearningWord, card: HTMLElement, question: SpotQuestion): void {
@@ -462,6 +480,22 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     today.textContent = `今天已复习 ${state.all?.stats.todayReviewed ?? 0} 个`;
     card.appendChild(today);
 
+    // The user ended the round explicitly: offer a way back in without
+    // reopening the panel, since the queue is no longer rebuilt from storage.
+    if (state.ended) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "ilmt-review-continue";
+      again.textContent = "继续复习";
+      again.addEventListener("click", () => {
+        state.ended = false;
+        state.answered = 0;
+        state.correct = 0;
+        void refresh();
+      });
+      card.appendChild(again);
+    }
+
     container.appendChild(card);
   }
 
@@ -490,6 +524,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       pendingReload = true;
       return;
     }
+    // "结束" wins over any late reload until the user resumes the round.
+    if (state.ended) return;
+    // A graded card owns the view; replay this reload after the next card.
+    if (state.pending !== null) {
+      pendingReload = true;
+      return;
+    }
     let next: LearningState;
     try {
       next = await deps.getState();
@@ -515,12 +556,20 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return chain;
   }
 
-  async function submit(
-    grade: LearningGrade,
-    spot?: { spot: boolean; spotCorrect?: boolean },
-  ): Promise<void> {
+  function pickGrade(grade: LearningGrade): void {
+    if (!current() || state.busy || destroyed) return;
+    state.pending = grade;
+    render();
+  }
+
+  /**
+   * Write the card's final grade once. The grade stays provisional until the
+   * user has seen the answer, so a re-grade never double-applies the schedule.
+   */
+  async function commit(): Promise<void> {
     const word = current();
-    if (!word || state.busy || destroyed) return;
+    const grade = state.pending;
+    if (!word || grade === null || state.busy || destroyed) return;
     state.busy = true;
     render();
 
@@ -531,7 +580,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         id: word.id,
         grade,
         glossLang: state.glossLang || word.glossLang,
-        ...(spot ? { spot: spot.spot, ...(spot.spotCorrect !== undefined ? { spotCorrect: spot.spotCorrect } : {}) } : {}),
+        ...(state.spotResult
+          ? { spot: true, spotCorrect: state.spotResult.correct }
+          : {}),
       });
     } catch {
       response = { ok: false } as unknown as ReviewAnswerResponse;
@@ -540,6 +591,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.busy = false;
 
     if (!response || response.ok !== true) {
+      // Stay on this card with the selection intact; 下一张 retries.
       render();
       flushPending();
       return;
@@ -549,9 +601,25 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (grade === "good") state.correct += 1;
     state.queue.shift();
     state.revealed = false;
+    state.pending = null;
     state.spotResult = null;
     render();
     flushPending();
+  }
+
+  /**
+   * End the round. A visible grade still counts, so commit it first; the latch
+   * keeps the write's own storage reload from putting the next card back.
+   */
+  async function endRound(): Promise<void> {
+    state.ended = true;
+    if (state.pending !== null) await commit();
+    state.queue = [];
+    state.revealed = false;
+    state.pending = null;
+    state.spotResult = null;
+    state.busy = false;
+    render();
   }
 
   async function submitSpot(choice: number, question: SpotQuestion): Promise<void> {

@@ -107,25 +107,6 @@ describe("mountReview", () => {
     expect(root.querySelector(".ilmt-review-sentence-full")?.textContent).toContain("outlive");
   });
 
-  it("sends the chosen grade and advances to the next card", async () => {
-    const words = [word(1), word(2)];
-    const { root, view, answer } = mount(words);
-    await view.refresh();
-
-    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 2");
-
-    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
-
-    await vi.waitFor(() => {
-      expect(answer).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "review-answer", id: "en:word1", grade: "good" }),
-      );
-    });
-    await vi.waitFor(() => {
-      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
-    });
-  });
-
   it("shows the finish card when the queue is empty", async () => {
     const { root, view } = mount([]);
     await view.refresh();
@@ -197,5 +178,145 @@ describe("spot check integration", () => {
       expect(root.querySelector(".ilmt-review-spot-note")?.textContent).toContain("比…活得久");
     });
     expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
+  });
+});
+
+describe("reveal after grading", () => {
+  it("reveals the meaning on the same card as soon as a grade is picked", async () => {
+    const { root, view, answer } = mount([
+      word(1, {
+        surface: "outlive",
+        glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
+      }),
+    ]);
+    await view.refresh();
+    expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+
+    expect(root.querySelector(".ilmt-review-meaning")?.textContent).toContain("比……存在得更久");
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 1");
+    expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
+    expect(answer).not.toHaveBeenCalled();
+  });
+
+  it("lets the user change the grade before committing", async () => {
+    const { root, view, answer } = mount([word(1)]);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    expect(root.querySelector('[data-grade="good"]')!.getAttribute("aria-pressed")).toBe("true");
+
+    root.querySelector<HTMLButtonElement>('[data-grade="again"]')!.click();
+
+    expect(answer).not.toHaveBeenCalled();
+    expect(root.querySelector('[data-grade="good"]')!.getAttribute("aria-pressed")).toBe("false");
+    expect(root.querySelector('[data-grade="again"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(root.querySelector(".ilmt-review-meaning")).toBeTruthy();
+  });
+
+  it("commits exactly once with the final grade on 下一张", async () => {
+    const words = [word(1), word(2)];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-grade="hard"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "review-answer", id: "en:word1", grade: "hard" }),
+    );
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+    });
+  });
+
+  it("lists every stored language under the primary meaning", async () => {
+    const { root, view } = mount([
+      word(1, {
+        glosses: [
+          { lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW },
+          { lang: "ja", meaning: "より長く生き残る", source: "translation", at: NOW },
+        ],
+        glossLang: "zh",
+      }),
+    ]);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+
+    expect(root.querySelector(".ilmt-review-meaning")?.textContent).toContain("比……存在得更久");
+    expect(root.querySelector(".ilmt-review-meaning-more")?.textContent).toContain(
+      "日语 · より長く生き残る",
+    );
+  });
+
+  it("keeps the card and the selection when the answer call fails", async () => {
+    const words = [word(1), word(2)];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+    answer.mockImplementationOnce(
+      async () => ({ ok: false }) as unknown as { ok: true; word: LearningWord },
+    );
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 2");
+    expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
+  });
+
+  it("does not rebuild the queue while a grade is pending", async () => {
+    const words = [word(1), word(2)];
+    const { root, view } = mount(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
+    expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
+  });
+
+  it("commits the pending grade when the round is ended", async () => {
+    const words = [word(1), word(2)];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
+    expect(answer).toHaveBeenCalledWith(expect.objectContaining({ id: "en:word1", grade: "good" }));
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done")).toBeTruthy();
+    });
+  });
+
+  it("offers 继续复习 after an explicit end", async () => {
+    const { root, view } = mount([word(1)]);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-continue")).toBeTruthy();
+    });
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-continue")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
+    });
   });
 });
