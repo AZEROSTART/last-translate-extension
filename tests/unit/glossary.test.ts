@@ -241,8 +241,8 @@ describe("hover intent", () => {
   });
 });
 
-describe("mascot capture", () => {
-  it("sends learn-word once when the mascot is clicked", async () => {
+describe("claim effect", () => {
+  it("sends learn-word once when the effect is clicked", async () => {
     const sendLearn = vi.fn().mockResolvedValue({
       ok: true,
       created: true,
@@ -261,9 +261,11 @@ describe("mascot capture", () => {
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
     vi.advanceTimersByTime(150);
 
-    const button = document.querySelector<HTMLButtonElement>("[role=tooltip] button")!;
+    const button = document.querySelector<HTMLButtonElement>(
+      '[role=tooltip] [data-ilmt-effect="gopher-hole"] button',
+    )!;
     button.click();
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(620);
 
     expect(sendLearn).toHaveBeenCalledTimes(1);
     expect(sendLearn.mock.calls[0][0]).toMatchObject({
@@ -271,8 +273,11 @@ describe("mascot capture", () => {
       termLang: "en",
       surface: "outlive",
       meaning: "比……存在得更久",
+      mascotId: "gopher-hole",
     });
-    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已抓住");
+
+    const host = document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!;
+    expect(host.dataset.ilmtState).toBe("settled");
   });
 
   it("renders the known state without resending", async () => {
@@ -294,9 +299,13 @@ describe("mascot capture", () => {
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
     vi.advanceTimersByTime(150);
 
-    document.querySelector<HTMLButtonElement>("[role=tooltip] button")!.click();
-    await vi.advanceTimersByTimeAsync(250);
-    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已在学习中");
+    document
+      .querySelector<HTMLButtonElement>('[role=tooltip] [data-ilmt-effect="gopher-hole"] button')!
+      .click();
+    await vi.advanceTimersByTimeAsync(620);
+    expect(
+      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
+    ).toBe("known");
 
     stubCaret(text, 0);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
@@ -306,11 +315,33 @@ describe("mascot capture", () => {
     stubCaret(text, 20);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
     vi.advanceTimersByTime(150);
-    document.querySelector<HTMLButtonElement>("[role=tooltip] button")!.click();
-    await vi.advanceTimersByTimeAsync(250);
+
+    // Reopening shows the quiet end state instead of replaying the animation.
+    expect(
+      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
+    ).toBe("known");
+
+    document
+      .querySelector<HTMLButtonElement>('[role=tooltip] [data-ilmt-effect="gopher-hole"] button')!
+      .click();
+    await vi.advanceTimersByTimeAsync(620);
 
     expect(sendLearn).toHaveBeenCalledTimes(1);
-    expect(document.querySelector("[role=tooltip]")?.textContent).toContain("已在学习中");
+    expect(
+      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
+    ).toBe("known");
+  });
+
+  it("reserves room below the word for the effect", () => {
+    openCard();
+    const word = document.querySelector<HTMLElement>(".ilmt-gloss-word")!;
+    expect(word.style.marginBottom).toBe("48px");
+  });
+
+  it("mounts exactly one effect inside the card", () => {
+    openCard();
+    expect(document.querySelectorAll("[role=tooltip] [data-ilmt-effect]")).toHaveLength(1);
+    expect(document.querySelector("[role=tooltip]")?.textContent).not.toContain("已抓住");
   });
 
   it("does not put extra-language glosses on the card", () => {

@@ -97,10 +97,10 @@ let targetLang = DEFAULT_TARGET_LANG;
 let minParagraphLength = DEFAULT_SETTINGS.minParagraphLength;
 let contentOnly = DEFAULT_SETTINGS.contentOnly;
 let learningLangs: string[] = [...DEFAULT_SETTINGS.learningLangs];
-let mascotSettings: EffectSettings = DEFAULT_SETTINGS.mascot;
+let effectSettings: EffectSettings = DEFAULT_SETTINGS.mascot;
 let registry = new ParagraphRegistry();
 const gloss = createGlossController(document, {
-  getMascotSettings: () => mascotSettings,
+  getEffectSettings: () => effectSettings,
   getGlossLang: () => targetLang,
 });
 let portClient: TranslatePortClient | null = null;
@@ -296,7 +296,7 @@ async function collectAndObserve(generation: number): Promise<void> {
   minParagraphLength = prefs.minParagraphLength;
   contentOnly = prefs.contentOnly;
   learningLangs = prefs.learningLangs;
-  mascotSettings = prefs.mascot;
+  effectSettings = prefs.mascot;
 
   const nodes = await collectParagraphs(body, {
     targetLang,

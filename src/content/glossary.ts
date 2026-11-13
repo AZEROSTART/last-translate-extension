@@ -11,14 +11,15 @@ import type {
   LearnWordResponse,
 } from "../shared/types";
 import { findSurfaceRange } from "./glossary-range";
-import { getMascot, getMascots, pickMascot, type MascotSkin, type MascotState } from "./mascots";
-import "./mascots/gopher";
+import { getEffect, getEffects, pickEffect } from "./effects";
+import type { ClaimEffect, ClaimHandle, ClaimPhase, ClaimResult } from "./effects/types";
+import "./effects/gopher-hole";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
 const SHOW_DELAY_MS = 120;
 const HIDE_DELAY_MS = 180;
 const MAX_ENTRIES = 500;
-const MASCOT_HISTORY_KEY = "ilmt:mascot-history";
+const EFFECT_HISTORY_KEY = "ilmt:effect-history";
 
 interface GlossEntry {
   paragraphId: string;
@@ -67,10 +68,10 @@ export interface GlossController {
 export interface GlossControllerDeps {
   now?: () => number;
   sendLearn?: (message: LearnWordMessage) => Promise<LearnWordResponse | null>;
-  /** Overrides the registry rotation entirely (used by tests). */
-  resolveMascot?: () => MascotSkin;
-  /** Live mascot settings; read when a card opens so mode changes apply. */
-  getMascotSettings?: () => EffectSettings | undefined;
+  /** Overrides rotation entirely (used by tests). */
+  resolveEffect?: () => ClaimEffect;
+  /** Live effect settings; read when a card opens so mode changes apply. */
+  getEffectSettings?: () => EffectSettings | undefined;
   /** Current translation language, used as the card's answer language. */
   getGlossLang?: () => string;
 }
@@ -96,6 +97,7 @@ export function createGlossController(
   let card: HTMLElement | null = null;
   let pendingEntry: GlossEntry | null = null;
   let currentEntry: GlossEntry | null = null;
+  let cardEffect: ClaimHandle | null = null;
   let showTimer: ReturnType<typeof setTimeout> | undefined;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverCard = false;
@@ -103,7 +105,7 @@ export function createGlossController(
   let scheduled = false;
   let lastPoint: { x: number; y: number } | null = null;
   /** Per-word outcome, so a reopened card never resends or forgets "known". */
-  const captured = new Map<string, "caught" | "known">();
+  const captured = new Map<string, ClaimPhase>();
 
   function highlightParts(): { css: HighlightCSS | undefined; ctor: HighlightCtor | undefined } {
     const win = (view ?? globalThis) as unknown as {
@@ -158,6 +160,8 @@ export function createGlossController(
     cancelHide();
     hoverCard = false;
     currentEntry = null;
+    cardEffect?.destroy();
+    cardEffect = null;
     if (card) {
       card.remove();
       card = null;
@@ -176,9 +180,9 @@ export function createGlossController(
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
-  function readMascotHistory(): string[] {
+  function readEffectHistory(): string[] {
     try {
-      const raw = view?.sessionStorage?.getItem(MASCOT_HISTORY_KEY);
+      const raw = view?.sessionStorage?.getItem(EFFECT_HISTORY_KEY);
       const parsed: unknown = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(parsed)) return [];
       return parsed.filter((id): id is string => typeof id === "string").slice(-2);
@@ -187,39 +191,56 @@ export function createGlossController(
     }
   }
 
-  function writeMascotHistory(ids: string[]): void {
+  function writeEffectHistory(ids: string[]): void {
     try {
-      view?.sessionStorage?.setItem(MASCOT_HISTORY_KEY, JSON.stringify(ids.slice(-2)));
+      view?.sessionStorage?.setItem(EFFECT_HISTORY_KEY, JSON.stringify(ids.slice(-2)));
     } catch {
-      // Private mode or a blocked storage; rotation just restarts.
+      // Private mode or blocked storage; rotation just restarts.
     }
   }
 
-  function nextMascot(): MascotSkin {
-    if (deps.resolveMascot) return deps.resolveMascot();
-    const settings = deps.getMascotSettings?.();
-    if (settings?.mode === "fixed" && settings.fixedId) {
-      const fixed = getMascot(settings.fixedId);
+  function nextEffect(): ClaimEffect {
+    if (deps.resolveEffect) return deps.resolveEffect();
+    const settings = deps.getEffectSettings?.();
+    if (settings?.mode === "fixed") {
+      const fixed = settings.fixedId ? getEffect(settings.fixedId) : undefined;
       if (fixed) return fixed;
+      const all = getEffects();
+      if (all.length > 0) return all[0];
     }
-    const history = readMascotHistory();
-    let skin: MascotSkin;
+    const history = readEffectHistory();
+    let effect: ClaimEffect;
     try {
-      skin = pickMascot({ enabledIds: settings?.enabledIds ?? [], lastPicks: history });
+      effect = pickEffect({ enabledIds: settings?.enabledIds ?? [], lastPicks: history });
     } catch {
-      const all = getMascots();
-      skin = all[0];
+      effect = getEffects()[0];
     }
-    writeMascotHistory([...history, skin.id]);
-    return skin;
+    writeEffectHistory([...history, effect.id]);
+    return effect;
   }
 
-  function currentTheme(): "light" | "dark" {
+  function animationsAllowed(): boolean {
+    if (deps.getEffectSettings?.()?.animations === false) return false;
     try {
-      return view?.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      return !(view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
     } catch {
-      return "light";
+      return true;
     }
+  }
+
+  let styleEl: HTMLStyleElement | null = null;
+
+  /** Inject every registered effect's CSS once per document. */
+  function ensureEffectStyles(): void {
+    if (styleEl?.isConnected) return;
+    const css = getEffects()
+      .map((effect) => effect.css ?? "")
+      .join("\n");
+    if (!css.trim()) return;
+    styleEl = doc.createElement("style");
+    styleEl.dataset.ilmtEffects = "";
+    styleEl.textContent = css;
+    (doc.head ?? doc.documentElement).appendChild(styleEl);
   }
 
   function entryKey(entry: GlossEntry): string {
@@ -284,32 +305,24 @@ export function createGlossController(
       element.appendChild(example);
     }
 
-    const skin = nextMascot();
+    ensureEffectStyles();
+
+    const effect = nextEffect();
     const key = entryKey(entry);
-    const button = doc.createElement("button");
-    button.type = "button";
-    button.className = "ilmt-gloss-mascot";
-    button.setAttribute("aria-label", `把${skin.label}${skin.verb}下去，收录这个单词`);
 
-    const status = doc.createElement("div");
-    status.className = "ilmt-gloss-mascot-status";
+    // The effect paints "already captured" itself; this region is screen-reader only.
+    const announce = doc.createElement("div");
+    announce.className = "ilmt-gloss-sr-only";
+    announce.setAttribute("aria-live", "polite");
 
-    const paint = (state: MascotState): void => {
-      button.replaceChildren(skin.render(state, currentTheme()));
-      status.textContent =
-        state === "caught" ? skin.caughtLabel : state === "known" ? skin.knownLabel : "";
-      status.hidden = status.textContent === "";
-    };
-    paint(captured.get(key) ?? "idle");
+    const host = doc.createElement("div");
+    host.className = "ilmt-gloss-effect-host";
 
-    let busy = false;
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (busy || captured.has(key)) return;
-      busy = true;
-      paint("hit");
-
+    let claiming = false;
+    const claim = async (): Promise<ClaimResult> => {
+      if (captured.has(key)) return { ok: true, created: false };
+      if (claiming) return { ok: false, created: false };
+      claiming = true;
       const message: LearnWordMessage = {
         type: "learn-word",
         surface: entry.note.surface,
@@ -321,36 +334,52 @@ export function createGlossController(
         ...(entry.note.pos ? { pos: entry.note.pos } : {}),
         ...(entry.note.glosses ? { glosses: entry.note.glosses } : {}),
         ...(entry.pageTitle ? { pageTitle: entry.pageTitle } : {}),
-        mascotId: skin.id,
+        mascotId: effect.id,
       };
       const send = deps.sendLearn ?? defaultSendLearn;
-      const settled = Promise.all([
-        send(message),
-        new Promise<void>((resolve) => setTimeout(resolve, skin.hitDurationMs)),
-      ]);
-      void settled.then(([response]) => {
-        busy = false;
-        if (response?.ok) {
-          const state = response.created ? "caught" : "known";
-          captured.set(key, state);
-          paint(state);
-        } else {
-          paint(captured.get(key) ?? "idle");
-        }
-      });
-    });
+      try {
+        const response = await send(message);
+        if (!response?.ok) return { ok: false, created: false };
+        // Remember only the quiet end state: reopening the card must not
+        // replay the "+1" animation.
+        captured.set(key, "known");
+        return { ok: true, created: response.created };
+      } finally {
+        claiming = false;
+      }
+    };
 
-    const mascot = doc.createElement("div");
-    mascot.className = "ilmt-gloss-mascot-wrap";
-    mascot.append(button, status);
-    element.appendChild(mascot);
-
+    word.appendChild(host);
+    element.appendChild(announce);
     doc.body.appendChild(element);
-    positionCard(element, entry.range);
+
     card = element;
     currentEntry = entry;
     pendingEntry = null;
     showTimer = undefined;
+
+    cardEffect = effect.mount({
+      doc,
+      surface,
+      root: host,
+      // `.ilmt-card` has one light palette today; see the note below.
+      theme: "light",
+      animations: animationsAllowed(),
+      claim,
+      announce: (text) => {
+        announce.textContent = text;
+      },
+      label: (verb) => `把${effect.label}${verb}下去，收录这个单词`,
+    });
+
+    // reserve: above grows the word row, below pushes the meaning down
+    if (effect.reserve.above > 0) word.style.paddingTop = `${effect.reserve.above}px`;
+    if (effect.reserve.below > 0) word.style.marginBottom = `${effect.reserve.below}px`;
+
+    const stored = captured.get(key);
+    if (stored) cardEffect.setState(stored);
+
+    positionCard(element, entry.range);
   }
 
   function hitTest(): void {

@@ -203,12 +203,14 @@
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   pointer-events: auto;
+  overflow: hidden;
 }
 
 .ilmt-gloss-word {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  position: relative;
 }
 
 .ilmt-gloss-surface {
@@ -233,62 +235,25 @@
   white-space: pre-wrap;
 }
 
-/* 认领角色：44×44 热区，角色本身只是装饰 */
-.ilmt-gloss-mascot-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 6px;
+/* 收录特效：宿主只负责定位，造型与动画在特效自己的 CSS 里 */
+.ilmt-gloss-effect-host {
+  position: absolute;
+  left: -8px;
+  top: 100%;
+  margin-top: -4px;
+  z-index: 1;
 }
 
-.ilmt-gloss-mascot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
+/* 只给读屏看的播报区 */
+.ilmt-gloss-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
   padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.ilmt-gloss-mascot:hover {
-  background: rgba(45, 212, 191, 0.14);
-}
-
-.ilmt-gloss-mascot:focus-visible {
-  outline: 2px solid #2dd4bf;
-  outline-offset: 2px;
-}
-
-.ilmt-gloss-mascot-status {
-  color: #0f766e;
-  font-size: 12px;
-}
-
-.ilmt-gloss-gopher-hit {
-  animation: ilmt-gopher-hit 180ms ease;
-  transform-origin: 50% 90%;
-}
-
-@keyframes ilmt-gopher-hit {
-  0% {
-    transform: scaleY(1);
-  }
-  40% {
-    transform: scaleY(0.6);
-  }
-  100% {
-    transform: scaleY(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ilmt-gloss-gopher-hit {
-    animation: none;
-  }
+  white-space: nowrap;
 }
