@@ -5,10 +5,10 @@
  */
 
 import type {
+  EffectSettings,
   GlossaryNote,
   LearnWordMessage,
   LearnWordResponse,
-  MascotSettings,
 } from "../shared/types";
 import { findSurfaceRange } from "./glossary-range";
 import { getMascot, getMascots, pickMascot, type MascotSkin, type MascotState } from "./mascots";
@@ -70,7 +70,7 @@ export interface GlossControllerDeps {
   /** Overrides the registry rotation entirely (used by tests). */
   resolveMascot?: () => MascotSkin;
   /** Live mascot settings; read when a card opens so mode changes apply. */
-  getMascotSettings?: () => MascotSettings | undefined;
+  getMascotSettings?: () => EffectSettings | undefined;
   /** Current translation language, used as the card's answer language. */
   getGlossLang?: () => string;
 }

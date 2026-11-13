@@ -51,11 +51,11 @@ export interface TranslationPreference {
   terms?: Array<{ from: string; to: string }>;
 }
 
-/** How the claim mascot is chosen on the hover card. */
-export interface MascotSettings {
+/** How the claim effect is chosen on the hover card. */
+export interface EffectSettings {
   mode: "rotate" | "fixed";
   fixedId?: string;
-  /** Empty array = every registered mascot. */
+  /** Empty array = every registered effect. */
   enabledIds: string[];
   animations: boolean;
 }
@@ -152,8 +152,8 @@ export interface Settings {
   learningLangs: string[];
   /** User-owned translation style layer. */
   preference: TranslationPreference;
-  /** Claim mascot selection. */
-  mascot: MascotSettings;
+  /** Claim effects. The property name is legacy; the storage key never changes. */
+  mascot: EffectSettings;
 }
 
 /** Per-paragraph translation state machine (spec §8.4). */

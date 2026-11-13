@@ -1,4 +1,4 @@
-import type { MascotSettings, Settings } from "../../shared/types";
+import type { EffectSettings, Settings } from "../../shared/types";
 import { LEARNING_LANGS, normalizeLearningLangs } from "../../shared/storage";
 import { getMascots } from "../../content/mascots";
 import "../../content/mascots/gopher";
@@ -53,7 +53,7 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
   for (const [value, label] of [
     ["rotate", "随机轮换"],
     ["fixed", "固定为"],
-  ] as Array<[MascotSettings["mode"], string]>) {
+  ] as Array<[EffectSettings["mode"], string]>) {
     const option = el("option");
     option.value = value;
     option.textContent = label;
@@ -127,7 +127,7 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
     void (async () => {
       const current = ctx.getSettings();
       const chosen = LEARNING_LANGS.filter((lang) => boxes.get(lang)?.checked);
-      const mode: MascotSettings["mode"] = mascotMode.value === "fixed" ? "fixed" : "rotate";
+      const mode: EffectSettings["mode"] = mascotMode.value === "fixed" ? "fixed" : "rotate";
       saved.textContent = "保存中…";
       saved.hidden = false;
       try {

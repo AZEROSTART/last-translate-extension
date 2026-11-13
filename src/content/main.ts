@@ -39,8 +39,8 @@ import { DEFAULT_SETTINGS, getSettings } from "../shared/storage";
 import type {
   BackgroundToClient,
   ClientToBackground,
+  EffectSettings,
   GlossaryNote,
-  MascotSettings,
   OpenChatMessage,
   RecentTranslationsResponse,
 } from "../shared/types";
@@ -97,7 +97,7 @@ let targetLang = DEFAULT_TARGET_LANG;
 let minParagraphLength = DEFAULT_SETTINGS.minParagraphLength;
 let contentOnly = DEFAULT_SETTINGS.contentOnly;
 let learningLangs: string[] = [...DEFAULT_SETTINGS.learningLangs];
-let mascotSettings: MascotSettings = DEFAULT_SETTINGS.mascot;
+let mascotSettings: EffectSettings = DEFAULT_SETTINGS.mascot;
 let registry = new ParagraphRegistry();
 const gloss = createGlossController(document, {
   getMascotSettings: () => mascotSettings,
@@ -1124,7 +1124,7 @@ interface CollectPrefs {
   minParagraphLength: number;
   contentOnly: boolean;
   learningLangs: string[];
-  mascot: MascotSettings;
+  mascot: EffectSettings;
 }
 
 async function readCollectPrefs(): Promise<CollectPrefs> {

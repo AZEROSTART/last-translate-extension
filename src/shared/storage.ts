@@ -1,6 +1,6 @@
 import type {
   DomainPreset,
-  MascotSettings,
+  EffectSettings,
   ProviderConfig,
   Settings,
   TranslationPreference,
@@ -71,7 +71,7 @@ export function normalizePreference(
   return { domain: "custom", instructions: normalizeInstructions(rest) };
 }
 
-export function normalizeMascot(value: unknown): MascotSettings {
+export function normalizeEffectSettings(value: unknown): EffectSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { mode: "rotate", enabledIds: [], animations: true };
   }
@@ -177,7 +177,7 @@ export async function getSettings(): Promise<Settings> {
     (stored as { preference?: unknown } | undefined)?.preference,
     (stored as { systemPrompt?: unknown } | undefined)?.systemPrompt,
   );
-  merged.mascot = normalizeMascot((stored as { mascot?: unknown } | undefined)?.mascot);
+  merged.mascot = normalizeEffectSettings((stored as { mascot?: unknown } | undefined)?.mascot);
   if (typeof merged.reviewAnswerLang !== "string") merged.reviewAnswerLang = "";
 
   return merged;
