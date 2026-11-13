@@ -17,8 +17,9 @@ import type {
   ReviewAnswerMessage,
   ReviewAnswerResponse,
 } from "../shared/types";
-import { getMascot, type MascotSkin } from "../content/mascots";
-import "../content/mascots/gopher";
+import { getEffect, getEffects } from "../content/effects";
+import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
+import "../content/effects/gopher-hole";
 
 const TERM_LANG_KEY = "ilmt:review-lang";
 const GLOSS_LANG_KEY = "ilmt:review-gloss-lang";
@@ -60,7 +61,8 @@ function writeSession(key: string, value: string): void {
 export interface ReviewDeps {
   getState(): Promise<LearningState>;
   answer(message: ReviewAnswerMessage): Promise<ReviewAnswerResponse>;
-  mascot(id?: string): MascotSkin | undefined;
+  /** Never undefined when at least one effect is registered. */
+  effect(id?: string): ClaimEffect;
   now(): number;
 }
 
@@ -94,8 +96,27 @@ async function defaultAnswer(message: ReviewAnswerMessage): Promise<ReviewAnswer
   }
 }
 
-function defaultMascot(id?: string): MascotSkin | undefined {
-  return getMascot(id ?? "") ?? getMascot("gopher");
+function defaultEffect(id?: string): ClaimEffect {
+  const all = getEffects();
+  return (id ? getEffect(id) : undefined) ?? all[0];
+}
+
+let effectStyles: HTMLStyleElement | null = null;
+
+/**
+ * Effects own their CSS (scoped to `[data-ilmt-effect]`); the panel document
+ * does not load the content stylesheet, so inject it once like the hover card.
+ */
+function ensureEffectStyles(): void {
+  if (effectStyles?.isConnected) return;
+  const css = getEffects()
+    .map((effect) => effect.css ?? "")
+    .join("\n");
+  if (!css.trim()) return;
+  effectStyles = document.createElement("style");
+  effectStyles.dataset.ilmtEffects = "";
+  effectStyles.textContent = css;
+  (document.head ?? document.documentElement).appendChild(effectStyles);
 }
 
 export interface ReviewView {
@@ -127,7 +148,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
     answer: over.answer ?? defaultAnswer,
-    mascot: over.mascot ?? defaultMascot,
+    effect: over.effect ?? defaultEffect,
     now: over.now ?? (() => Date.now()),
   };
 
@@ -154,6 +175,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   let destroyed = false;
   let chain: Promise<void> = Promise.resolve();
   let pendingReload = false;
+  /** The current card's decorative effect; rebuilt on every render. */
+  let mountedEffect: ClaimHandle | null = null;
 
   function current(): LearningWord | undefined {
     return state.queue[0];
@@ -308,6 +331,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   function renderCard(): void {
+    mountedEffect?.destroy();
+    mountedEffect = null;
     const card = document.createElement("div");
     card.className = "ilmt-review-card";
     const word = current();
@@ -326,16 +351,30 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     head.append(progress, end);
     card.appendChild(head);
 
-    const skin = deps.mascot(word.mascotId);
-    if (skin) {
-      const mascot = document.createElement("div");
-      mascot.className = "ilmt-review-mascot";
-      try {
-        mascot.appendChild(skin.render("idle", currentTheme()));
-      } catch {
-        // A broken skin is decoration only; never block a review.
-      }
-      card.appendChild(mascot);
+    const effect = deps.effect(word.mascotId);
+    const mascot = document.createElement("div");
+    mascot.className = "ilmt-review-mascot";
+    const host = document.createElement("div");
+    host.className = "ilmt-review-effect-host";
+    mascot.appendChild(host);
+    card.appendChild(mascot);
+    let handle: ClaimHandle | null = null;
+    try {
+      ensureEffectStyles();
+      handle = effect.mount({
+        doc: document,
+        surface: mascot,
+        root: host,
+        theme: currentTheme(),
+        animations: false,
+        claim: async () => ({ ok: true, created: false }),
+        announce: () => {},
+        label: (verb) => `把${effect.label}${verb}下去`,
+      });
+      mascot.setAttribute("aria-hidden", "true");
+      for (const button of mascot.querySelectorAll("button")) button.tabIndex = -1;
+    } catch {
+      // A broken effect is decoration only; never block a review.
     }
 
     const term = document.createElement("div");
@@ -387,6 +426,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
 
     container.appendChild(card);
+    mountedEffect = handle;
   }
 
   function renderGrades(card: HTMLElement): void {
@@ -504,6 +544,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
 
   function render(): void {
     if (destroyed) return;
+    // Also covers leaving the card for the finish view, where renderCard never runs.
+    mountedEffect?.destroy();
+    mountedEffect = null;
     container.replaceChildren(...renderFilters());
     if (!current()) {
       renderFinish();
@@ -652,6 +695,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     refresh,
     destroy() {
       destroyed = true;
+      mountedEffect?.destroy();
+      mountedEffect = null;
       container.remove();
     },
   };

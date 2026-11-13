@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReviewQueue, mountReview } from "../../src/panel/review";
+import type { ClaimEffect } from "../../src/content/effects/types";
 import type { LearningWord, LearningState } from "../../src/shared/types";
 
 const NOW = 1_700_000_000_000;
@@ -113,6 +114,95 @@ describe("mountReview", () => {
 
     expect(root.textContent).toContain("今天没有要复习的词");
     expect(root.textContent).toContain("本轮");
+  });
+});
+
+describe("review card effect", () => {
+  function fakeEffect(over: Partial<ClaimEffect> & { destroy?: () => void } = {}): ClaimEffect {
+    const { destroy, ...rest } = over;
+    return {
+      id: "fake",
+      label: "测试特效",
+      summary: "",
+      reserve: { above: 0, below: 0 },
+      mount: () => ({ setState: () => {}, destroy: destroy ?? (() => {}) }),
+      ...rest,
+    };
+  }
+
+  function mountWithEffect(words: LearningWord[], effect: ClaimEffect) {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState: async () => state(words),
+      answer: async () => ({ ok: true, word: words[0] }),
+      effect: () => effect,
+      now: () => NOW,
+    });
+    return { root, view };
+  }
+
+  it("mounts the word's effect as a decorative avatar only", async () => {
+    const { root, view } = mountWithEffect([word(1, { mascotId: "gopher-hole" })], fakeEffect({
+      mount: (ctx) => {
+        const button = document.createElement("button");
+        button.textContent = "hit";
+        ctx.root.appendChild(button);
+        return { setState: () => {}, destroy: () => {} };
+      },
+    }));
+    await view.refresh();
+
+    const mascot = root.querySelector<HTMLElement>(".ilmt-review-mascot")!;
+    expect(mascot.getAttribute("aria-hidden")).toBe("true");
+    expect(root.querySelector(".ilmt-review-effect-host")).toBeTruthy();
+    expect(mascot.querySelector("button")!.tabIndex).toBe(-1);
+    view.destroy();
+  });
+
+  it("falls back to the first registered effect for a legacy mascotId", async () => {
+    const legacy = word(1, { mascotId: "gopher" });
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    // The real gopher-hole effect is registered by importing review.ts.
+    const view = mountReview(root, {
+      getState: async () => state([legacy]),
+      answer: async () => ({ ok: true, word: legacy }),
+      now: () => NOW,
+    });
+    await view.refresh();
+
+    const mascot = root.querySelector<HTMLElement>(".ilmt-review-mascot")!;
+    expect(mascot.querySelector("svg")).toBeTruthy();
+    expect(mascot.getAttribute("aria-hidden")).toBe("true");
+    view.destroy();
+  });
+
+  it("destroys the avatar handle on re-render and on view destroy", async () => {
+    const destroy = vi.fn();
+    const { root, view } = mountWithEffect([word(1)], fakeEffect({ destroy }));
+    await view.refresh();
+
+    const beforeRerender = destroy.mock.calls.length;
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    expect(destroy.mock.calls.length).toBeGreaterThan(beforeRerender);
+
+    const beforeDestroy = destroy.mock.calls.length;
+    view.destroy();
+    expect(destroy.mock.calls.length).toBeGreaterThan(beforeDestroy);
+  });
+
+  it("keeps the review usable when an effect throws on mount", async () => {
+    const { root, view } = mountWithEffect([word(1, { surface: "outlive" })], fakeEffect({
+      mount: () => {
+        throw new Error("boom");
+      },
+    }));
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
+    expect(root.querySelector(".ilmt-review-grade")).toBeTruthy();
+    view.destroy();
   });
 });
 

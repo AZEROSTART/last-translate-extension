@@ -419,18 +419,26 @@ button:focus-visible {
 
 .ilmt-review-mascot {
   position: absolute;
-  top: 40px;
+  top: 44px;
   right: 12px;
+  width: 50px;
+  height: 44px;
   opacity: 0.85;
   pointer-events: none;
 }
 
+/* Keep a long headword from running under the effect. */
 .ilmt-review-term {
   display: flex;
   align-items: baseline;
   justify-content: center;
   gap: 8px;
-  padding-right: 40px;
+  padding-right: 64px;
+}
+
+.ilmt-review-effect-host {
+  position: relative;
+  display: block;
 }
 
 .ilmt-review-word {
