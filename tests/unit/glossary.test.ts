@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGlossController } from "../../src/content/glossary";
+import { createGlossController, type GlossControllerDeps } from "../../src/content/glossary";
+import { getEffect } from "../../src/content/effects";
 
 function stubHighlights(): Map<string, unknown> {
   const registry = new Map<string, unknown>();
@@ -208,7 +209,9 @@ function openCard(termLang?: string): HTMLElement {
   stubHighlights();
   document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
   const text = document.querySelector("p")!.firstChild!;
-  const controller = createGlossController(document);
+  const controller = createGlossController(document, {
+    resolveEffect: () => getEffect("gopher-hole")!,
+  });
   controller.start();
   controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], termLang);
   stubRangeRect();
@@ -241,6 +244,36 @@ describe("hover intent", () => {
   });
 });
 
+type SendLearn = NonNullable<GlossControllerDeps["sendLearn"]>;
+
+const EFFECT_BUTTON = '[role=tooltip] [data-ilmt-effect="gopher-hole"] button';
+
+/** Hover the annotated word with the gopher pinned, so the state is deterministic. */
+function openClaimCard(sendLearn: SendLearn): void {
+  stubFrame();
+  stubHighlights();
+  document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+  const text = document.querySelector("p")!.firstChild!;
+  const controller = createGlossController(document, {
+    sendLearn,
+    resolveEffect: () => getEffect("gopher-hole")!,
+  });
+  controller.start();
+  controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
+  stubRangeRect();
+  stubCaret(text, 20);
+  document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+  vi.advanceTimersByTime(150);
+}
+
+function clickEffect(): void {
+  document.querySelector<HTMLButtonElement>(EFFECT_BUTTON)!.click();
+}
+
+function effectState(): string | undefined {
+  return document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')?.dataset.ilmtState;
+}
+
 describe("claim effect", () => {
   it("sends learn-word once when the effect is clicked", async () => {
     const sendLearn = vi.fn().mockResolvedValue({
@@ -249,22 +282,9 @@ describe("claim effect", () => {
       dueAt: 123,
       nextDueLabel: "10 分钟后",
     });
-    stubFrame();
-    stubHighlights();
-    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
-    const text = document.querySelector("p")!.firstChild!;
-    const controller = createGlossController(document, { sendLearn });
-    controller.start();
-    controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
-    stubRangeRect();
-    stubCaret(text, 20);
-    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
-    vi.advanceTimersByTime(150);
+    openClaimCard(sendLearn);
 
-    const button = document.querySelector<HTMLButtonElement>(
-      '[role=tooltip] [data-ilmt-effect="gopher-hole"] button',
-    )!;
-    button.click();
+    clickEffect();
     await vi.advanceTimersByTimeAsync(620);
 
     expect(sendLearn).toHaveBeenCalledTimes(1);
@@ -275,9 +295,23 @@ describe("claim effect", () => {
       meaning: "比……存在得更久",
       mascotId: "gopher-hole",
     });
+    expect(effectState()).toBe("settled");
+  });
 
-    const host = document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!;
-    expect(host.dataset.ilmtState).toBe("settled");
+  it("announces the claim in the card's live region", async () => {
+    const sendLearn = vi.fn().mockResolvedValue({
+      ok: true,
+      created: true,
+      dueAt: 123,
+      nextDueLabel: "10 分钟后",
+    });
+    openClaimCard(sendLearn);
+
+    clickEffect();
+    await vi.advanceTimersByTimeAsync(620);
+
+    const live = document.querySelector('[role=tooltip] [aria-live="polite"]');
+    expect(live?.textContent).toBe("已收录");
   });
 
   it("renders the known state without resending", async () => {
@@ -287,25 +321,12 @@ describe("claim effect", () => {
       dueAt: 123,
       nextDueLabel: "10 分钟后",
     });
-    stubFrame();
-    stubHighlights();
-    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    openClaimCard(sendLearn);
     const text = document.querySelector("p")!.firstChild!;
-    const controller = createGlossController(document, { sendLearn });
-    controller.start();
-    controller.setParagraph("p_1", [text], [{ surface: "outlive", meaning: "比……存在得更久" }], "en");
-    stubRangeRect();
-    stubCaret(text, 20);
-    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
-    vi.advanceTimersByTime(150);
 
-    document
-      .querySelector<HTMLButtonElement>('[role=tooltip] [data-ilmt-effect="gopher-hole"] button')!
-      .click();
+    clickEffect();
     await vi.advanceTimersByTimeAsync(620);
-    expect(
-      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
-    ).toBe("known");
+    expect(effectState()).toBe("known");
 
     stubCaret(text, 0);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
@@ -317,19 +338,33 @@ describe("claim effect", () => {
     vi.advanceTimersByTime(150);
 
     // Reopening shows the quiet end state instead of replaying the animation.
-    expect(
-      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
-    ).toBe("known");
+    expect(effectState()).toBe("known");
 
-    document
-      .querySelector<HTMLButtonElement>('[role=tooltip] [data-ilmt-effect="gopher-hole"] button')!
-      .click();
+    clickEffect();
     await vi.advanceTimersByTimeAsync(620);
 
     expect(sendLearn).toHaveBeenCalledTimes(1);
-    expect(
-      document.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]')!.dataset.ilmtState,
-    ).toBe("known");
+    expect(effectState()).toBe("known");
+  });
+
+  it("leaves the effect retryable when the write fails", async () => {
+    const sendLearn = vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({
+      ok: true,
+      created: true,
+      dueAt: 123,
+      nextDueLabel: "10 分钟后",
+    });
+    openClaimCard(sendLearn);
+
+    clickEffect();
+    await vi.advanceTimersByTimeAsync(620);
+    expect(effectState()).toBe("idle");
+
+    clickEffect();
+    await vi.advanceTimersByTimeAsync(620);
+
+    expect(sendLearn).toHaveBeenCalledTimes(2);
+    expect(effectState()).toBe("settled");
   });
 
   it("reserves room below the word for the effect", () => {

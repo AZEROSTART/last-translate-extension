@@ -1,7 +1,7 @@
 /**
  * End-to-end coverage for the learning loop: hover a glossary word, click the
- * mascot to claim it, then review it in the side panel and confirm the schedule
- * advanced and the due badge cleared.
+ * claim effect to claim it, then review it in the side panel and confirm the
+ * schedule advanced and the due badge cleared.
  *
  * Helpers mirror `translate.spec.ts`; each test owns its profile, fixture
  * server and page so a failed assertion cannot leak a browser.
@@ -92,7 +92,7 @@ async function seedSettings(worker: Worker, baseURL: string): Promise<void> {
         theme: "system",
         glossaryEnabled: true,
         learningLangs: ["en", "es"],
-        mascot: { mode: "rotate", enabledIds: ["gopher"], animations: true },
+        mascot: { mode: "rotate", enabledIds: ["gopher-hole"], animations: true },
         reviewAnswerLang: "",
       },
     });
@@ -248,10 +248,11 @@ test.describe("learning loop", () => {
       await expect(card).toContainText("outlive");
       await expect(card).toContainText("比……存在得更久");
 
-      // The mascot button is the only interactive element on the card.
+      // The effect button is the only interactive element on the card.
       const claimedAt = Date.now();
       await card.locator("button[aria-label]").click();
-      await expect(card).toContainText("已抓住");
+      const effect = card.locator('[data-ilmt-effect="gopher-hole"]');
+      await expect(effect).toHaveAttribute("data-ilmt-state", "settled");
 
       const words = await readWords(extension.worker);
       expect(words).toHaveLength(1);
@@ -260,7 +261,7 @@ test.describe("learning loop", () => {
       expect(word.surface).toBe("outlive");
       expect(word.termLang).toBe("en");
       expect(word.box).toBe(0);
-      expect(word.mascotId).toBe("gopher");
+      expect(word.mascotId).toBe("gopher-hole");
       expect(word.dueAt).toBeGreaterThanOrEqual(claimedAt + TEN_MINUTES - 5000);
       expect(word.dueAt).toBeLessThanOrEqual(Date.now() + TEN_MINUTES + 5000);
       expect(word.glosses.map((gloss) => gloss.lang).sort()).toEqual(["es", "zh-CN"]);
