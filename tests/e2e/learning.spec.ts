@@ -1,183 +1,46 @@
 /**
  * End-to-end coverage for the learning loop: hover a glossary word, click the
  * claim effect to claim it, then review it in the side panel and confirm the
- * schedule advanced and the due badge cleared.
+ * schedule advanced and the due badge cleared. A second case reopens the card
+ * on an already-claimed word and expects the quiet "known" end state.
  *
- * Helpers mirror `translate.spec.ts`; each test owns its profile, fixture
- * server and page so a failed assertion cannot leak a browser.
+ * The launch/profile/server plumbing lives in `harness.ts`; each test owns its
+ * profile, fixture server and page so a failed assertion cannot leak a browser.
  */
 
-import {
-  test,
-  expect,
-  chromium,
-  type BrowserContext,
-  type CDPSession,
-  type Page,
-  type Worker,
-} from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { test, expect, type Page } from "@playwright/test";
+import { rm } from "node:fs/promises";
 import { startMockServer, type MockServer } from "../mock-server";
+import {
+  activate,
+  activeTabId,
+  ARTICLE,
+  evaluateInContent,
+  findContentMainContext,
+  launchExtension,
+  readWords,
+  seedSettings,
+  TEN_MINUTES,
+  type Extension,
+} from "./harness";
 
-const EXTENSION_PATH = resolve("dist");
-const ARTICLE = "article.html";
-const TEN_MINUTES = 10 * 60 * 1000;
-
-interface Extension {
-  context: BrowserContext;
-  worker: Worker;
-  userDataDir: string;
-}
-
-async function launchExtension(): Promise<Extension> {
-  const userDataDir = await mkdtemp(join(tmpdir(), "ilmt-e2e-"));
-  const channel = process.env.ILMT_E2E_CHANNEL;
-  const headless = process.env.ILMT_E2E_HEADLESS === "1";
-
-  let context: BrowserContext;
-  try {
-    context = await chromium.launchPersistentContext(userDataDir, {
-      headless,
-      ...(channel ? { channel } : headless ? { channel: "chromium" } : {}),
-      args: [
-        `--disable-extensions-except=${EXTENSION_PATH}`,
-        `--load-extension=${EXTENSION_PATH}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-      ],
-    });
-  } catch (error) {
-    await rm(userDataDir, { recursive: true, force: true });
-    throw error;
-  }
-
-  try {
-    let worker = context.serviceWorkers()[0];
-    if (!worker) worker = await context.waitForEvent("serviceworker", { timeout: 30_000 });
-    return { context, worker, userDataDir };
-  } catch (error) {
-    await context.close();
-    await rm(userDataDir, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-async function seedSettings(worker: Worker, baseURL: string): Promise<void> {
-  await worker.evaluate(async (origin) => {
-    await chrome.storage.local.set({
-      settings: {
-        providers: [
-          {
-            id: "e2e",
-            name: "E2E",
-            kind: "custom",
-            baseURL: origin,
-            apiKey: "test",
-            model: "mock-model",
-            createdAt: 1,
-          },
-        ],
-        activeProviderId: "e2e",
-        targetLang: "zh-CN",
-        concurrency: 3,
-        maxRPS: 5,
-        temperature: 0,
-        systemPrompt:
-          "Translate each numbered segment into {{targetLang}}. Reply only with [n] text, one line per segment.",
-        promptVersion: "",
-        triggerMode: "shortcut",
-        siteRules: {},
-        theme: "system",
-        glossaryEnabled: true,
-        learningLangs: ["en", "es"],
-        mascot: { mode: "rotate", enabledIds: ["gopher-hole"], animations: true },
-        reviewAnswerLang: "",
-      },
-    });
-    await chrome.storage.local.remove("learning");
-  }, baseURL);
-}
-
-async function activeTabId(worker: Worker, pageUrl: string): Promise<number> {
-  const tabId = await worker.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((candidate) => candidate.url === url);
-    return tab?.id;
-  }, pageUrl);
-
-  if (tabId === undefined) throw new Error(`no extension tab found for ${pageUrl}`);
-  return tabId;
-}
-
-async function activate(worker: Worker, tabId: number): Promise<void> {
-  await worker.evaluate((id) => chrome.tabs.sendMessage(id, { type: "activate" }), tabId);
-}
-
-/** Find the content script's isolated world via CDP, like `translate.spec.ts`. */
-async function findContentMainContext(page: Page): Promise<{ session: CDPSession; contextId: number }> {
-  const session = await page.context().newCDPSession(page);
-  const contextIds = new Set<number>();
-
-  session.on("Runtime.executionContextCreated", (event) => {
-    contextIds.add(event.context.id);
-  });
-  await session.send("Runtime.enable");
-
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    for (const contextId of contextIds) {
-      try {
-        const { result } = await session.send("Runtime.evaluate", {
-          expression: "typeof globalThis.__ilmtMain",
-          contextId,
-          returnByValue: true,
-        });
-        if (result.value === "object") return { session, contextId };
-      } catch {
-        // The context was destroyed between enumeration and evaluation.
-      }
+/** Viewport centre of `word` inside the first article paragraph. */
+async function wordRect(page: Page, word: string): Promise<{ x: number; y: number } | null> {
+  return page.evaluate((needle) => {
+    const paragraph = document.querySelector("#article-p1")!;
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node as Text;
+      const index = text.data.indexOf(needle);
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(text, index);
+      range.setEnd(text, index + needle.length);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  throw new Error("content main did not expose __ilmtMain in any execution context");
-}
-
-async function evaluateInContent<T>(
-  context: { session: CDPSession; contextId: number },
-  expression: string,
-): Promise<T> {
-  const { result, exceptionDetails } = await context.session.send("Runtime.evaluate", {
-    expression,
-    contextId: context.contextId,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (exceptionDetails) {
-    throw new Error(exceptionDetails.text ?? "content-script evaluation failed");
-  }
-  return result.value as T;
-}
-
-interface StoredWord {
-  id: string;
-  termLang: string;
-  surface: string;
-  box: number;
-  dueAt: number | null;
-  mascotId?: string;
-  glosses: Array<{ lang: string; meaning: string }>;
-}
-
-async function readWords(worker: Worker): Promise<StoredWord[]> {
-  return worker.evaluate(async () => {
-    const stored = (await chrome.storage.local.get("learning")).learning as
-      | { words?: StoredWord[] }
-      | undefined;
-    return stored?.words ?? [];
-  });
+    return null;
+  }, word);
 }
 
 test.describe("learning loop", () => {
@@ -197,56 +60,51 @@ test.describe("learning loop", () => {
     await currentServer?.close().catch(() => {});
   }
 
+  /** Fixture server + extension + translated article, hovering `outlive`. */
+  async function openClaimCard(): Promise<{ page: Page; rect: { x: number; y: number } }> {
+    server = await startMockServer({
+      glossary: (index) =>
+        index === 1
+          ? [
+              {
+                surface: "outlive",
+                pos: "v.",
+                meaning: "比……存在得更久",
+                example: "Small tools often outlive their larger competitors.",
+                glosses: { es: "sobrevivir a" },
+              },
+            ]
+          : undefined,
+    });
+    extension = await launchExtension();
+    await seedSettings(extension.worker, server.origin);
+
+    const page = await extension.context.newPage();
+    await page.goto(`${server.origin}/${ARTICLE}`);
+    await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+    const content = await findContentMainContext(page);
+    await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+    await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+    await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
+    await expect(page.locator(".ilmt-active-banner")).toContainText("1 个词可悬停");
+
+    const rect = await wordRect(page, "outlive");
+    expect(rect).not.toBeNull();
+    if (!rect) throw new Error("outlive is not on the page");
+
+    await page.mouse.move(rect.x, rect.y);
+    const card = page.locator("[role=tooltip]");
+    await expect(card).toContainText("outlive");
+    await expect(card).toContainText("比……存在得更久");
+
+    return { page, rect };
+  }
+
   test("captures a hovered word and reviews it from the side panel", async () => {
     try {
-      server = await startMockServer({
-        glossary: (index) =>
-          index === 1
-            ? [
-                {
-                  surface: "outlive",
-                  pos: "v.",
-                  meaning: "比……存在得更久",
-                  example: "Small tools often outlive their larger competitors.",
-                  glosses: { es: "sobrevivir a" },
-                },
-              ]
-            : undefined,
-      });
-      extension = await launchExtension();
-      await seedSettings(extension.worker, server.origin);
-      const extensionId = new URL(extension.worker.url()).host;
-
-      const page = await extension.context.newPage();
-      await page.goto(`${server.origin}/${ARTICLE}`);
-      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
-      const content = await findContentMainContext(page);
-      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
-      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
-      await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
-      await expect(page.locator(".ilmt-active-banner")).toContainText("1 个词可悬停");
-
-      const rect = await page.evaluate(() => {
-        const paragraph = document.querySelector("#article-p1")!;
-        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const text = node as Text;
-          const index = text.data.indexOf("outlive");
-          if (index < 0) continue;
-          const range = document.createRange();
-          range.setStart(text, index);
-          range.setEnd(text, index + "outlive".length);
-          const box = range.getBoundingClientRect();
-          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-        }
-        return null;
-      });
-      expect(rect).not.toBeNull();
-
-      await page.mouse.move(rect!.x, rect!.y);
+      const { page } = await openClaimCard();
+      const extensionId = new URL(extension!.worker.url()).host;
       const card = page.locator("[role=tooltip]");
-      await expect(card).toContainText("outlive");
-      await expect(card).toContainText("比……存在得更久");
 
       // The effect button is the only interactive element on the card.
       const claimedAt = Date.now();
@@ -254,7 +112,7 @@ test.describe("learning loop", () => {
       const effect = card.locator('[data-ilmt-effect="gopher-hole"]');
       await expect(effect).toHaveAttribute("data-ilmt-state", "settled");
 
-      const words = await readWords(extension.worker);
+      const words = await readWords(extension!.worker);
       expect(words).toHaveLength(1);
       const word = words[0];
       expect(word.id).toBe("en:outlive");
@@ -267,10 +125,10 @@ test.describe("learning loop", () => {
       expect(word.glosses.map((gloss) => gloss.lang).sort()).toEqual(["es", "zh-CN"]);
 
       // Nothing is due yet, so the badge stays hidden.
-      expect(await extension.worker.evaluate(async () => chrome.action.getBadgeText({}))).toBe("");
+      expect(await extension!.worker.evaluate(async () => chrome.action.getBadgeText({}))).toBe("");
 
       // Pretend ten minutes passed: the review queue only holds due cards.
-      await extension.worker.evaluate(async () => {
+      await extension!.worker.evaluate(async () => {
         const stored = (await chrome.storage.local.get("learning")).learning as {
           words: Array<{ dueAt: number | null }>;
         };
@@ -278,7 +136,7 @@ test.describe("learning loop", () => {
         await chrome.storage.local.set({ learning: stored });
       });
 
-      const panel = await extension.context.newPage();
+      const panel = await extension!.context.newPage();
       await panel.goto(`chrome-extension://${extensionId}/panel.html`);
       await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
       await panel.locator('.panel-tab[data-view="review"]').click();
@@ -309,6 +167,35 @@ test.describe("learning loop", () => {
           timeout: 10_000,
         })
         .toBe("");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("marks a word already captured and never writes it twice", async () => {
+    try {
+      const { page, rect } = await openClaimCard();
+      const card = page.locator("[role=tooltip]");
+
+      await card.locator("button[aria-label]").click();
+      await expect(card.locator('[data-ilmt-effect="gopher-hole"]')).toHaveAttribute(
+        "data-ilmt-state",
+        "settled",
+      );
+      expect(await readWords(extension!.worker)).toHaveLength(1);
+
+      // Move away and wait for the card to retire, then hover the same word:
+      // the reopened card must show the quiet "known" state instead of "+1".
+      await page.mouse.move(0, 0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+      await page.mouse.move(rect.x, rect.y);
+
+      const again = page.locator("[role=tooltip]");
+      await expect(again.locator('[data-ilmt-effect="gopher-hole"]')).toHaveAttribute(
+        "data-ilmt-state",
+        "known",
+      );
+      expect(await readWords(extension!.worker)).toHaveLength(1);
     } finally {
       await cleanup();
     }
