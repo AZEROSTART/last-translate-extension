@@ -17,12 +17,31 @@ export const GLOSSARY_MARKER = "<<<ILMT_GLOSSARY>>>";
  */
 export const GLOSSARY_INSTRUCTIONS = `注意：启用学习注释时，最终输出由两部分组成：先输出全部 [编号] 译文，再输出下面的注释块。上面的“只输出译文”只约束译文部分；注释块是必须输出的第二部分，不要省略。
 从每段原文中挑出 0～3 个最值得学习的词或短语（每段尽量给 1～2 个），给出它在当前句子里的 {{targetLang}} 释义。确实没有合适内容才留空。
-在全部译文之后另起一行输出 ${GLOSSARY_MARKER}，下一行只输出一个 JSON 对象，键是译文里的段号（字符串），值是该段的注释数组：
-{"1":[{"surface":"原文中的词或短语","pos":"词性，可省略","meaning":"当前语境下的释义","example":"原文中的短例句，可省略"}]}
-规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
+在全部译文之后另起一行输出 ${GLOSSARY_MARKER}，下一行只输出一个 JSON 对象，键是译文里的段号（字符串），值是该段的注释数组：`;
+
+const GLOSSARY_RULES = `规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
+
+/**
+ * The schema is the only place the model learns where extra-language meanings
+ * go. Omitting the `glosses` key here makes the model place them next to
+ * `meaning` (a natural reading), and the parser then drops them silently.
+ */
+function glossarySchema(glossLangs: string[]): string {
+  const fields = [
+    '"surface":"原文中的词或短语"',
+    '"pos":"词性，可省略"',
+    '"meaning":"当前语境下的释义"',
+    '"example":"原文中的短例句，可省略"',
+  ];
+  if (glossLangs.length > 0) {
+    const glosses = glossLangs.map((lang) => `"${lang}":"…"`).join(",");
+    fields.push(`"glosses":{${glosses}}`);
+  }
+  return `{"1":[{${fields.join(",")}}]}`;
+}
 
 /** Developer-owned format contract version; bump when the contract changes. */
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 export interface FormatOptions {
   targetLang: string;
@@ -37,7 +56,13 @@ const FORMAT_RULES = `你是一个翻译引擎。把用户给出的编号段落�
 2. 保留原文的专有名词、代码、URL、数字、单位与变量名。
 3. 不使用 Markdown 代码块，不输出前言、后语或说明性空行。`;
 
-const MAX_GLOSS_LENGTH = 12;
+/**
+ * Guard against runaway values, not the product limit. A 12-char cap dropped
+ * legitimate English glosses ("to last longer than"), so the guard is 32 while
+ * the prompt still asks for short meanings.
+ */
+const MAX_GLOSS_LENGTH = 32;
+const GLOSS_LENGTH_HINT = 20;
 
 /**
  * The fixed half of the system prompt. Parsers only trust this layer, so no
@@ -46,13 +71,19 @@ const MAX_GLOSS_LENGTH = 12;
 export function buildFormatPrompt(options: FormatOptions): string {
   const parts = [FORMAT_RULES];
   if (options.glossaryEnabled) {
-    parts.push(GLOSSARY_INSTRUCTIONS);
     const langs = options.glossLangs.filter((lang) => typeof lang === "string" && lang.trim());
-    if (langs.length > 0) {
-      parts.push(
-        `额外释义语言：${langs.join(", ")}。每个注释在这几种语言下各给一条不超过 ${MAX_GLOSS_LENGTH} 字的释义；缺失则省略该语言。`,
-      );
-    }
+    parts.push(
+      [
+        GLOSSARY_INSTRUCTIONS,
+        glossarySchema(langs),
+        GLOSSARY_RULES,
+        langs.length > 0
+          ? `额外释义语言：${langs.join(", ")}。每条释义不超过 ${GLOSS_LENGTH_HINT} 个字。meaning 只写目标语言；其它语言写进该注释的 glosses 对象，键就是上面的语言代码；缺失则省略该语言。`
+          : "",
+      ]
+        .filter((part) => part !== "")
+        .join("\n"),
+    );
   }
   return parts.join("\n\n");
 }

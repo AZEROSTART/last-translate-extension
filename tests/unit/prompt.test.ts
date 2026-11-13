@@ -288,6 +288,18 @@ describe("buildFormatPrompt", () => {
     expect(p).toContain("es");
     expect(p).toContain("ja");
   });
+
+  it("names the glosses key in the JSON schema so the model can place them", () => {
+    const p = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: true, glossLangs: ["es", "ja"] });
+    expect(p).toContain('"glosses":{"es":"');
+    expect(p).toContain(',"ja":"');
+    expect(p).toMatch(/meaning[^\n]*目标语言|目标语言[^\n]*meaning/);
+  });
+
+  it("omits the glosses key when no extra language is chosen", () => {
+    const p = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: true, glossLangs: [] });
+    expect(p).not.toContain('"glosses"');
+  });
 });
 
 describe("parseAnnotatedResponse glosses", () => {
@@ -309,9 +321,19 @@ describe("parseAnnotatedResponse glosses", () => {
 
   it("drops overlong or empty gloss values one by one", () => {
     const items = [{ id: "p_1", text: "Small tools often outlive their rivals." }];
-    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":{"es":"sobrevivir","ja":"   ","fr":"这是一个明显超过十二个字符限制的释义文本"}}]}`;
+    const overlong = "这是一个明显超过解析器长度上限的释义文本，用来验证超长值会被丢弃而不是整条注释被丢掉";
+    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":{"es":"sobrevivir","ja":"   ","fr":"${overlong}"}}]}`;
     expect(parseAnnotatedResponse(raw, items, ["es", "ja", "fr"]).glossary.get("p_1")?.[0].glosses).toEqual({
       es: "sobrevivir",
+    });
+  });
+
+  it("keeps a longer English gloss that the old 12-char cap dropped", () => {
+    const items = [{ id: "p_1", text: "Small tools often outlive their rivals." }];
+    const raw = `[1] 小工具往往比对手活得久\n${GLOSSARY_MARKER}\n{"1":[{"surface":"outlive","meaning":"比…活得久","glosses":{"en":"to last longer than","ja":"より長く存続する"}}]}`;
+    expect(parseAnnotatedResponse(raw, items, ["en", "ja"]).glossary.get("p_1")?.[0].glosses).toEqual({
+      en: "to last longer than",
+      ja: "より長く存続する",
     });
   });
 });

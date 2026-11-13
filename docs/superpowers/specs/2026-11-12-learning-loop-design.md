@@ -80,7 +80,7 @@
 四条护栏（必须同时满足，否则退回「翻译完成后单独批量请求」）：
 
 1. **只挂在注释上**：额外释义挂在 `GlossaryNote.glosses`；没有注释就没有该字段；`glossaryEnabled=false` 时整块不出现。
-2. **封顶**：额外语言最多 3 种（总学习语言最多 4 种），每条释义 ≤ 12 字/词，超长丢弃。
+2. **封顶**：额外语言最多 3 种（总学习语言最多 4 种），每条释义在 prompt 里要求 ≤ 20 字，解析器按 ≤ 32 字符兜底超长值（英文释义天然比中文长，12 字符会误杀 `to last longer than`）。
 3. **失败只丢释义**：`glosses` 解析失败、语言代码不在白名单、值不是字符串 → 丢掉该字段，**译文与注释照常**（沿用现有 glossary 降级契约）。
 4. **不动缓存 key**：语言列表**不参与** `promptVersion`（见 §4.4）。加了语言不应让整页重译，代价是老页面暂无新语言释义。
 
@@ -123,7 +123,7 @@ system prompt = 格式层（扩展拥有，不可编辑）
 
 ```ts
 /** 开发者维护；改格式契约必须 +1，缓存随之失效。 */
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 export interface FormatOptions {
   targetLang: string;
@@ -146,8 +146,13 @@ export function buildFormatPrompt(o: FormatOptions): string;
 
 [仅 glossaryEnabled 时追加]
 注释协议：全部译文之后另起一行输出 <<<ILMT_GLOSSARY>>>，下一行只输出一个 JSON 对象……
-额外释义语言：es, ja。每个注释在这几种语言下各给一条 ≤12 字的释义；缺失则省略该语言。
+{"1":[{"surface":"原文中的词或短语","pos":"词性，可省略","meaning":"当前语境下的释义",
+       "example":"原文中的短例句，可省略","glosses":{"es":"…","ja":"…"}}]}
+规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。
+额外释义语言：es, ja。每条释义不超过 20 个字。meaning 只写目标语言；其它语言写进该注释的 glosses 对象，键就是上面的语言代码；缺失则省略该语言。
 ```
+
+> 2026-11-13 修订（`FORMAT_VERSION` 2 → 3）：schema 里必须写出 `glosses` 键。旧 schema 只写 `surface/pos/meaning/example`，模型会把额外语言平铺成 `"es"`/`"ja"` 同级键，解析器只认 `glosses` 于是静默丢弃——实测 DeepSeek 正是这样返回的。`glossLangs` 为空时 schema 不出现 `glosses`，也不追加最后一句。
 
 - 格式层是**唯一**决定解析契约的地方，解析器（`parseGlossaryNotes`、`parseTranslations`）只认这一层。
 - 语言清单写在这一层，但**不进入版本哈希**（§4.4 说明取舍）。

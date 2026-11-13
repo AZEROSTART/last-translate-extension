@@ -251,3 +251,24 @@ P0 交付验证：通过 / 未通过
 - 四选一锁定：通过（切「答案语言」不会重排已作答的题目，也不会回落到三档自评；单测覆盖）
 - E2E：通过（9/9）
 - 备注：上面这轮真实 Chrome P0 跑在功能提交后的构建上；最后的修复只改了侧栏 `review.ts` 与文档，`content_main.js` 未变。收尾时宿主占着前台，`osascript activate` 无法把 Chrome 切到前台，因此没有第二次按 `Opt+A` 复跑；同一份 `dist/` 已由 Playwright 9/9（含激活、翻译、恢复、popup、复习）覆盖。
+
+## 10. 本次验证记录（2026-11-13，额外释义语言修复）
+
+**问题**：勾选日语等额外学习语言后，模型返回里没有可解析的 `glosses`，复习卡永远只有目标语言释义。
+
+**根因**：`GLOSSARY_INSTRUCTIONS` 的 JSON schema 只写了 `surface/pos/meaning/example`，没有 `glosses` 键。真实模型（DeepSeek，`deepseek-chat`，temperature 0.2）按字面理解，把 `en` / `ja` 平铺成与 `meaning` 同级的键，`parseNoteGlosses` 只认 `glosses`，于是静默丢弃。
+
+- 真实请求修复前：`{"surface":"outlive","meaning":"…","en":"to last longer than","ja":"より長く存続する"}` → 解析后 `glosses: null`
+- 修复后同一 prompt 结构：`{"surface":"outlive","meaning":"…","glosses":{"en":"live longer than","ja":"より長く生きる"}}` → 解析后 `glosses` 完整保留，5 条注释全部带 `en` + `ja`
+- 第二轮换段落复测（`temperature 0.7`）：4/4 条注释同样返回 `glosses.en` + `glosses.ja`
+
+**改动**：
+- schema 写出 `glosses` 键与语言代码；追加「`meaning` 只写目标语言，其它语言放进 `glosses`」的规则
+- `FORMAT_VERSION` 2 → 3（格式契约变更，旧缓存自动失效一次）
+- 额外释义长度上限：prompt 要求 ≤ 20 字，解析器兜底 32 字符（原 12 字符会误杀 `to last longer than` 这类英文释义）
+
+**验证**：
+- 自动门禁：通过（596/596 单测、`tsc`、build、`check-build`）
+- E2E：通过（9/9，真实 Chromium + 新构建 `dist/`）
+- 真实模型：通过（修复后 5 条注释全部返回 `glosses.en` 与 `glosses.ja`，解析器全部保留）
+- 手动 Chrome P0（`Opt+A`）：未执行——宿主桌面焦点被 Paseo / WeChat 反复抢占，`osascript activate` 无法稳定把 Chrome 切到前台，`Opt+A` 落不到文章页；同一份 `dist/` 的翻译、恢复、hover 注释、popup 由 Playwright 覆盖。已装扩展需在 `chrome://extensions` 重新加载后才能用上新 prompt。
