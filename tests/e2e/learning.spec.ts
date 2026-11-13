@@ -284,11 +284,18 @@ test.describe("learning loop", () => {
 
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-sentence")).toContainText("____");
-      await panel.locator(".ilmt-review-reveal").click();
+      await panel.locator('[data-grade="good"]').click();
+
+      // The card stays put and opens the answer; nothing is written yet.
+      await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-meaning")).toContainText("比……存在得更久");
       await expect(panel.locator(".ilmt-review-meaning-more")).toContainText("sobrevivir a");
+      await expect(panel.locator(".ilmt-review-next")).toBeVisible();
+      await expect
+        .poll(async () => (await readWords(extension!.worker))[0]?.box)
+        .toBe(0);
 
-      await panel.locator('[data-grade="good"]').click();
+      await panel.locator(".ilmt-review-next").click();
 
       await expect
         .poll(async () => (await readWords(extension!.worker))[0]?.box, { timeout: 10_000 })

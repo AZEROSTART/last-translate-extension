@@ -535,6 +535,11 @@ button:focus-visible {
   color: var(--ilmt-danger);
 }
 
+.ilmt-review-grade.is-active {
+  background: rgba(45, 212, 191, 0.16);
+  border-color: var(--ilmt-accent);
+}
+
 .ilmt-review-grade:disabled {
   opacity: 0.5;
   cursor: default;
@@ -618,7 +623,8 @@ button:focus-visible {
   text-align: center;
 }
 
-.ilmt-review-next {
+.ilmt-review-next,
+.ilmt-review-continue {
   appearance: none;
   min-height: 44px;
   border: 1px solid var(--ilmt-accent);
