@@ -60,6 +60,20 @@ describe("settings storage", () => {
     expect((await getSettings()).glossaryEnabled).toBe(true);
   });
 
+  it("defaults autoClaimOnExplain to true for a fresh store", async () => {
+    expect((await getSettings()).autoClaimOnExplain).toBe(true);
+  });
+
+  it("preserves an explicit autoClaimOnExplain false", async () => {
+    await chrome.storage.local.set({ settings: { autoClaimOnExplain: false } });
+    expect((await getSettings()).autoClaimOnExplain).toBe(false);
+  });
+
+  it("turns autoClaimOnExplain on when the stored value is missing or malformed", async () => {
+    await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, autoClaimOnExplain: "no" } });
+    expect((await getSettings()).autoClaimOnExplain).toBe(true);
+  });
+
   it("round-trips providers and keeps the active one", async () => {
     await saveSettings(DEFAULT_SETTINGS);
     await upsertProvider({ id: "a", name: "网关", kind: "custom", baseURL: "https://x.test", apiKey: "k", model: "m", createdAt: 1 });

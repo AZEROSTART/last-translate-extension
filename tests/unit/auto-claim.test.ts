@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTO_CLAIM_MAX_CHARS,
+  AUTO_CLAIM_MAX_WORDS,
   AUTO_CLAIM_MEANING_MAX,
   autoClaimRequest,
+  cleanTerm,
   firstSentence,
   isClaimableTerm,
 } from "../../src/shared/auto-claim";
@@ -20,6 +23,14 @@ describe("isClaimableTerm", () => {
     expect(isClaimableTerm("")).toBe(false);
     expect(isClaimableTerm("x".repeat(25))).toBe(false);
   });
+
+  it("enforces the character and word boundaries", () => {
+    expect(isClaimableTerm("x".repeat(AUTO_CLAIM_MAX_CHARS))).toBe(true);
+    expect(isClaimableTerm("x".repeat(AUTO_CLAIM_MAX_CHARS + 1))).toBe(false);
+    const words = Array.from({ length: AUTO_CLAIM_MAX_WORDS }, () => "a").join(" ");
+    expect(isClaimableTerm(words)).toBe(true);
+    expect(isClaimableTerm(`${words} a`)).toBe(false);
+  });
 });
 
 describe("firstSentence", () => {
@@ -28,8 +39,23 @@ describe("firstSentence", () => {
     expect(firstSentence("first line\nsecond line")).toBe("first line");
   });
 
+  it("treats ！ ？ and ! as sentence ends too", () => {
+    expect(firstSentence("太好了！例：")).toBe("太好了");
+    expect(firstSentence("真的吗？例：")).toBe("真的吗");
+    expect(firstSentence("Great!Example:")).toBe("Great");
+  });
+
   it("caps the meaning length", () => {
     expect(firstSentence("a".repeat(200))).toHaveLength(AUTO_CLAIM_MEANING_MAX);
+  });
+});
+
+describe("cleanTerm", () => {
+  it("strips edge punctuation but keeps inner marks", () => {
+    expect(cleanTerm("outlive.")).toBe("outlive");
+    expect(cleanTerm("  (take off)  ")).toBe("take off");
+    expect(cleanTerm("don't")).toBe("don't");
+    expect(cleanTerm("...")).toBe("");
   });
 });
 
@@ -62,5 +88,11 @@ describe("autoClaimRequest", () => {
 
   it("falls back to the quote when there is no paragraph", () => {
     expect(autoClaimRequest({ ...base, paragraph: undefined })?.sentence).toBe("outlive");
+  });
+
+  it("stores the cleaned term and uses it as the sentence fallback", () => {
+    const message = autoClaimRequest({ ...base, quote: "outlive.", paragraph: undefined });
+    expect(message?.surface).toBe("outlive");
+    expect(message?.sentence).toBe("outlive");
   });
 });

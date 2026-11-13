@@ -967,3 +967,108 @@ it("activates the quantum teal theme", async () => {
   await boot();
   expect(document.documentElement.dataset.theme).toBe("quantum");
 });
+
+const explainQuote = {
+  text: "outlive",
+  mode: "explain",
+  tabId: 1,
+  ts: 1,
+  termLang: "en",
+  context: { paragraph: "Small tools often outlive their larger competitors.", preceding: [] },
+};
+
+function learnWordCalls(chrome: { runtime: { sendMessage: unknown } }): any[] {
+  return (chrome.runtime.sendMessage as any).mock.calls
+    .map((call: unknown[]) => call[0] as { type?: string })
+    .filter((message: { type?: string }) => message?.type === "learn-word");
+}
+
+it("claims a short selected term after an explain answer finishes", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  await boot();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  expect(chat).toBeTruthy();
+  messageListeners[0]({
+    type: "delta",
+    requestId: chat.requestId,
+    text: "比……存在得更久。例：Small tools outlive their larger competitors.",
+  });
+  messageListeners[0]({ type: "finish", requestId: chat.requestId });
+  await flush();
+
+  const claims = learnWordCalls(chrome);
+  expect(claims).toHaveLength(1);
+  expect(claims[0]).toMatchObject({
+    type: "learn-word",
+    surface: "outlive",
+    termLang: "en",
+    glossLang: "zh-CN",
+    meaning: "比……存在得更久",
+  });
+});
+
+it("does not claim when the user types a follow-up around a quote", async () => {
+  const { chrome, sent, messageListeners } = installChrome({
+    pendingQuote: { ...explainQuote, mode: "follow-up" },
+  });
+  await boot();
+  await flush();
+
+  // The quote chip carries a quotable, claimable term, but this is a typed
+  // follow-up, not the explain auto-send path.
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(false);
+  (document.querySelector("textarea") as HTMLTextAreaElement).value = "在这个句子里怎么用？";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  expect(chat).toBeTruthy();
+  messageListeners[0]({
+    type: "delta",
+    requestId: chat.requestId,
+    text: "比……存在得更久。例：Small tools outlive their larger competitors.",
+  });
+  messageListeners[0]({ type: "finish", requestId: chat.requestId });
+  await flush();
+
+  expect(learnWordCalls(chrome)).toHaveLength(0);
+});
+
+it("claims again when an explain request is retried", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  await boot();
+  await flush();
+
+  const first = sent.find((m) => (m as { type?: string }).type === "chat") as { requestId: string };
+  messageListeners[0]({
+    type: "error",
+    requestId: first.requestId,
+    code: "network",
+    message: "Network down",
+    retryable: true,
+  });
+  await flush();
+  expect(learnWordCalls(chrome)).toHaveLength(0);
+
+  (document.querySelector(".error-block button") as HTMLButtonElement).click();
+  await flush();
+
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    requestId: string;
+  }>;
+  expect(chats).toHaveLength(2);
+  const retried = chats[1];
+  messageListeners[0]({
+    type: "delta",
+    requestId: retried.requestId,
+    text: "比……存在得更久。例：Small tools outlive their larger competitors.",
+  });
+  messageListeners[0]({ type: "finish", requestId: retried.requestId });
+  await flush();
+
+  const claims = learnWordCalls(chrome);
+  expect(claims).toHaveLength(1);
+  expect(claims[0]).toMatchObject({ type: "learn-word", surface: "outlive", meaning: "比……存在得更久" });
+});

@@ -34,9 +34,17 @@ export interface AutoClaimInput {
   glossLang: string;
 }
 
+/** Selection edges often carry sentence punctuation; keep inner marks (don't, well-known). */
+export function cleanTerm(text: string): string {
+  return text
+    .trim()
+    .replace(/^[\s"'“”‘’().,;:!?，。；：！？、]+/u, "")
+    .replace(/[\s"'“”‘’().,;:!?，。；：！？、]+$/u, "");
+}
+
 /** Build the learn-word message for an "explain" answer, or null to skip it. */
 export function autoClaimRequest(input: AutoClaimInput): LearnWordMessage | null {
-  const quote = input.quote?.trim() ?? "";
+  const quote = cleanTerm(input.quote ?? "");
   if (!quote || !isClaimableTerm(quote)) return null;
 
   const meaning = firstSentence(input.answer ?? "");
