@@ -105,6 +105,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   document.body.innerHTML = "";
   document.querySelectorAll("style[data-ilmt-popup]").forEach((el) => el.remove());
+  document.querySelectorAll("style[data-ilmt-effects]").forEach((el) => el.remove());
   delete (globalThis as unknown as { __ilmtPopup?: unknown }).__ilmtPopup;
   delete document.documentElement.dataset.theme;
 });
@@ -684,15 +685,85 @@ describe("translation style and learning settings", () => {
     });
   });
 
-  it("renders the learning section with mascot rotation", async () => {
+  it("renders the learning section with effect selection", async () => {
     await seed();
     await boot();
 
+    expect(document.querySelectorAll(".global-effect-enabled")).toHaveLength(1);
+    expect(document.querySelector<HTMLInputElement>(".global-effect-enabled")!.checked).toBe(true);
+
     const mode = document.querySelector<HTMLSelectElement>(".global-mascot-mode")!;
-    const labels = Array.from(mode.options).map((option) => option.textContent);
-    expect(labels).toContain("随机轮换");
-    expect(labels).toContain("固定为");
+    expect(Array.from(mode.options).map((option) => option.textContent)).toEqual([
+      "随机轮换",
+      "固定为",
+    ]);
     expect(document.querySelector(".global-mascot-fixed")).toBeTruthy();
+  });
+
+  it("mounts an effect preview without writing to the learning store", async () => {
+    await seed();
+    await boot();
+    const button = document.querySelector<HTMLButtonElement>(".effect-try")!;
+    button.click();
+    const preview = document.querySelector<HTMLElement>(".effect-preview")!;
+    expect(preview.hidden).toBe(false);
+    expect(preview.querySelector('[data-ilmt-effect="gopher-hole"]')).toBeTruthy();
+    const stored = await chrome.storage.local.get("learning");
+    expect(stored.learning).toBeUndefined();
+  });
+
+  it("saves the checked effects and the fixed choice", async () => {
+    await seed();
+    await boot();
+    document.querySelector<HTMLSelectElement>(".global-mascot-mode")!.value = "fixed";
+    document.querySelector<HTMLSelectElement>(".global-mascot-mode")!.dispatchEvent(new Event("change"));
+    document.querySelector<HTMLButtonElement>(".learning-save")!.click();
+    await vi.waitFor(async () => {
+      const stored = await getSettings();
+      expect(stored.mascot.mode).toBe("fixed");
+      expect(stored.mascot.fixedId).toBe("gopher-hole");
+      expect(stored.mascot.enabledIds).toEqual(["gopher-hole"]);
+    });
+  });
+
+  it("keeps at most one effect preview mounted and closes it on changes", async () => {
+    await seed();
+    await boot();
+    const button = document.querySelector<HTMLButtonElement>(".effect-try")!;
+    const slot = document.querySelector<HTMLElement>(".effect-preview")!;
+
+    button.click();
+    expect(slot.hidden).toBe(false);
+    expect(slot.querySelectorAll('[data-ilmt-effect]')).toHaveLength(1);
+    expect(document.querySelectorAll("style[data-ilmt-effects]")).toHaveLength(1);
+
+    button.click();
+    expect(slot.hidden).toBe(true);
+    expect(slot.querySelectorAll('[data-ilmt-effect]')).toHaveLength(0);
+    expect(document.querySelectorAll("style[data-ilmt-effects]")).toHaveLength(0);
+
+    button.click();
+    expect(slot.hidden).toBe(false);
+    const mode = document.querySelector<HTMLSelectElement>(".global-mascot-mode")!;
+    mode.value = "fixed";
+    mode.dispatchEvent(new Event("change"));
+    expect(slot.hidden).toBe(true);
+    expect(slot.querySelectorAll('[data-ilmt-effect]')).toHaveLength(0);
+  });
+
+  it("refuses to save when no effect is checked", async () => {
+    await seed();
+    await boot();
+    const box = document.querySelector<HTMLInputElement>(".global-effect-enabled")!;
+    box.checked = false;
+    box.dispatchEvent(new Event("change"));
+    document.querySelector<HTMLButtonElement>(".learning-save")!.click();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".learning-saved")?.textContent).toBe("至少启用一个特效");
+    });
+    const stored = await chrome.storage.local.get("settings");
+    expect((stored.settings as Settings).mascot).toEqual(DEFAULT_SETTINGS.mascot);
   });
 
   it("removes the free-form global system prompt", async () => {

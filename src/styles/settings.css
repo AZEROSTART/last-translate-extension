@@ -520,3 +520,63 @@
   color: var(--ilmt-muted);
   font-family: var(--ilmt-mono);
 }
+
+/* --- claim effects --- */
+
+/* The brief's rules use --border / --text-dim; map them onto the popup theme
+   so the preview frame stays visible on the dark panel. */
+.effect-settings {
+  --border: var(--ilmt-border-soft);
+  --text-dim: var(--ilmt-muted);
+}
+
+.effect-settings .effect-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.effect-settings .effect-toggle {
+  flex: 0 0 auto;
+}
+
+.effect-settings .effect-summary {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--text-dim, #6e7781);
+  font-size: 12px;
+}
+
+.effect-settings .effect-preview {
+  flex: 1 1 100%;
+  padding: 8px 10px 8px;
+  border: 1px dashed var(--border, rgba(0, 0, 0, 0.16));
+  border-radius: 8px;
+}
+
+.effect-settings .effect-preview-line {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.effect-settings .effect-preview-word {
+  font-weight: 600;
+}
+
+.effect-settings .effect-preview-host {
+  position: absolute;
+  left: -8px;
+  top: 100%;
+  margin-top: -4px;
+  z-index: 1;
+}
+
+.effect-settings .ghost-button {
+  background: transparent;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.16));
+}
