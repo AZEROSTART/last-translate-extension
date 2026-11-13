@@ -248,3 +248,16 @@ P0 交付验证：通过 / 未通过
 - 自动门禁：通过（596/596 单测、`tsc`、build、`check-build`）
 - `opencli browser delivery --window background open …` + `eval`：通过（页面可读，不抬窗口）
 - 真实按键派发属于 Chrome 内部行为，不再作为交付门槛；需要人工确认时由用户自己按一次 `⌥A`
+
+## 12. 本次验证记录（2026-11-13，收录特效）
+
+**改动**：悬停卡片的页脚角色换成可插拔的「收录特效」，第一个特效是 `gopher-hole`（洞口地鼠，视觉基线 `docs/previews/gopher-options.html` 的 B）；设置页可勾选/固定/「试一试」；复习卡头像复用同一 `mount()`；划词「解释」回答结束后自动收录短词（≤24 字符且 ≤4 词），默认开启。
+
+**验证**：
+- 自动门禁：通过（637/637 单测，41 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（12/12）——快捷键绑定 `⌥A / ⌥Q / ⌥S`、翻译与恢复 10/10、popup provider/model、学习闭环（悬停收录 → 复习）、已收录词再次悬停为 `known` 且不重复写库、设置页 Effect 预览不写库
+- 真实 Chrome 划词「解释」：通过（`opencli browser delivery --window background` 打开 `article.html`，CDP 选中首段 30 字符并派发 `mouseup`，气泡出现「解释 / 追问」，点击「解释」无错误横幅；本轮未改动该链路）
+- 控制台：通过（`opencli browser delivery console --since 2m` 无 error）
+- 地鼠卡片的真机肉眼确认：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`（opencli 拒绝 `chrome://` scheme，无法代点），再按一次 `⌥A`（按 2026-11-13 约定，agent 不注入真实快捷键）。同一份 `dist/` 的卡片、收录、已收录状态由 Playwright E2E 覆盖。
+
+**已知限制**：特效 CSS 以 `<style>` 注入页面文档（spec §3.4），页面若启用严格 `style-src` 会让造型/动画失效（写库仍成功）；备选方案是从后台 `chrome.scripting.insertCSS`。
