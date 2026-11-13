@@ -269,6 +269,7 @@ describe("reveal after grading", () => {
       expect(answer).toHaveBeenCalledTimes(1);
     });
     expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 2");
+    expect(root.querySelector('[data-grade="good"]')!.getAttribute("aria-pressed")).toBe("true");
     expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
   });
 
@@ -316,5 +317,46 @@ describe("reveal after grading", () => {
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     });
+  });
+});
+
+describe("review invariant guards", () => {
+  it("expands the answer without offering 下一张 before a grade is picked", async () => {
+    const { root, view } = mount([word(1)]);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")!.click();
+
+    expect(root.querySelector(".ilmt-review-meaning")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-next")).toBeNull();
+    expect(root.querySelector(".ilmt-review-grade")).toBeTruthy();
+  });
+
+  it("keeps a graded spot card locked when the answer language changes", async () => {
+    const words = [
+      word(1, {
+        surface: "outlive",
+        checksSinceSpot: 2,
+        dueAt: NOW - 5 * HOUR,
+        glosses: [{ lang: "zh", meaning: "比…活得久", source: "translation", at: NOW }],
+      }),
+      word(2, { glosses: [{ lang: "zh", meaning: "实际的", source: "translation", at: NOW }] }),
+      word(3, { glosses: [{ lang: "zh", meaning: "当前的", source: "translation", at: NOW }] }),
+      word(4, { glosses: [{ lang: "zh", meaning: "生存", source: "translation", at: NOW }] }),
+      word(5, { glosses: [{ lang: "ja", meaning: "生き残る", source: "translation", at: NOW }] }),
+    ];
+    const { root, view } = mount(words);
+    await view.refresh();
+
+    [...root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")]
+      .find((option) => option.textContent === "比…活得久")!
+      .click();
+    expect(root.querySelector(".ilmt-review-grade")).toBeNull();
+
+    const select = root.querySelector<HTMLSelectElement>(".ilmt-review-gloss-lang")!;
+    select.value = "ja";
+    select.dispatchEvent(new Event("change"));
+
+    expect(root.querySelector(".ilmt-review-grade")).toBeNull();
   });
 });

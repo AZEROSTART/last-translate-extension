@@ -240,7 +240,7 @@ P0 交付验证：通过 / 未通过
 
 ## 9. 本次验证记录（2026-11-13，复习卡揭晓）
 
-- 自动门禁：通过（591/591 单测，`tsc`、build、`check-build`）
+- 自动门禁：通过（593/593 单测，`tsc`、build、`check-build`）
 - Opt+A 翻译：通过（10/10，banner「翻译已开启 · 10 个词可悬停」）
 - 双语在原文下方：通过（count 10，`bad: []`，无 `data-loading="1"` 残留）
 - 再按 Opt+A 恢复：通过（0 译文，banner `null`，原文 10 段）
@@ -248,4 +248,6 @@ P0 交付验证：通过 / 未通过
 - 侧栏解释：通过（真实 Chrome 划词弹出「解释 / 追问」，点击「解释」后无错误横幅）
 - 控制台：通过（`opencli browser delivery console` 无 error）
 - 复习揭晓：通过（Playwright `learning.spec.ts`：点评级后答案出现、`box` 仍为 0；点「下一张」后 `box` 变 1 且出现结束页）
+- 四选一锁定：通过（切「答案语言」不会重排已作答的题目，也不会回落到三档自评；单测覆盖）
 - E2E：通过（9/9）
+- 备注：上面这轮真实 Chrome P0 跑在功能提交后的构建上；最后的修复只改了侧栏 `review.ts` 与文档，`content_main.js` 未变。收尾时宿主占着前台，`osascript activate` 无法把 Chrome 切到前台，因此没有第二次按 `Opt+A` 复跑；同一份 `dist/` 已由 Playwright 9/9（含激活、翻译、恢复、popup、复习）覆盖。

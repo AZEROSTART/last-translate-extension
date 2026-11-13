@@ -117,8 +117,10 @@ interface ReviewState {
   pending: LearningGrade | null;
   /** True after "结束": a late storage reload must not resurrect the queue. */
   ended: boolean;
-  /** Chosen option after a wrong spot check; the card waits for "下一张". */
+  /** Chosen option on the current spot card; the derived grade is locked. */
   spotResult: { chosen: number; correct: boolean } | null;
+  /** The exact question that was answered, frozen so a re-render cannot reshuffle it. */
+  spotQuestion: SpotQuestion | null;
 }
 
 export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
@@ -146,6 +148,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     pending: null,
     ended: false,
     spotResult: null,
+    spotQuestion: null,
   };
 
   let destroyed = false;
@@ -360,21 +363,26 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     card.appendChild(sentence);
 
     // The seed is stable per word, so rebuilding an answered spot card yields
-    // the same options instead of reshuffling them.
-    const question = shouldSpotCheck(word)
-      ? buildSpotQuestion(
-          word,
-          state.all?.words ?? [],
-          state.glossLang || word.glossLang,
-          spotSeed(word),
-        )
-      : null;
+    // the same options instead of reshuffling them. Once answered, the exact
+    // question is frozen: changing the answer language must not re-derive it.
+    const question =
+      state.spotQuestion ??
+      (shouldSpotCheck(word)
+        ? buildSpotQuestion(
+            word,
+            state.all?.words ?? [],
+            state.glossLang || word.glossLang,
+            spotSeed(word),
+          )
+        : null);
 
     if (question) {
       renderSpot(word, card, question);
     } else {
       renderAnswer(word, card);
-      renderGrades(card);
+      // A card that was answered as a spot check stays locked even if the
+      // question can no longer be rebuilt.
+      if (state.spotResult === null) renderGrades(card);
       if (state.pending !== null) renderNext(card);
     }
 
@@ -540,7 +548,10 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // Words answered earlier in this round are no longer due, so the fresh
     // queue is exactly the remaining work; keep the round's score separate.
     state.queue = fresh;
-    if (fresh[0]?.id !== previousId) state.spotResult = null;
+    if (fresh[0]?.id !== previousId) {
+      state.spotResult = null;
+      state.spotQuestion = null;
+    }
     state.total = state.answered + fresh.length;
     if (fresh.length > 0) state.revealed = false;
     render();
@@ -598,6 +609,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.revealed = false;
     state.pending = null;
     state.spotResult = null;
+    state.spotQuestion = null;
     render();
     flushPending();
   }
@@ -613,6 +625,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.revealed = false;
     state.pending = null;
     state.spotResult = null;
+    state.spotQuestion = null;
     state.busy = false;
     render();
   }
@@ -622,6 +635,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (!current() || state.busy || state.spotResult || destroyed) return;
     const correct = choice === question.answer;
     state.spotResult = { chosen: choice, correct };
+    state.spotQuestion = question;
     state.pending = correct ? "good" : "again";
     render();
   }
