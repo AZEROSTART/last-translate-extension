@@ -70,6 +70,16 @@ async function boot(): Promise<ProvidersMock> {
   return providers;
 }
 
+/**
+ * Ids from the registry the popup just booted. `vi.resetModules()` re-instantiates
+ * `src/content/effects` per test, so the lookup has to be dynamic — a top-level
+ * import would resolve the discarded pre-reset instance and always be empty.
+ */
+async function effectIds(): Promise<string[]> {
+  const { getEffects } = await import("../../src/content/effects");
+  return getEffects().map((effect) => effect.id);
+}
+
 function click(selector: string, root: ParentNode = document): void {
   const el = root.querySelector(selector) as HTMLElement | null;
   if (!el) throw new Error(`missing ${selector}`);
@@ -688,8 +698,9 @@ describe("translation style and learning settings", () => {
   it("renders the learning section with effect selection", async () => {
     await seed();
     await boot();
+    const ids = await effectIds();
 
-    expect(document.querySelectorAll(".global-effect-enabled")).toHaveLength(1);
+    expect(document.querySelectorAll(".global-effect-enabled")).toHaveLength(ids.length);
     expect(document.querySelector<HTMLInputElement>(".global-effect-enabled")!.checked).toBe(true);
 
     const mode = document.querySelector<HTMLSelectElement>(".global-mascot-mode")!;
@@ -700,6 +711,25 @@ describe("translation style and learning settings", () => {
     expect(document.querySelector(".global-mascot-fixed")).toBeTruthy();
   });
 
+  it("treats legacy stored effect ids as every effect enabled", async () => {
+    await seed({
+      mascot: { mode: "rotate", enabledIds: ["gopher"], animations: true },
+    });
+    await boot();
+
+    const box = document.querySelector<HTMLInputElement>(
+      '.global-effect-enabled[data-effect="gopher-hole"]',
+    )!;
+    expect(box.checked).toBe(true);
+    expect(document.querySelectorAll(".global-mascot-fixed option")).toHaveLength(1);
+
+    document.querySelector<HTMLButtonElement>(".learning-save")!.click();
+    await vi.waitFor(async () => {
+      const s = await getSettings();
+      expect(s.mascot.enabledIds).toEqual(["gopher-hole"]);
+    });
+  });
+
   it("mounts an effect preview without writing to the learning store", async () => {
     await seed();
     await boot();
@@ -707,7 +737,19 @@ describe("translation style and learning settings", () => {
     button.click();
     const preview = document.querySelector<HTMLElement>(".effect-preview")!;
     expect(preview.hidden).toBe(false);
-    expect(preview.querySelector('[data-ilmt-effect="gopher-hole"]')).toBeTruthy();
+    const effectRoot = preview.querySelector<HTMLElement>('[data-ilmt-effect="gopher-hole"]');
+    expect(effectRoot).toBeTruthy();
+
+    const hit = effectRoot!.querySelector("button");
+    expect(hit).toBeTruthy();
+    hit!.click();
+
+    await vi.waitFor(
+      () => {
+        expect(effectRoot!.dataset.ilmtState).toBe("settled");
+      },
+      { timeout: 3000 },
+    );
     const stored = await chrome.storage.local.get("learning");
     expect(stored.learning).toBeUndefined();
   });
@@ -715,6 +757,7 @@ describe("translation style and learning settings", () => {
   it("saves the checked effects and the fixed choice", async () => {
     await seed();
     await boot();
+    const ids = await effectIds();
     document.querySelector<HTMLSelectElement>(".global-mascot-mode")!.value = "fixed";
     document.querySelector<HTMLSelectElement>(".global-mascot-mode")!.dispatchEvent(new Event("change"));
     document.querySelector<HTMLButtonElement>(".learning-save")!.click();
@@ -722,7 +765,7 @@ describe("translation style and learning settings", () => {
       const stored = await getSettings();
       expect(stored.mascot.mode).toBe("fixed");
       expect(stored.mascot.fixedId).toBe("gopher-hole");
-      expect(stored.mascot.enabledIds).toEqual(["gopher-hole"]);
+      expect(stored.mascot.enabledIds).toEqual(ids);
     });
   });
 
@@ -747,6 +790,15 @@ describe("translation style and learning settings", () => {
     const mode = document.querySelector<HTMLSelectElement>(".global-mascot-mode")!;
     mode.value = "fixed";
     mode.dispatchEvent(new Event("change"));
+    expect(slot.hidden).toBe(true);
+    expect(slot.querySelectorAll('[data-ilmt-effect]')).toHaveLength(0);
+
+    // 动效开关也会改变预览的播放方式，同样要收起
+    button.click();
+    expect(slot.hidden).toBe(false);
+    const animations = document.querySelector<HTMLInputElement>(".global-mascot-animations")!;
+    animations.checked = false;
+    animations.dispatchEvent(new Event("change"));
     expect(slot.hidden).toBe(true);
     expect(slot.querySelectorAll('[data-ilmt-effect]')).toHaveLength(0);
   });

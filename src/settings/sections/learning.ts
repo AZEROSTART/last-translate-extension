@@ -94,10 +94,19 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
 
   const enabledBoxes = new Map<string, HTMLInputElement>();
   const registered = getEffects();
-  const enabledAtBoot =
-    settings.mascot.enabledIds.length > 0
-      ? new Set(settings.mascot.enabledIds)
-      : new Set(registered.map((effect) => effect.id));
+  const registeredIds = new Set(registered.map((effect) => effect.id));
+
+  /**
+   * Stored ids may predate the current registry (legacy mascots). Unknown ids
+   * are ignored; when none survive, fall back to every effect — same rule as
+   * `pickEffect`, so a legacy store never renders an all-unchecked page.
+   */
+  function chosenIds(ids: string[]): Set<string> {
+    const known = ids.filter((id) => registeredIds.has(id));
+    return new Set(known.length > 0 ? known : registered.map((effect) => effect.id));
+  }
+
+  const enabledAtBoot = chosenIds(settings.mascot.enabledIds);
 
   // 先建动效开关，特效行的「试一试」要读它的当前值
   const animateRow = el("label", "checkbox-row");
@@ -207,6 +216,9 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
     });
   }
 
+  // 动效开关会改变预览的播放方式，关掉已经开着的预览免得状态错位
+  mascotAnimations.addEventListener("change", closePreview);
+
   element.appendChild(effectField);
 
   const answerField = el("label", "field");
@@ -297,11 +309,9 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
         if (box) box.checked = next.learningLangs.includes(lang);
       }
       mascotMode.value = next.mascot.mode;
+      const activeIds = chosenIds(next.mascot.enabledIds);
       for (const [id, box] of enabledBoxes) {
-        box.checked =
-          next.mascot.enabledIds.length === 0
-            ? true
-            : next.mascot.enabledIds.includes(id);
+        box.checked = activeIds.has(id);
       }
       closePreview();
       rebuildFixedOptions();
@@ -309,7 +319,6 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
       if (fixedId && Array.from(mascotFixed.options).some((option) => option.value === fixedId)) {
         mascotFixed.value = fixedId;
       }
-      saveButton.disabled = false;
       fixedField.hidden = next.mascot.mode !== "fixed";
       mascotAnimations.checked = next.mascot.animations !== false;
       reviewAnswerLang.value = next.reviewAnswerLang ?? "";
