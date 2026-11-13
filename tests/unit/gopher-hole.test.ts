@@ -86,4 +86,43 @@ describe("gopher-hole effect", () => {
       "把地鼠打下去，收录这个单词",
     );
   });
+
+  it("does not claim again when the settled head is clicked", async () => {
+    const ctx = context();
+    gopherHoleEffect.mount(ctx);
+    const button = ctx.root.querySelector("button")!;
+
+    button.click();
+    await vi.advanceTimersByTimeAsync(620);
+    expect(ctx.root.dataset.ilmtState).toBe("settled");
+
+    button.click();
+    expect(ctx.claim).toHaveBeenCalledTimes(1);
+    expect(ctx.root.dataset.ilmtState).toBe("settled");
+  });
+
+  it("gives every mount its own mask id", () => {
+    const first = context();
+    const second = context();
+    gopherHoleEffect.mount(first);
+    gopherHoleEffect.mount(second);
+
+    const firstId = first.root.querySelector('[id^="ilmt-gopher-rim-"]')!.id;
+    const secondId = second.root.querySelector('[id^="ilmt-gopher-rim-"]')!.id;
+    expect(firstId).not.toBe("");
+    expect(secondId).not.toBe("");
+    expect(firstId).not.toBe(secondId);
+  });
+
+  it("draws the body in front of the far rim and behind the near rim", () => {
+    const ctx = context();
+    gopherHoleEffect.mount(ctx);
+
+    const body = ctx.root.querySelector('[class*="fx-body"]')!;
+    const nearRim = ctx.root.querySelector('path[d="M11 36 a 17 7.5 0 0 0 34 0"]')!;
+    expect(body).not.toBeNull();
+    expect(nearRim).not.toBeNull();
+    // DOCUMENT_POSITION_FOLLOWING: the near rim comes after the body.
+    expect(body.compareDocumentPosition(nearRim) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

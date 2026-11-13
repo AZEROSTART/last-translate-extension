@@ -37,7 +37,7 @@ function paw(doc: Document, cx: number, cy: number): SVGElement {
     cy: String(cy),
     rx: "3.4",
     ry: "2.4",
-    fill: "var(--ilmt-belly)",
+    fill: "var(--ilmt-fur-light)",
     stroke: "#8a5f3b",
     "stroke-width": "1.1",
   });
@@ -244,18 +244,20 @@ function gopherSvg(doc: Document): SVGElement {
 
 const CSS = `
 [data-ilmt-effect="${EFFECT_ID}"] {
-  --ilmt-fur: #a97a52;
-  --ilmt-belly: #e8cdb0;
-  --ilmt-hole: #080b0f;
+  --ilmt-fur: #d3a274;
+  --ilmt-fur-light: #ecd0ad;
+  --ilmt-belly: #fbe7cd;
+  --ilmt-hole: #33261a;
   display: block;
   width: 50px;
   height: 44px;
 }
 
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-theme="dark"] {
-  --ilmt-fur: #b98a63;
-  --ilmt-belly: #d9bb9c;
-  --ilmt-hole: #05080c;
+  --ilmt-fur: #c3966c;
+  --ilmt-fur-light: #e0bd97;
+  --ilmt-belly: #edd4b4;
+  --ilmt-hole: #080b0f;
 }
 
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-hit {
@@ -315,7 +317,7 @@ const CSS = `
 
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-sparks {
   position: absolute;
-  left: 62%;
+  left: 50%;
   top: 62%;
   width: 0;
   height: 0;
@@ -345,12 +347,12 @@ const CSS = `
 
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-dust {
   position: absolute;
-  left: 62%;
-  top: 62%;
-  width: 5px;
-  height: 5px;
+  left: 50%;
+  top: 28px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #b9a998;
+  background: #b9a184;
   opacity: 0;
   pointer-events: none;
 }
@@ -364,13 +366,13 @@ const CSS = `
 }
 
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="hit"] .ilmt-gloss-fx-dust-b {
-  animation-delay: 270ms;
+  animation-delay: 90ms;
 }
 
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-plus {
   position: absolute;
   left: 100%;
-  top: 30px;
+  top: 28px;
   transform: translate(6px, -50%);
   color: #0f766e;
   font-size: 11.5px;
@@ -466,6 +468,7 @@ export const gopherHoleEffect: ClaimEffect = {
 
     let phase: LocalPhase = "idle";
     let busy = false;
+    let destroyed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const paint = (): void => {
@@ -474,6 +477,7 @@ export const gopherHoleEffect: ClaimEffect = {
     paint();
 
     const finalize = (result: { ok: boolean; created: boolean }): void => {
+      if (destroyed) return;
       busy = false;
       if (!result.ok) {
         phase = "idle";
@@ -497,6 +501,7 @@ export const gopherHoleEffect: ClaimEffect = {
         .claim()
         .catch(() => ({ ok: false, created: false }))
         .then((result) => {
+          if (destroyed) return;
           if (!animations) {
             finalize(result);
             return;
@@ -512,6 +517,7 @@ export const gopherHoleEffect: ClaimEffect = {
         paint();
       },
       destroy(): void {
+        destroyed = true;
         if (timer !== undefined) clearTimeout(timer);
         button.remove();
       },
