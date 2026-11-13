@@ -13,6 +13,7 @@
  */
 
 import { appendMessage, buildChatContext, createSession } from "./session";
+import { autoClaimRequest } from "../shared/auto-claim";
 import { mountReview, type ReviewView } from "./review";
 import { getSettings, saveSettings } from "../shared/storage";
 import { getLearning } from "../shared/learning-storage";
@@ -53,6 +54,7 @@ interface PendingQuote {
   /** Tab that requested the panel; used when the initial active-tab query races. */
   tabId?: number;
   context?: SelectionContext;
+  termLang?: string;
 }
 
 interface ActiveTab {
@@ -93,7 +95,13 @@ let currentRequestId: string | null = null;
 let streaming = false;
 let activeTab: ActiveTab | null = null;
 let pendingQuote: PendingQuote | null = null;
-let lastRequest: { text: string; quote?: string; selectionContext?: SelectionContext } | null = null;
+let lastRequest: {
+  text: string;
+  quote?: string;
+  selectionContext?: SelectionContext;
+  termLang?: string;
+  explain?: boolean;
+} | null = null;
 let panelSettings: Settings | null = null;
 let requestIdCounter = 0;
 let thinkingEnabled = false;
@@ -505,18 +513,27 @@ function parseSelectionContext(value: unknown): SelectionContext | undefined {
 
 function parsePendingQuote(value: unknown): PendingQuote | null {
   if (!value || typeof value !== "object") return null;
-  const quote = value as { text?: unknown; mode?: unknown; tabId?: unknown; context?: unknown };
+  const quote = value as {
+    text?: unknown;
+    mode?: unknown;
+    tabId?: unknown;
+    context?: unknown;
+    termLang?: unknown;
+  };
   if (typeof quote.text !== "string" || quote.text.trim() === "") return null;
   const tabId =
     typeof quote.tabId === "number" && Number.isInteger(quote.tabId) && quote.tabId > 0
       ? quote.tabId
       : undefined;
   const context = parseSelectionContext(quote.context);
+  const termLang =
+    typeof quote.termLang === "string" && quote.termLang.trim() ? quote.termLang : undefined;
   return {
     text: quote.text,
     mode: quote.mode === "follow-up" ? "follow-up" : "explain",
     ...(tabId !== undefined ? { tabId } : {}),
     ...(context ? { context } : {}),
+    ...(termLang ? { termLang } : {}),
   };
 }
 
@@ -559,6 +576,8 @@ function applyPendingQuote(quote: PendingQuote | null): void {
       text: EXPLAIN_QUESTION,
       quote: quote.text,
       selectionContext: quote.context,
+      termLang: quote.termLang,
+      explain: true,
       appendUser: true,
     });
     return;
@@ -569,6 +588,7 @@ function applyPendingQuote(quote: PendingQuote | null): void {
     mode: quote.mode,
     ...(quote.tabId !== undefined ? { tabId: quote.tabId } : {}),
     ...(quote.context ? { context: quote.context } : {}),
+    ...(quote.termLang ? { termLang: quote.termLang } : {}),
   };
   showQuoteChip();
   input.value = quote.text;
@@ -696,29 +716,34 @@ function handleSend(): void {
   const text = input.value.trim();
   const quote = pendingQuote?.text;
   const selectionContext = pendingQuote?.context;
+  // A typed follow-up must never auto-claim, even when it carries a quote.
+  const termLang = pendingQuote?.termLang;
   if (!text || streaming) return;
   clearQuoteChip();
   input.value = "";
-  void sendRequest({ text, quote, selectionContext, appendUser: true });
+  void sendRequest({ text, quote, selectionContext, termLang, appendUser: true });
 }
 
 interface SendRequestOptions {
   text: string;
   quote?: string;
   selectionContext?: SelectionContext;
+  termLang?: string;
+  /** Only the explain auto-send path sets this; it gates auto-claim. */
+  explain?: boolean;
   /** Retry keeps the existing user turn; a fresh send appends one. */
   appendUser: boolean;
 }
 
 async function sendRequest(options: SendRequestOptions): Promise<void> {
-  const { text, quote, selectionContext, appendUser } = options;
+  const { text, quote, selectionContext, termLang, explain, appendUser } = options;
   if (!session || streaming) return;
 
   const now = Date.now();
   // Set the guard before the first await so a double click cannot start a
   // second request while the recent-paragraph fetch is pending.
   streaming = true;
-  lastRequest = { text, quote, selectionContext };
+  lastRequest = { text, quote, selectionContext, termLang, explain };
   setInputEnabled(false);
 
   if (appendUser) {
@@ -828,6 +853,8 @@ function handleRetry(): void {
     text: request.text,
     quote: request.quote,
     selectionContext: request.selectionContext,
+    ...(request.termLang ? { termLang: request.termLang } : {}),
+    explain: request.explain,
     appendUser: false,
   });
 }
@@ -917,6 +944,35 @@ function handleFinish(message: Extract<ChatBackgroundToClient, { type: "finish" 
   assistantEl = null;
   persistHistory();
   setInputEnabled(true);
+  void autoClaimExplanation();
+}
+
+/** After an "explain" answer, quietly claim short words/phrases. */
+async function autoClaimExplanation(): Promise<void> {
+  const request = lastRequest;
+  const current = session;
+  if (!request?.explain || !request.quote || !current || !panelSettings) return;
+  if (panelSettings.autoClaimOnExplain === false) return;
+  const answer = current.messages.at(-1);
+  if (!answer || answer.role !== "assistant") return;
+
+  const message = autoClaimRequest({
+    quote: request.quote,
+    termLang: request.termLang,
+    answer: answer.content,
+    paragraph: request.selectionContext?.paragraph,
+    pageUrl: current.pageUrl,
+    pageTitle: current.pageTitle,
+    glossLang: panelSettings.targetLang,
+  });
+  if (!message) return;
+
+  try {
+    await chrome.runtime.sendMessage(message);
+  } catch {
+    // Auto-claim is a convenience; never interrupt the conversation.
+    console.debug("auto-claim failed");
+  }
 }
 
 function handleError(message: Extract<ChatBackgroundToClient, { type: "error" }>): void {

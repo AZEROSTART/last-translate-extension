@@ -89,6 +89,13 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
   );
   element.appendChild(goals);
 
+  const autoClaimRow = el("label", "checkbox-row");
+  const autoClaim = el("input", "global-auto-claim");
+  autoClaim.type = "checkbox";
+  autoClaim.checked = settings.autoClaimOnExplain !== false;
+  autoClaimRow.append(autoClaim, document.createTextNode("划词「解释」时自动收录短词/短语"));
+  element.appendChild(autoClaimRow);
+
   const effectField = el("fieldset", "field-group effect-settings");
   effectField.appendChild(el("legend", undefined, "收录特效"));
 
@@ -279,6 +286,7 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
             animations: mascotAnimations.checked,
           },
           reviewAnswerLang: reviewAnswerLang.value,
+          autoClaimOnExplain: autoClaim.checked,
         });
         saved.textContent = "已保存";
       } catch {
@@ -322,6 +330,7 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
       fixedField.hidden = next.mascot.mode !== "fixed";
       mascotAnimations.checked = next.mascot.animations !== false;
       reviewAnswerLang.value = next.reviewAnswerLang ?? "";
+      autoClaim.checked = next.autoClaimOnExplain !== false;
     },
   };
 }

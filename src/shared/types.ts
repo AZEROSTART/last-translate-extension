@@ -150,6 +150,8 @@ export interface Settings {
   contentOnly: boolean;
   /** Languages whose pages get annotations; defaults to ["en"], max 4. */
   learningLangs: string[];
+  /** Claim a short word/phrase automatically after an "explain" answer. */
+  autoClaimOnExplain: boolean;
   /** User-owned translation style layer. */
   preference: TranslationPreference;
   /** Claim effects. The property name is legacy; the storage key never changes. */
@@ -308,6 +310,8 @@ export interface OpenChatMessage {
   text: string;
   mode: "explain" | "follow-up";
   context?: SelectionContext;
+  /** Page language of the selection; lets the panel claim it without the DOM. */
+  termLang?: string;
 }
 
 /** Content → background: claim a hovered word into the learning store. */

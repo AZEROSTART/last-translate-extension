@@ -32,6 +32,7 @@ const settings: Settings = {
   contentOnly: true,
   theme: "system",
   learningLangs: ["en"],
+  autoClaimOnExplain: true,
   preference: { domain: "general", instructions: "" },
   mascot: { mode: "rotate", enabledIds: [], animations: true },
 };

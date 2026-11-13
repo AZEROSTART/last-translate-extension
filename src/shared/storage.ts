@@ -114,6 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   minParagraphLength: 10,
   contentOnly: true,
   learningLangs: ["en"],
+  autoClaimOnExplain: true,
   preference: { domain: "general", instructions: "" },
   mascot: { mode: "rotate", enabledIds: [], animations: true },
 };
@@ -179,6 +180,9 @@ export async function getSettings(): Promise<Settings> {
   );
   merged.mascot = normalizeEffectSettings((stored as { mascot?: unknown } | undefined)?.mascot);
   if (typeof merged.reviewAnswerLang !== "string") merged.reviewAnswerLang = "";
+
+  // Auto-claim is on by default; only an explicit false turns it off.
+  merged.autoClaimOnExplain = merged.autoClaimOnExplain !== false;
 
   return merged;
 }

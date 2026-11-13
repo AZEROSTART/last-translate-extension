@@ -558,11 +558,14 @@ function sendOpenChat(
   }
 
   try {
+    const lang = document.documentElement.getAttribute("lang") ?? "";
+    const termLang = lang.trim().toLowerCase().split(/[-_]/)[0] || undefined;
     const message: OpenChatMessage = {
       type: "open-chat",
       text,
       mode,
       ...(context ? { context } : {}),
+      ...(termLang ? { termLang } : {}),
     };
     const pending = chrome.runtime.sendMessage(message);
     void Promise.resolve(pending).catch(() => {});

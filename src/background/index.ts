@@ -267,6 +267,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
         tabId,
         ts: Date.now(),
         ...(openChat.context ? { context: openChat.context } : {}),
+        ...(openChat.termLang ? { termLang: openChat.termLang } : {}),
       },
     })
     .catch(() => {
