@@ -280,3 +280,23 @@ P0 交付验证：通过 / 未通过
 - 真机复现（headless Chromium，`chrome.runtime.reload()` 后在旧页划词）：
   - 修复前：`Runtime.exceptionThrown` 两次 `Error: Extension context invalidated. at a (content_guard.js:1:480) … at HTMLDocument.s`
   - 修复后：无异常，仅 `console.warning: [ilmt] extension context invalidated; reload the page to keep using it`
+
+## 14. 本次验证记录（2026-11-14，第二个收录特效：磁铁）
+
+**改动**：
+- 新增 `src/content/effects/magnet.ts`（id `magnet`，设置页名「磁铁」）：词下方一块马蹄磁铁，静置时微微浮动、场线呼吸；点击后磁铁先上抬再回落、场线闪一下、铁屑被吸进开口；落定时两极其间夹一颗青色小丸，并淡入 `+1 已收录`。`reserve = { above: 0, below: 48 }`，与地鼠同尺寸，卡片占位与复习卡头像位都不用改。
+- `glossary.ts`（悬停卡）、`panel/review.ts`（复习卡头像）、`settings/sections/learning.ts`（设置页列表）各加一行注册导入；地鼠仍排第一，既有顺序与默认值不变。
+- 默认 `enabledIds: []`（= 全部特效）的用户自动进入「地鼠 ↔ 磁铁」轮换；已存 `["gopher-hole"]` 的用户继续只用地鼠，不被动改设置；已收录词的 `mascotId` 仍指向当初那个特效。
+- 单测新增 `tests/unit/magnet.test.ts`（10 条）：幂等收录、已收录落 `known`、失败回 `idle` + 播报、关动效直接落定、`setState("known")`、aria-label 走统一文案、落定后不再收录、铁屑向量、绘制层序。
+- 既有设置单测改成与特效数量无关（用 `effectIds()` 动态取），不再假设只有一个特效；「一个都不勾选」用例改为取消全部特效。
+- E2E `settings.spec.ts` 的「试一试」用例改成遍历 `gopher-hole` + `magnet`：两个特效都能挂载、点击后落定、且不写学习库。
+- README 同步（功能列表与「学习闭环」第 1 条）。
+
+**验证**：
+- 自动门禁：通过（649/649 单测、42 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（12/12、18.1s）——含新特效预览、快捷键绑定 ⌥A/⌥Q/⌥S、翻译与恢复 10/10、popup provider/model、学习闭环（地鼠收录 → 复习）
+- 视觉确认（Playwright + 真实 `dist/`，headless Chromium，3x 截图）：深色下静置 / 吸附中 / 落定三帧正常（马蹄磁铁、银色两极、铁屑吸入、青色小丸 + `+1 已收录`）；浅色与深色同源，只是 `--ilmt-*` 变量不同
+- 真机（用户自己的 Chrome）：未重载 `dist/`——按 2026-11-13 约定 agent 不代点 `chrome://extensions`；同一份 `dist/` 的挂载与落定由 E2E 覆盖
+
+**环境备注**：本机 Playwright 浏览器缓存原本为空，且正式版 Chrome 157 已禁用 `--load-extension`（`channel: "chrome"` 起不来 service worker）。e2e 前需要：
+`PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npx playwright install chromium`

@@ -14,6 +14,7 @@ import { findSurfaceRange } from "./glossary-range";
 import { getEffect, getEffects, pickEffect } from "./effects";
 import type { ClaimEffect, ClaimHandle, ClaimPhase, ClaimResult } from "./effects/types";
 import "./effects/gopher-hole";
+import "./effects/magnet";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
 const SHOW_DELAY_MS = 120;

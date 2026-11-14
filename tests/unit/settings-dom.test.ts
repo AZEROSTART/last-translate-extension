@@ -717,16 +717,17 @@ describe("translation style and learning settings", () => {
     });
     await boot();
 
+    const ids = await effectIds();
     const box = document.querySelector<HTMLInputElement>(
       '.global-effect-enabled[data-effect="gopher-hole"]',
     )!;
     expect(box.checked).toBe(true);
-    expect(document.querySelectorAll(".global-mascot-fixed option")).toHaveLength(1);
+    expect(document.querySelectorAll(".global-mascot-fixed option")).toHaveLength(ids.length);
 
     document.querySelector<HTMLButtonElement>(".learning-save")!.click();
     await vi.waitFor(async () => {
       const s = await getSettings();
-      expect(s.mascot.enabledIds).toEqual(["gopher-hole"]);
+      expect(s.mascot.enabledIds).toEqual(ids);
     });
   });
 
@@ -806,9 +807,11 @@ describe("translation style and learning settings", () => {
   it("refuses to save when no effect is checked", async () => {
     await seed();
     await boot();
-    const box = document.querySelector<HTMLInputElement>(".global-effect-enabled")!;
-    box.checked = false;
-    box.dispatchEvent(new Event("change"));
+    // 每个特效都要取消，才会触发「至少启用一个特效」
+    for (const box of document.querySelectorAll<HTMLInputElement>(".global-effect-enabled")) {
+      box.checked = false;
+      box.dispatchEvent(new Event("change"));
+    }
     document.querySelector<HTMLButtonElement>(".learning-save")!.click();
 
     await vi.waitFor(() => {
