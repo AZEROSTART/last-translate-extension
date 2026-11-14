@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>怀里猫 · 收录特效</title>
+  <style>
+    :root {
+      --bg: #f3f2ef;
+      --panel: #ffffff;
+      --text: #1f2328;
+      --muted: #6e7781;
+      --line: rgba(0, 0, 0, 0.12);
+      --accent-ink: #0f766e;
+      --cat-fur: #cda87e;
+      --cat-fur-2: #b28a5f;
+      --cat-belly: #f4e6cc;
+      --cat-ear: #e7a6a2;
+      --cat-eye: #2b2018;
+      --cat-iris: #b8923d;
+      --cat-nose: #cf9292;
+      --cat-ink: #6f5033;
+      --chip: #fffdf6;
+      --chip-line: #2dd4bf;
+      color-scheme: light;
+    }
+    html[data-theme="dark"] {
+      --bg: #0f1318;
+      --panel: #1a2027;
+      --text: #e6edf3;
+      --muted: #9aa4af;
+      --line: rgba(255, 255, 255, 0.14);
+      --accent-ink: #5eead4;
+      --cat-fur: #c39d75;
+      --cat-fur-2: #a5815b;
+      --cat-belly: #e8d5b6;
+      --cat-ear: #d69b98;
+      --cat-eye: #100c08;
+      --cat-iris: #cba044;
+      --cat-nose: #c98d8d;
+      --cat-ink: #5f4530;
+      --chip: #f0e7d4;
+      --chip-line: #5eead4;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 24px 64px;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    }
+    .page { max-width: 1040px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .sub { margin: 0 0 20px; color: var(--muted); font-size: 12.5px; max-width: 76ch; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 20px; }
+    button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font: inherit;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .cell {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px 12px;
+    }
+    .cell h2 { margin: 0 0 2px; font-size: 13px; }
+    .cell p { margin: 0 0 10px; color: var(--muted); font-size: 11.5px; }
+    .row { display: flex; align-items: flex-end; gap: 18px; }
+    .stage { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .stage span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .frame { display: flex; align-items: flex-end; justify-content: center; }
+    .frame.big { width: 220px; height: 206px; }
+    .frame.mid { width: 80px; height: 70px; }
+    .frame.small { width: 52px; height: 46px; }
+    .zoom { transform: scale(3.2); transform-origin: center bottom; }
+
+    /* ---- the effect itself ---- */
+    .cat {
+      --w: 64px;
+      --h: 56px;
+      position: relative;
+      display: block;
+      width: var(--w);
+      height: var(--h);
+    }
+    .cat svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .cat .fx-tail { transform-origin: 46px 50px; animation: cat-tail 4.2s ease-in-out infinite; }
+    .cat .fx-torso { animation: cat-breathe 4.2s ease-in-out infinite; transform-origin: 32px 54px; }
+    .cat .fx-paw { transition: transform .18s ease; }
+    .cat .fx-paw-l { transform-origin: 22px 52px; }
+    .cat .fx-paw-r { transform-origin: 42px 52px; }
+    .cat .fx-chip { opacity: 0; transform-origin: 32px 44px; }
+    .cat .fx-eyes-closed, .cat .fx-wink { opacity: 0; }
+
+    .cat[data-state="settled"] .fx-chip,
+    .cat[data-state="known"] .fx-chip { opacity: 1; }
+    .cat[data-state="settled"] .fx-eyes-open { opacity: 0; }
+    .cat[data-state="settled"] .fx-eyes-closed { opacity: 1; }
+    .cat[data-state="settled"] .fx-paw-l { transform: translate(3px, -3px) rotate(10deg); }
+    .cat[data-state="settled"] .fx-paw-r { transform: translate(-3px, -3px) rotate(-10deg); }
+    .cat[data-state="settled"] .fx-torso { animation: none; transform: translateY(1.5px); }
+    .cat[data-state="known"] .fx-eyes-open { opacity: 1; }
+    .cat[data-state="known"] .fx-eye-r { opacity: 0; }
+    .cat[data-state="known"] .fx-wink { opacity: 1; }
+    .cat[data-state="known"] .fx-paw-l { transform: translate(2px, -2px) rotate(8deg); }
+    .cat[data-state="known"] .fx-paw-r { transform: translate(-2px, -2px) rotate(-8deg); }
+    .cat[data-state="known"] .fx-torso { animation: none; transform: translateY(1px); }
+
+    .cat[data-state="hit"] .fx-paw-l { transform: translate(4px, -5px) rotate(13deg); }
+    .cat[data-state="hit"] .fx-paw-r { transform: translate(-4px, -5px) rotate(-13deg); }
+    .cat[data-state="hit"] .fx-chip { opacity: 1; transform: translateY(-9px) scale(.88); }
+    .cat[data-state="hit"] .fx-tail { animation-duration: .8s; }
+    .cat[data-state="hit"] .fx-torso { animation: none; }
+
+    .cat .fx-plus {
+      position: absolute;
+      left: 100%;
+      top: 26px;
+      transform: translate(4px, -50%);
+      color: var(--accent-ink);
+      font-size: 10.5px;
+      line-height: 1;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .cat[data-state="settled"] .fx-plus { animation: cat-plus 1100ms ease-out forwards; }
+
+    @keyframes cat-tail {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-8deg); }
+    }
+    @keyframes cat-breathe {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(.7px); }
+    }
+    @keyframes cat-plus {
+      0% { opacity: 0; transform: translate(4px, -42%) scale(.85); }
+      22% { opacity: 1; transform: translate(4px, -52%) scale(1.04); }
+      78% { opacity: 1; transform: translate(4px, -58%) scale(1); }
+      100% { opacity: 0; transform: translate(4px, -68%) scale(1); }
+    }
+    .cat[data-anim="off"] .fx-tail,
+    .cat[data-anim="off"] .fx-torso,
+    .cat[data-anim="off"] .fx-plus { animation: none; }
+  </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>怀里猫 · 收录特效</h1>
+      <p class="sub">
+        viewBox 0 0 64 60，渲染 64×56。左边 3.4× 放大看线条，右边是 64px 与 40px 的实际尺寸。
+      </p>
+      <div class="toolbar">
+        <button id="theme">切换明暗</button>
+        <button id="play">播放一次收录</button>
+        <button id="anim">动效：开</button>
+      </div>
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <template id="svg-tpl">
+      <svg viewBox="0 0 64 60" role="img" aria-hidden="true">
+        <defs>
+          <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--cat-fur)" />
+            <stop offset="1" stop-color="var(--cat-fur)" />
+          </linearGradient>
+          <clipPath id="head-clip">
+            <ellipse cx="32" cy="24.4" rx="17.6" ry="15.2" />
+          </clipPath>
+        </defs>
+
+        <!-- tail: flips out to the right and curls up, like the photo -->
+        <g class="fx-tail">
+          <path
+            d="M45.2 52.8c8.4 1.6 15-2.4 16.6-9 .8-3.6 0-6.4-2.6-7.4-2.2-.9-4.6.2-5.8 2.6 2.2-1.2 4.2-.6 4.8 1.2.8 2.4-.6 5.2-3.2 7-2.8 2-6.4 2.4-9.6 1.2z"
+            fill="var(--cat-fur)"
+            stroke="var(--cat-ink)"
+            stroke-width="1.2"
+            stroke-linejoin="round"
+          />
+        </g>
+
+        <!-- body: a chubby loaf -->
+        <g class="fx-torso">
+          <path
+            d="M32.6 31.6c9.8 0 17.4 5.4 18.6 13.2.6 4.2-2 7.8-6.2 7.8H20.2c-4.2 0-6.8-3.6-6.2-7.8 1.2-7.8 8.8-13.2 18.6-13.2z"
+            fill="var(--cat-fur)"
+            stroke="var(--cat-ink)"
+            stroke-width="1.3"
+          />
+          <!-- haunch hint on the right -->
+          <path
+            d="M44.6 37.4c3.6 2 5.4 5.4 5 9.6"
+            fill="none" stroke="var(--cat-fur-2)" stroke-width="1.5" stroke-linecap="round" opacity=".65"
+          />
+          <!-- belly -->
+          <path
+            d="M32.6 40.6c5.6 0 9.4 2.8 9.8 7.4.2 1.8-1.3 3.2-3.1 3.2H25.9c-1.8 0-3.3-1.4-3.1-3.2.4-4.6 4.2-7.4 9.8-7.4z"
+            fill="var(--cat-belly)"
+          />
+
+          <!-- the word chip: only visible once it is in the paws -->
+          <g class="fx-chip">
+            <g transform="rotate(-4 32 44.6)">
+              <rect x="28.3" y="40.5" width="8.2" height="9.4" rx="1.6" fill="#2b1d12" opacity=".18" />
+              <rect
+                x="28" y="40" width="8.2" height="9.4" rx="1.6"
+                fill="var(--chip)" stroke="var(--cat-ink)" stroke-width=".8"
+              />
+              <path d="M29.6 42.6h5M29.6 45.2h3.4M29.6 47.8h4.2" stroke="var(--chip-line)" stroke-width=".9" stroke-linecap="round" />
+            </g>
+          </g>
+
+          <!-- front paws, hugging the chip -->
+          <g class="fx-paw fx-paw-l">
+            <path
+              d="M19.6 44.8c1.9-1.6 4.9-1.4 6.2.6 1 1.5.6 3.4-.9 4.4l-2.2 1.4c-1.6 1-3.6.4-4.4-1.3l-.9-1.9c-.7-1.4.2-2.6 2.2-3.2z"
+              fill="var(--cat-belly)" stroke="var(--cat-ink)" stroke-width="1.1"
+            />
+            <path d="M22.6 46.4v2.6M24.8 46.6v2.4" stroke="var(--cat-ink)" stroke-width=".75" stroke-linecap="round" opacity=".45" />
+          </g>
+          <g class="fx-paw fx-paw-r">
+            <path
+              d="M44.4 44.8c-1.9-1.6-4.9-1.4-6.2.6-1 1.5-.6 3.4.9 4.4l2.2 1.4c1.6 1 3.6.4 4.4-1.3l.9-1.9c.7-1.4-.2-2.6-2.2-3.2z"
+              fill="var(--cat-belly)" stroke="var(--cat-ink)" stroke-width="1.1"
+            />
+            <path d="M41.4 46.4v2.6M39.2 46.6v2.4" stroke="var(--cat-ink)" stroke-width=".75" stroke-linecap="round" opacity=".45" />
+          </g>
+        </g>
+
+        <!-- ears -->
+        <path
+          d="M16.6 18.6 16.4 8.4c0-1.2 1.4-1.8 2.3-1l7.7 5.9z"
+          fill="var(--cat-fur)" stroke="var(--cat-ink)" stroke-width="1.3" stroke-linejoin="round"
+        />
+        <path d="M19.6 15.8 19.5 10.6l3.8 3z" fill="var(--cat-ear)" opacity=".9" />
+        <path
+          d="M47.4 18.6 47.6 8.4c0-1.2-1.4-1.8-2.3-1l-7.7 5.9z"
+          fill="var(--cat-fur)" stroke="var(--cat-ink)" stroke-width="1.3" stroke-linejoin="round"
+        />
+        <path d="M44.4 15.8 44.5 10.6l-3.8 3z" fill="var(--cat-ear)" opacity=".9" />
+
+        <!-- head -->
+        <g>
+          <ellipse cx="32" cy="24.4" rx="17.6" ry="15.2" fill="var(--cat-fur)" stroke="var(--cat-ink)" stroke-width="1.4" />
+
+          <!-- forehead ticks -->
+          <g clip-path="url(#head-clip)" stroke="var(--cat-fur-2)" stroke-width="1.7" stroke-linecap="round" opacity=".5">
+            <path d="M28.4 10.6v3.4M32 9.8v3.8M35.6 10.6v3.4" />
+          </g>
+
+          <!-- muzzle: wide and low, cheeks full -->
+          <g>
+            <ellipse cx="32" cy="30.4" rx="8.6" ry="4.8" fill="var(--cat-belly)" opacity=".9" />
+            <path d="M22.6 31.4q2.2 2.6 4.4.4M41.4 31.4q-2.2 2.6-4.4.4" fill="none" stroke="var(--cat-ink)" stroke-width=".6" stroke-linecap="round" opacity=".25" />
+          </g>
+          <!-- nose -->
+          <path d="M30.5 27.8h3l-1.5 1.8z" fill="var(--cat-nose)" />
+          <path d="M32 29.6v1.2" stroke="var(--cat-ink)" stroke-width=".9" stroke-linecap="round" />
+          <!-- mouth: corners down, unimpressed -->
+          <path
+            d="M32 30.8c-.7 1.3-1.9 1.7-3 .9M32 30.8c.7 1.3 1.9 1.7 3 .9"
+            fill="none" stroke="var(--cat-ink)" stroke-width=".95" stroke-linecap="round"
+          />
+          <!-- whisker pads -->
+          <g fill="var(--cat-ink)" opacity=".35">
+            <circle cx="27.2" cy="30.2" r=".42" /><circle cx="28.6" cy="31.0" r=".42" />
+            <circle cx="36.8" cy="30.2" r=".42" /><circle cx="35.4" cy="31.0" r=".42" />
+          </g>
+          <!-- whiskers -->
+          <g stroke="var(--cat-ink)" stroke-width=".65" stroke-linecap="round" opacity=".45">
+            <path d="M23.4 29.6 18.2 28.4M23.4 31.4 18.3 31.8" />
+            <path d="M40.6 29.6 45.8 28.4M40.6 31.4 45.7 31.8" />
+          </g>
+
+          <!-- half-lidded eyes: lid line + a sliver of amber below it -->
+          <g class="fx-eye-l fx-eyes-open">
+            <path d="M20.6 24.6q3.4 2.6 6.8 0" fill="var(--cat-iris)" />
+            <path d="M20.9 25.0q3.2 1.9 6.2 0" fill="var(--cat-iris)" />
+            <ellipse cx="24" cy="25.4" rx=".85" ry="1.15" fill="var(--cat-eye)" />
+            <path d="M20.4 24.6q3.6-1.6 7.2-.5" fill="none" stroke="var(--cat-eye)" stroke-width="1.5" stroke-linecap="round" />
+            <circle cx="22.2" cy="25.2" r=".4" fill="#fff" opacity=".85" />
+          </g>
+          <g class="fx-eye-r fx-eyes-open">
+            <path d="M43.4 24.6q-3.4 2.6-6.8 0" fill="var(--cat-iris)" />
+            <path d="M43.1 25.0q-3.2 1.9-6.2 0" fill="var(--cat-iris)" />
+            <ellipse cx="40" cy="25.4" rx=".85" ry="1.15" fill="var(--cat-eye)" />
+            <path d="M43.6 24.6q-3.6-1.6-7.2-.5" fill="none" stroke="var(--cat-eye)" stroke-width="1.5" stroke-linecap="round" />
+            <circle cx="41.8" cy="25.2" r=".4" fill="#fff" opacity=".85" />
+          </g>
+
+          <!-- closed eyes -->
+          <g class="fx-eyes-closed" stroke="var(--cat-eye)" stroke-width="1.5" stroke-linecap="round" fill="none">
+            <path d="M21.2 25.6c1.6 1.6 3.8 1.6 5.4 0" />
+            <path d="M37.4 25.6c1.6 1.6 3.8 1.6 5.4 0" />
+          </g>
+
+          <!-- known: the right eye stays shut, the left one looks at you -->
+          <g class="fx-wink">
+            <path d="M37.4 25.6c1.6 1.6 3.8 1.6 5.4 0" fill="none" stroke="var(--cat-eye)" stroke-width="1.5" stroke-linecap="round" />
+          </g>
+        </g>
+      </svg>
+    </template>
+
+    <script>
+      const tpl = document.getElementById("svg-tpl");
+      const grid = document.getElementById("grid");
+      const states = [
+        ["idle", "悬停时趴着，尾巴慢扫；眼睛只露一条缝"],
+        ["hit", "爪子上抬、词块飞进怀里（实现里是 720ms 动画）"],
+        ["settled", "抱着词装睡，右侧浮出 +1 已收录"],
+        ["known", "已经收过：睁一只眼看你一下"],
+      ];
+      grid.innerHTML = states
+        .map(
+          ([state, title], i) => `
+        <div class="cell">
+          <h2>${state}</h2>
+          <p>${title}</p>
+          <div class="row">
+            <div class="stage">
+              <div class="frame big"><div class="cat${i === 0 ? "" : ""}" data-state="${state}"><div class="zoom-host"></div></div></div>
+              <span>3.4×</span>
+            </div>
+            <div class="stage"><div class="frame mid"><div class="cat" data-state="${state}"></div></div><span>64px</span></div>
+            <div class="stage"><div class="frame small"><div class="cat" data-state="${state}" style="--w:40px;--h:35px"></div></div><span>40px</span></div>
+          </div>
+        </div>`,
+        )
+        .join("");
+      for (const node of grid.querySelectorAll(".cat")) {
+        node.appendChild(tpl.content.cloneNode(true));
+        const plus = document.createElement("span");
+        plus.className = "fx-plus";
+        plus.textContent = "+1 已收录";
+        node.appendChild(plus);
+      }
+      for (const zoomHost of grid.querySelectorAll(".zoom-host")) {
+        const cat = zoomHost.closest(".cat");
+        cat.style.transform = "scale(3.4)";
+        cat.style.transformOrigin = "center bottom";
+      }
+
+      document.getElementById("theme").addEventListener("click", () => {
+        const html = document.documentElement;
+        html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+      });
+      document.getElementById("play").addEventListener("click", () => {
+        for (const node of grid.querySelectorAll('.cat[data-state="settled"]')) {
+          node.dataset.state = "idle";
+          requestAnimationFrame(() => {
+            node.dataset.state = "hit";
+            setTimeout(() => (node.dataset.state = "settled"), 720);
+          });
+        }
+      });
+      document.getElementById("anim").addEventListener("click", (event) => {
+        const off = [...grid.querySelectorAll(".cat")].some((n) => n.dataset.anim === "off");
+        for (const node of grid.querySelectorAll(".cat")) node.dataset.anim = off ? "on" : "off";
+        event.target.textContent = off ? "动效：开" : "动效：关";
+      });
+    </script>
+  </body>
+</html>

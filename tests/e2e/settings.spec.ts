@@ -28,7 +28,7 @@ test("previews a claim effect without claiming a word", async () => {
     // Nothing is mounted until "试一试" opens exactly one preview slot.
     await expect(page.locator(".effect-preview:not([hidden])")).toHaveCount(0);
 
-    for (const effectId of ["gopher-hole", "magnet"]) {
+    for (const effectId of ["gopher-hole", "magnet", "cat-hoard"]) {
       const tryButton = page.locator(`.effect-try[data-effect="${effectId}"]`);
       await tryButton.click();
 

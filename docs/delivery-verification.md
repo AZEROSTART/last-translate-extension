@@ -300,3 +300,13 @@ P0 交付验证：通过 / 未通过
 
 **环境备注**：本机 Playwright 浏览器缓存原本为空，且正式版 Chrome 157 已禁用 `--load-extension`（`channel: "chrome"` 起不来 service worker）。e2e 前需要：
 `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npx playwright install chromium`
+## 15. 本次验证记录（2026-11-14，怀里猫收录特效）
+
+**改动**：新增第二个收录特效 `cat-hoard`（`src/content/effects/cat-hoard.ts`），按用户照片里的金渐层重画成内联 SVG（不抠图）：悬停时趴着扫尾巴，点一下爪子合拢、词块（白纸卡 + 青色字线）落进怀里，然后闭眼装睡；已收录过的词再悬停时睁一只眼。卡片底部预留 48 → 60，注册表/设置页/复习卡自动生效。视觉基线 `docs/previews/cat-effect.html`，设计见 `docs/superpowers/specs/2026-11-14-cat-hoard-design.md`。
+
+**验证**：
+- 自动门禁：通过（662/662 单测，43 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（13/13）——新增「claims with the pinned cat and half-opens one eye on return」，覆盖固定特效 → 点击 → `settled` → 写库 `mascotId="cat-hoard"` → 回悬停 `known` 且不重复写库
+- 设置页：`cat-hoard` 默认勾选、「试一试」可挂载、点击不动学习库（单测 + 设置页 e2e 的 `gopher-hole` / `magnet` / `cat-hoard` 三连预览）
+- 与同日落地的磁铁特效共存：三个特效都注册后，未设置过特效的用户在三种之间轮换，固定过地鼠的用户不受影响
+- 真机肉眼：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`；本轮卡片的四态与复习卡头像由 headless Chromium + `Page.captureScreenshot` 5× 截图确认

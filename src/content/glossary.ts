@@ -15,6 +15,7 @@ import { getEffect, getEffects, pickEffect } from "./effects";
 import type { ClaimEffect, ClaimHandle, ClaimPhase, ClaimResult } from "./effects/types";
 import "./effects/gopher-hole";
 import "./effects/magnet";
+import "./effects/cat-hoard";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
 const SHOW_DELAY_MS = 120;

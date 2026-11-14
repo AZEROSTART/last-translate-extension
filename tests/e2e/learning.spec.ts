@@ -70,7 +70,7 @@ test.describe("learning loop", () => {
   }
 
   /** Fixture server + extension + translated article, hovering `outlive`. */
-  async function openClaimCard(): Promise<{
+  async function openClaimCard(pinEffect?: string): Promise<{
     extension: Extension;
     page: Page;
     rect: { x: number; y: number };
@@ -92,6 +92,19 @@ test.describe("learning loop", () => {
     const ext = await launchExtension();
     extension = ext;
     await seedSettings(ext.worker, server.origin);
+    if (pinEffect) {
+      await ext.worker.evaluate(async (effectId) => {
+        const stored = await chrome.storage.local.get("settings");
+        const settings = stored.settings as Record<string, unknown>;
+        settings.mascot = {
+          mode: "fixed",
+          fixedId: effectId,
+          enabledIds: [effectId],
+          animations: true,
+        };
+        await chrome.storage.local.set({ settings });
+      }, pinEffect);
+    }
 
     const page = await ext.context.newPage();
     await page.goto(`${server.origin}/${ARTICLE}`);
@@ -199,6 +212,33 @@ test.describe("learning loop", () => {
 
       const again = page.locator("[role=tooltip]");
       await expect(again.locator('[data-ilmt-effect="gopher-hole"]')).toHaveAttribute(
+        "data-ilmt-state",
+        "known",
+      );
+      expect(await readWords(ext.worker)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("claims with the pinned cat and half-opens one eye on return", async () => {
+    try {
+      const { extension: ext, page, rect } = await openClaimCard("cat-hoard");
+      const card = page.locator("[role=tooltip]");
+      const cat = card.locator('[data-ilmt-effect="cat-hoard"]');
+
+      await expect(cat).toBeVisible();
+      await cat.locator("button").click();
+      await expect(cat).toHaveAttribute("data-ilmt-state", "settled");
+      const words = await readWords(ext.worker);
+      expect(words.map((word) => word.mascotId)).toEqual(["cat-hoard"]);
+
+      // Back on the same word: the card must show the quiet known state.
+      await page.mouse.move(0, 0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+      await page.mouse.move(rect.x, rect.y);
+      const again = page.locator("[role=tooltip]");
+      await expect(again.locator('[data-ilmt-effect="cat-hoard"]')).toHaveAttribute(
         "data-ilmt-state",
         "known",
       );

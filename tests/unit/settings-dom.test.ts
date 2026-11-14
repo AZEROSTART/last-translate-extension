@@ -755,6 +755,30 @@ describe("translation style and learning settings", () => {
     expect(stored.learning).toBeUndefined();
   });
 
+  it("offers the cat effect next to the gopher, with a preview", async () => {
+    await seed();
+    await boot();
+
+    const box = document.querySelector<HTMLInputElement>(
+      '.global-effect-enabled[data-effect="cat-hoard"]',
+    )!;
+    expect(box).toBeTruthy();
+    expect(box.checked).toBe(true);
+
+    document
+      .querySelector<HTMLButtonElement>('.effect-try[data-effect="cat-hoard"]')!
+      .click();
+    const preview = document.querySelector<HTMLElement>(".effect-preview:not([hidden])")!;
+    const effectRoot = preview.querySelector<HTMLElement>('[data-ilmt-effect="cat-hoard"]')!;
+    expect(effectRoot).toBeTruthy();
+
+    effectRoot.querySelector("button")!.click();
+    await vi.waitFor(() => expect(effectRoot.dataset.ilmtState).toBe("settled"), {
+      timeout: 3000,
+    });
+    expect((await chrome.storage.local.get("learning")).learning).toBeUndefined();
+  });
+
   it("saves the checked effects and the fixed choice", async () => {
     await seed();
     await boot();

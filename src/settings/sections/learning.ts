@@ -4,6 +4,7 @@ import { getEffects } from "../../content/effects";
 import type { ClaimEffect } from "../../content/effects/types";
 import "../../content/effects/gopher-hole";
 import "../../content/effects/magnet";
+import "../../content/effects/cat-hoard";
 import { el, makeButton } from "../components";
 import type { SectionHandle, SettingsContext } from "./types";
 
