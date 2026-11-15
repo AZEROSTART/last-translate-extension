@@ -36,7 +36,8 @@ const CSS = `
 }
 
 /* The cut-out photo carries a baked white die-cut edge; the shadow keeps that
-   edge readable on light cards, where the border alone would disappear. */
+   edge readable on light cards, where the border alone would disappear.
+   Unclaimed words show a grey sticker; claiming it brings the photo to life. */
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-img {
   display: block;
   width: 80px;
@@ -45,8 +46,15 @@ const CSS = `
   -webkit-user-drag: none;
   user-select: none;
   pointer-events: none;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .22));
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .22)) grayscale(1);
+  transition: filter 320ms ease;
   animation: ilmt-sticker-bob 3.8s ease-in-out infinite;
+}
+
+[data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="hit"] .ilmt-gloss-fx-img,
+[data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="settled"] .ilmt-gloss-fx-img,
+[data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="known"] .ilmt-gloss-fx-img {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .22)) grayscale(0);
 }
 
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="hit"] .ilmt-gloss-fx-img {
@@ -61,7 +69,6 @@ const CSS = `
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-state="known"] .ilmt-gloss-fx-img {
   animation: none;
   transform: translateY(1px);
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .18)) saturate(.25) opacity(.9);
 }
 
 [data-ilmt-effect="${EFFECT_ID}"] .ilmt-gloss-fx-plus {
@@ -88,6 +95,10 @@ const CSS = `
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-animations="off"] .ilmt-gloss-fx-img,
 [data-ilmt-effect="${EFFECT_ID}"][data-ilmt-animations="off"] .ilmt-gloss-fx-plus {
   animation: none;
+}
+
+[data-ilmt-effect="${EFFECT_ID}"][data-ilmt-animations="off"] .ilmt-gloss-fx-img {
+  transition: none;
 }
 
 /* The review card keeps a 50×44 avatar slot; the photo is wider than that. */
@@ -122,7 +133,7 @@ const CSS = `
 export const catStickerEffect: ClaimEffect = {
   id: EFFECT_ID,
   label: "贴纸猫",
-  summary: "照片抠出来的猫贴在词下面，点一下掀起来再拍回去。",
+  summary: "灰着的照片贴在词下面，收录后整只猫上色并拍回卡片。",
   reserve: { above: 0, below: 84 },
   css: CSS,
   mount(ctx): ClaimHandle {

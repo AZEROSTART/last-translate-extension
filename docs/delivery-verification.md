@@ -316,7 +316,7 @@ P0 交付验证：通过 / 未通过
 **改动**：新增 `cat-sticker`（设置页名「贴纸猫」）：用户第二张猫照走 **真照片抠图**（macOS Vision 前景分割），
 `scripts/photo-sticker.swift` 裁切 + 白色 die-cut 描边，`cwebp` 压到 8.6KB 后由 `assetsInlineLimit`
 内联进 bundle（不新增 `web_accessible_resources`、页面不发图片请求）。动效为「贴在词下方轻浮 → 点击掀起再拍回」，
-已收录时降饱和。复习卡 50×44 头像位由特效自己的 CSS 缩到 0.62。原图存 `docs/assets/cat-held-original.jpg`。
+未收录时照片是灰的，点击收录后 320ms 内上色（`known` 也保持彩色，只少了 `+1`）。复习卡 50×44 头像位由特效自己的 CSS 缩到 0.62。原图存 `docs/assets/cat-held-original.jpg`。
 
 **验证**：
 - 自动门禁：通过（675/675 单测，44 个文件；`tsc`、build、`check-build`）
