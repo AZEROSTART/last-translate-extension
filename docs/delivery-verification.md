@@ -310,3 +310,18 @@ P0 交付验证：通过 / 未通过
 - 设置页：`cat-hoard` 默认勾选、「试一试」可挂载、点击不动学习库（单测 + 设置页 e2e 的 `gopher-hole` / `magnet` / `cat-hoard` 三连预览）
 - 与同日落地的磁铁特效共存：三个特效都注册后，未设置过特效的用户在三种之间轮换，固定过地鼠的用户不受影响
 - 真机肉眼：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`；本轮卡片的四态与复习卡头像由 headless Chromium + `Page.captureScreenshot` 5× 截图确认
+
+## 16. 本次验证记录（2026-11-15，第四个收录特效：贴纸猫）
+
+**改动**：新增 `cat-sticker`（设置页名「贴纸猫」）：用户第二张猫照走 **真照片抠图**（macOS Vision 前景分割），
+`scripts/photo-sticker.swift` 裁切 + 白色 die-cut 描边，`cwebp` 压到 8.6KB 后由 `assetsInlineLimit`
+内联进 bundle（不新增 `web_accessible_resources`、页面不发图片请求）。动效为「贴在词下方轻浮 → 点击掀起再拍回」，
+已收录时降饱和。复习卡 50×44 头像位由特效自己的 CSS 缩到 0.62。原图存 `docs/assets/cat-held-original.jpg`。
+
+**验证**：
+- 自动门禁：通过（675/675 单测，44 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（14/14、20.7s）——新增「claims with the pinned photo sticker and dims it on return」，
+  覆盖内联图真的解码（`naturalWidth > 0`）、点击 → `settled` → 写库 `mascotId="cat-sticker"` → 回悬停 `known`
+- 设置页：四个特效都能「试一试」并落定（`gopher-hole` / `magnet` / `cat-hoard` / `cat-sticker`）
+- 视觉确认：真实 `dist/` + headless Chromium 截了悬停卡四态、5× 局部、复习卡头像（`docs/previews/cat-shots/sticker-*.png`）
+- 真机肉眼：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`（本轮沿用不代点 `chrome://` 的约定）

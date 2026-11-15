@@ -247,4 +247,43 @@ test.describe("learning loop", () => {
       await cleanup();
     }
   });
+
+  test("claims with the pinned photo sticker and dims it on return", async () => {
+    try {
+      const { extension: ext, page, rect } = await openClaimCard("cat-sticker");
+      const card = page.locator("[role=tooltip]");
+      const sticker = card.locator('[data-ilmt-effect="cat-sticker"]');
+
+      await expect(sticker).toBeVisible();
+      // The cut-out is inlined, so it must decode even though no asset file is
+      // shipped: a broken data URI would still render an empty box here.
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const img = document.querySelector<HTMLImageElement>(
+              '[data-ilmt-effect="cat-sticker"] img',
+            );
+            return img?.naturalWidth ?? 0;
+          }),
+        )
+        .toBeGreaterThan(0);
+
+      await sticker.locator("button").click();
+      await expect(sticker).toHaveAttribute("data-ilmt-state", "settled");
+      const words = await readWords(ext.worker);
+      expect(words.map((word) => word.mascotId)).toEqual(["cat-sticker"]);
+
+      await page.mouse.move(0, 0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+      await page.mouse.move(rect.x, rect.y);
+      const again = page.locator("[role=tooltip]");
+      await expect(again.locator('[data-ilmt-effect="cat-sticker"]')).toHaveAttribute(
+        "data-ilmt-state",
+        "known",
+      );
+      expect(await readWords(ext.worker)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
 });

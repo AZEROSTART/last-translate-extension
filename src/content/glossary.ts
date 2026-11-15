@@ -16,6 +16,7 @@ import type { ClaimEffect, ClaimHandle, ClaimPhase, ClaimResult } from "./effect
 import "./effects/gopher-hole";
 import "./effects/magnet";
 import "./effects/cat-hoard";
+import "./effects/cat-sticker";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
 const SHOW_DELAY_MS = 120;

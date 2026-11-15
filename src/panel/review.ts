@@ -22,6 +22,7 @@ import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
 import "../content/effects/gopher-hole";
 import "../content/effects/magnet";
 import "../content/effects/cat-hoard";
+import "../content/effects/cat-sticker";
 
 const TERM_LANG_KEY = "ilmt:review-lang";
 const GLOSS_LANG_KEY = "ilmt:review-gloss-lang";

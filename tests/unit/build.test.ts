@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 
 describe("build output", () => {
   beforeAll(() => { execSync("npm run build", { stdio: "ignore" }); }, 120_000);
@@ -29,6 +29,18 @@ describe("build output", () => {
     for (const command of Object.values<{ description?: string }>(m.commands ?? {})) {
       expect(command.description?.trim().length ?? 0).toBeGreaterThan(0);
     }
+  });
+
+  it("inlines the cut-out cat so the page never requests an extension URL", () => {
+    const bundles = readdirSync("dist", { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".js"))
+      .map((file) => readFileSync(`dist/${file}`, "utf8"));
+    expect(bundles.some((js) => js.includes("data:image/webp;base64,"))).toBe(true);
+    expect(
+      readdirSync("dist", { recursive: true, encoding: "utf8" }).some((file) =>
+        file.endsWith("cat-held.webp"),
+      ),
+    ).toBe(false);
   });
 
   it("emits every entry file", () => {

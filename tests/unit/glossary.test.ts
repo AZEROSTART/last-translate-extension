@@ -120,7 +120,10 @@ describe("createGlossController", () => {
 
     const card = document.querySelector("[role=tooltip]")!;
     expect(card.textContent).toContain("<img src=x onerror=alert(1)>");
-    expect(card.querySelector("img")).toBeNull();
+    // The claim effect may legitimately mount its own image; only the text
+    // slots must stay free of model-provided markup.
+    expect(card.querySelector('[class*="meaning"] img')).toBeNull();
+    expect(card.querySelector('[class*="example"] img')).toBeNull();
   });
 
   it("removes the card when the pointer leaves the annotated word", () => {

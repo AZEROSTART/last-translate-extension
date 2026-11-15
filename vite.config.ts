@@ -67,6 +67,9 @@ export default defineConfig({
   plugins: [flattenHtmlEntries()],
   build: {
     target: "chrome120",
+    // The cat sticker is a ~9KB WebP that must not become a separate page
+    // request: inlining keeps every effect asset inside the script bundle.
+    assetsInlineLimit: (filePath: string) => (filePath.endsWith(".webp") ? true : undefined),
     rolldownOptions: {
       preserveEntrySignatures: "strict",
       input: {

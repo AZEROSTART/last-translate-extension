@@ -5,6 +5,7 @@ import type { ClaimEffect } from "../../content/effects/types";
 import "../../content/effects/gopher-hole";
 import "../../content/effects/magnet";
 import "../../content/effects/cat-hoard";
+import "../../content/effects/cat-sticker";
 import { el, makeButton } from "../components";
 import type { SectionHandle, SettingsContext } from "./types";
 
