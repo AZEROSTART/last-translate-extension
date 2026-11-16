@@ -64,6 +64,18 @@ export function dueCount(
   return words.reduce((total, word) => (isDue(word, now) ? total + 1 : total), 0);
 }
 
+/**
+ * The label a grade would produce if it were committed now. Pure: `applyGrade`
+ * returns a fresh object, so the word is never touched and nothing is stored.
+ */
+export function previewDueLabel(
+  word: { box: number; status: WordStatus },
+  grade: LearningGrade,
+  now: number,
+): string {
+  return formatDueLabel(applyGrade(word, grade, now).dueAt, now);
+}
+
 /** Human-readable due label, e.g. "10 分钟后" / "明天" / "已毕业". */
 export function formatDueLabel(dueAt: number | null, now: number): string {
   if (dueAt === null) return "已毕业";

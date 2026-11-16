@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReviewQueue, mountReview, type ReviewOptions } from "../../src/panel/review";
 import type { ClaimEffect } from "../../src/content/effects/types";
-import type { LearningWord, LearningState } from "../../src/shared/types";
+import { applyReviewAnswer, undoReviewAnswer } from "../../src/shared/learning-storage";
+import type {
+  LearningGrade,
+  LearningWord,
+  LearningState,
+  ReviewAnswerResponse,
+} from "../../src/shared/types";
 
 const NOW = 1_700_000_000_000;
 const HOUR = 3_600_000;
@@ -50,8 +56,47 @@ function mount(words: LearningWord[], over: Partial<ReviewOptions> = {}) {
   return { root, view, answer };
 }
 
-/** An effect whose performance is observable, without any real animation. */
-function stageEffect(play = vi.fn()) {
+/** A `mount` whose answer/undo/getState share one simulated store. */
+function mountStored(words: LearningWord[], over: Partial<ReviewOptions> = {}) {
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  let current: LearningState = state(words);
+
+  const answer = vi.fn(
+    async (message: { id: string; grade: LearningGrade; spot?: boolean; spotCorrect?: boolean }) => {
+      const next = applyReviewAnswer(
+        current,
+        {
+          id: message.id,
+          grade: message.grade,
+          ...(message.spot !== undefined ? { spot: message.spot } : {}),
+          ...(message.spotCorrect !== undefined ? { spotCorrect: message.spotCorrect } : {}),
+        },
+        NOW,
+      );
+      if (!next.word) return { ok: false } as unknown as ReviewAnswerResponse;
+      current = next.state;
+      return { ok: true as const, word: next.word };
+    },
+  );
+  const undo = vi.fn(async (message: { id: string }) => {
+    const next = undoReviewAnswer(current, { id: message.id }, NOW + 1000);
+    if (!next.word) return { ok: false as const, reason: next.reason };
+    current = next.state;
+    return { ok: true as const, word: next.word };
+  });
+
+  const view = mountReview(root, {
+    getState: async () => current,
+    answer,
+    undo,
+    now: () => NOW,
+    ...over,
+  });
+  return { root, view, answer, undo };
+}
+
+/** An effect whose performance is observable, without any real animation. */function stageEffect(play = vi.fn()) {
   return {
     id: "fake",
     label: "假",
@@ -120,12 +165,90 @@ describe("mountReview", () => {
     expect(root.querySelector(".ilmt-review-sentence-full")?.textContent).toContain("outlive");
   });
 
-  it("shows the finish card when the queue is empty", async () => {
+  it("guides a brand-new library instead of reporting three zeros", async () => {
     const { root, view } = mount([]);
     await view.refresh();
 
-    expect(root.textContent).toContain("今天没有要复习的词");
-    expect(root.textContent).toContain("本轮");
+    expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("还没有收录的词");
+    expect(root.textContent).toContain("浅灰");
+    expect(root.textContent).toContain("⌥A");
+    expect(root.textContent).not.toContain("本轮");
+    expect(root.textContent).not.toContain("答对");
+    expect(root.textContent).not.toContain("明日还有 0");
+    expect(root.textContent).not.toContain("今天已复习");
+  });
+
+  it("says how many cards are still due when the round is ended early", async () => {
+    const words = [word(1), word(2), word(3)];
+    let current = state(words);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState: async () => current,
+      answer: async (message) => ({
+        ok: true as const,
+        word: { ...words[0], box: 1, dueAt: NOW + 24 * HOUR, id: message.id },
+      }),
+      now: () => NOW,
+    });
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    // The committed card is now due tomorrow; the other two are still due.
+    current = state([
+      { ...words[0], box: 1, dueAt: NOW + 24 * HOUR },
+      words[1],
+      words[2],
+    ]);
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("本轮先到这");
+    });
+    expect(root.textContent).toContain("还有 2 个到期");
+    expect(root.textContent).not.toContain("今天没有要复习的词");
+    expect(root.querySelector(".ilmt-review-continue")).toBeTruthy();
+  });
+
+  it("counts tomorrow's card in the all-done state", async () => {
+    const { root, view } = mount([word(1, { dueAt: NOW + HOUR })]);
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("今天没有要复习的词");
+    expect(root.textContent).toContain("明日还有 1 个");
+    expect(root.querySelector(".ilmt-review-continue")).toBeNull();
+  });
+
+  it("names 认识 instead of 答对 in the round summary", async () => {
+    const words = [word(1), word(2)];
+    const { root, view } = mount(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-grade="hard"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done")).toBeTruthy();
+    });
+    expect(root.querySelector(".ilmt-review-done-summary")?.textContent).toBe(
+      "本轮 2 个 · 认识 1",
+    );
+    expect(root.textContent).not.toContain("答对");
+  });
+
+  it("omits the summary line when nothing was answered and nothing is due", async () => {
+    const { root, view } = mount([word(1, { dueAt: NOW + 48 * HOUR })]);
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-done-summary")).toBeNull();
+    expect(root.textContent).not.toContain("本轮");
+    expect(root.textContent).not.toContain("明日还有 0 个");
   });
 });
 
@@ -549,6 +672,247 @@ describe("reveal after grading", () => {
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     });
+  });
+});
+
+describe("grade previews", () => {
+  it("labels every grade with its next-due time, and explains the numbers once", async () => {
+    const { root, view } = mount([word(1)]);
+    await view.refresh();
+
+    const again = root.querySelector<HTMLElement>('[data-grade="again"]')!;
+    const hard = root.querySelector<HTMLElement>('[data-grade="hard"]')!;
+    const good = root.querySelector<HTMLElement>('[data-grade="good"]')!;
+
+    expect(again.textContent).toContain("忘了");
+    expect(again.textContent).toContain("10 分钟后");
+    expect(hard.textContent).toContain("模糊");
+    expect(hard.textContent).toContain("10 分钟后");
+    expect(good.textContent).toContain("认识");
+    expect(good.textContent).toContain("明天");
+    for (const button of [again, hard, good]) {
+      expect(button.querySelector(".ilmt-review-grade-due")).toBeTruthy();
+    }
+
+    const notes = root.querySelectorAll(".ilmt-review-grade-note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].textContent).toBe("数字是下次见到它的时间");
+  });
+
+  it("keeps the second line on every button while the grade is re-picked", async () => {
+    const { root, view, answer } = mount([word(1)]);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    expect(root.querySelectorAll(".ilmt-review-grade-due")).toHaveLength(3);
+
+    root.querySelector<HTMLButtonElement>('[data-grade="hard"]')!.click();
+
+    expect(answer).not.toHaveBeenCalled();
+    expect(root.querySelectorAll(".ilmt-review-grade-due")).toHaveLength(3);
+    expect(root.querySelector('[data-grade="good"]')!.getAttribute("aria-pressed")).toBe("false");
+    expect(root.querySelector('[data-grade="hard"]')!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("states the derived consequence above 下一张 on a four-way card", async () => {
+    const words = [
+      word(1, {
+        surface: "outlive",
+        checksSinceSpot: 2,
+        dueAt: NOW - 5 * HOUR,
+        glosses: [{ lang: "zh", meaning: "比…活得久", source: "translation", at: NOW }],
+      }),
+      word(2, { glosses: [{ lang: "zh", meaning: "实际的", source: "translation", at: NOW }] }),
+      word(3, { glosses: [{ lang: "zh", meaning: "当前的", source: "translation", at: NOW }] }),
+      word(4, { glosses: [{ lang: "zh", meaning: "生存", source: "translation", at: NOW }] }),
+    ];
+    const right = mount(words);
+    await right.view.refresh();
+
+    [...right.root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")]
+      .find((option) => option.textContent === "比…活得久")!
+      .click();
+
+    const note = right.root.querySelector<HTMLElement>(".ilmt-review-next-note")!;
+    expect(note.textContent).toBe("记为认识 · 明天再见");
+    expect(note.nextElementSibling).toBe(right.root.querySelector(".ilmt-review-next"));
+    expect(right.root.querySelector(".ilmt-review-grade")).toBeNull();
+    expect(right.answer).not.toHaveBeenCalled();
+    right.view.destroy();
+
+    // A wrong pick derives 忘了, and the note says so before 下一张 writes it.
+    const wrong = mount(words);
+    await wrong.view.refresh();
+    [...wrong.root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")]
+      .find((option) => option.textContent === "实际的")!
+      .click();
+    expect(wrong.root.querySelector(".ilmt-review-next-note")?.textContent).toBe(
+      "记为忘了 · 10 分钟后再见",
+    );
+    expect(wrong.answer).not.toHaveBeenCalled();
+    wrong.view.destroy();
+  });
+});
+
+describe("receipt and undo", () => {
+  async function commitFirst(root: HTMLElement): Promise<void> {
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
+  }
+
+  it("shows what was written and offers one undo after 下一张", async () => {
+    const { root, view, undo } = mountStored([word(1), word(2)]);
+    await view.refresh();
+    await commitFirst(root);
+
+    const receipt = root.querySelector<HTMLElement>(".ilmt-review-receipt")!;
+    expect(receipt.textContent).toContain("已记录");
+    expect(receipt.textContent).toContain("明天再见");
+    expect(receipt.getAttribute("role")).toBe("status");
+    const button = receipt.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo");
+    expect(button?.textContent).toBe("撤销");
+    expect(undo).not.toHaveBeenCalled();
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+  });
+
+  it("undoes once, rolls the counters back and returns focus to the card", async () => {
+    const { root, view, answer, undo } = mountStored([word(1), word(2)]);
+    await view.refresh();
+    await commitFirst(root);
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-receipt")).toBeNull();
+    });
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 2");
+    });
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(undo).toHaveBeenCalledWith({ type: "review-undo", id: "en:word1" });
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
+    // The returned card is idle: answer closed, all three grades clickable.
+    expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(3);
+    expect(root.querySelector(".ilmt-review-next")).toBeNull();
+    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-card"));
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the receipt and invites a retry after a transient failure", async () => {
+    const { root, view, answer } = mountStored([word(1), word(2)], {
+      undo: async () => ({ ok: false }),
+    });
+    await view.refresh();
+    await commitFirst(root);
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-receipt")?.textContent).toContain("撤销失败");
+    });
+    expect(root.querySelector(".ilmt-review-receipt")?.textContent).toContain("再试一次");
+    expect(root.querySelector(".ilmt-review-receipt-undo")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a thrown undo call as transient and keeps the button", async () => {
+    const { root, view } = mountStored([word(1), word(2)], {
+      undo: async () => {
+        throw new Error("offline");
+      },
+    });
+    await view.refresh();
+    await commitFirst(root);
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-receipt")?.textContent).toContain("撤销失败");
+    });
+    expect(root.querySelector(".ilmt-review-receipt-undo")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+  });
+
+  it.each(["too-old", "unsupported", "not-latest", "unknown-word"] as const)(
+    "stops asking after the terminal reason %s",
+    async (reason) => {
+      const { root, view } = mountStored([word(1), word(2)], {
+        undo: async () => ({ ok: false, reason }),
+      });
+      await view.refresh();
+      await commitFirst(root);
+
+      root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+      await vi.waitFor(() => {
+        expect(root.querySelector(".ilmt-review-receipt")?.textContent).toBe("这张改不回来了");
+      });
+      expect(root.querySelector(".ilmt-review-receipt-undo")).toBeNull();
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 2");
+    },
+  );
+
+  it("brings a four-way card back as an idle card and does not re-ask it", async () => {
+    const words = [
+      word(1, {
+        surface: "outlive",
+        checksSinceSpot: 2,
+        dueAt: NOW - 5 * HOUR,
+        glosses: [{ lang: "zh", meaning: "比…活得久", source: "translation", at: NOW }],
+      }),
+      word(2, { glosses: [{ lang: "zh", meaning: "实际的", source: "translation", at: NOW }] }),
+      word(3, { glosses: [{ lang: "zh", meaning: "当前的", source: "translation", at: NOW }] }),
+      word(4, { glosses: [{ lang: "zh", meaning: "生存", source: "translation", at: NOW }] }),
+    ];
+    const { root, view } = mountStored(words);
+    await view.refresh();
+    expect(root.querySelectorAll(".ilmt-review-option")).toHaveLength(4);
+
+    [...root.querySelectorAll<HTMLButtonElement>(".ilmt-review-option")]
+      .find((option) => option.textContent === "比…活得久")!
+      .click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
+    });
+    expect(root.querySelectorAll(".ilmt-review-option")).toHaveLength(0);
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(3);
+  });
+
+  it("undoes from the finish page without resetting the round", async () => {
+    const words = [word(1), word(2), word(3)];
+    const { root, view } = mountStored(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-grade="hard"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("本轮先到这");
+    });
+    expect(root.querySelector(".ilmt-review-receipt")?.textContent).toContain("10 分钟后再见");
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done")).toBeNull();
+    });
+    expect(root.querySelector(".ilmt-review-receipt")).toBeNull();
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(3);
   });
 });
 

@@ -65,6 +65,16 @@ export interface EffectSettings {
 export type LearningGrade = "again" | "hard" | "good";
 export type WordStatus = "learning" | "mastered";
 
+/** Scheduling state captured before a review, so the review can be undone once. */
+export interface ReviewSnapshot {
+  box: number;
+  dueAt: number | null;
+  status: WordStatus;
+  reviewsCount: number;
+  correctCount: number;
+  checksSinceSpot: number;
+}
+
 export interface ReviewEntry {
   at: number;
   grade: LearningGrade;
@@ -73,6 +83,8 @@ export interface ReviewEntry {
   spotCorrect?: boolean;
   termLang?: string;
   glossLang?: string;
+  /** Pre-review snapshot; only the newest entry of a word keeps one. */
+  before?: ReviewSnapshot;
 }
 
 /** One memorisation picture for a word, generated once and kept. */
@@ -366,6 +378,19 @@ export interface ReviewAnswerResponse {
   ok: true;
   word: LearningWord;
 }
+
+/** Side panel → background: undo the most recent review, at most once. */
+export interface ReviewUndoMessage {
+  type: "review-undo";
+  id: string;
+}
+
+export type ReviewUndoFailure = "unknown-word" | "not-latest" | "unsupported" | "too-old";
+
+export type ReviewUndoResponse =
+  | { ok: true; word: LearningWord }
+  /** No `reason` means a transient failure; the panel may offer a retry. */
+  | { ok: false; reason?: ReviewUndoFailure };
 
 /** Ask for the one-line picture the review scene performs. Cached per word. */
 export interface MnemonicMessage {

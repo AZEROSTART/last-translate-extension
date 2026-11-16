@@ -2,6 +2,7 @@ import {
   applyReviewAnswer,
   getLearning,
   mergeLearnedWord,
+  undoReviewAnswer,
 } from "../shared/learning-storage";
 import { formatDueLabel } from "../shared/srs";
 import type {
@@ -10,6 +11,8 @@ import type {
   MnemonicMessage,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
+  ReviewUndoMessage,
+  ReviewUndoResponse,
 } from "../shared/types";
 import { createMnemonicDeps, generateMnemonic } from "./mnemonic";
 import { runLearningUpdate } from "./storage-queue";
@@ -18,6 +21,7 @@ import { refreshBadge } from "./badge";
 const LEARNING_TYPES = new Set([
   "learn-word",
   "review-answer",
+  "review-undo",
   "get-learning",
   "lookup-gloss",
   "mnemonic",
@@ -61,6 +65,21 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
       });
       if (!word) return { ok: false };
       const response: ReviewAnswerResponse = { ok: true, word };
+      void refreshBadge();
+      return response;
+    }
+    case "review-undo": {
+      const input = msg as ReviewUndoMessage;
+      const now = Date.now();
+      const undone = await runLearningUpdate((state) => {
+        const next = undoReviewAnswer(state, input, now);
+        return { state: next.state, result: next };
+      });
+      if (!undone.word) {
+        const response: ReviewUndoResponse = { ok: false, reason: undone.reason };
+        return response;
+      }
+      const response: ReviewUndoResponse = { ok: true, word: undone.word };
       void refreshBadge();
       return response;
     }

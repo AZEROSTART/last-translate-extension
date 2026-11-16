@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { handleLearningMessage } from "../../src/background/learning";
+import { handleLearningMessage, isLearningMessageType } from "../../src/background/learning";
 import { getLearning } from "../../src/shared/learning-storage";
 
 beforeEach(() => chrome.storage.local.clear());
@@ -69,6 +69,45 @@ describe("handleLearningMessage", () => {
     expect(await handleLearningMessage({ type: "review-answer", id: "en:none", grade: "good" })).toEqual({
       ok: false,
     });
+  });
+
+  it("undoes the last review through the background and persists the rollback", async () => {
+    await handleLearningMessage(learn);
+    const stored = (await getLearning()).words[0];
+    const dueAtBefore = stored.dueAt;
+
+    const answered = (await handleLearningMessage({
+      type: "review-answer",
+      id: "en:outlive",
+      grade: "good",
+    })) as { ok: true; word: { box: number } };
+    expect(answered.word.box).toBe(1);
+
+    expect(isLearningMessageType("review-undo")).toBe(true);
+    const undone = (await handleLearningMessage({ type: "review-undo", id: "en:outlive" })) as {
+      ok: true;
+      word: { box: number; dueAt: number | null };
+    };
+    expect(undone.ok).toBe(true);
+    expect(undone.word.box).toBe(0);
+    expect(undone.word.dueAt).toBe(dueAtBefore);
+
+    const state = await getLearning();
+    expect(state.words[0].box).toBe(0);
+    expect(state.words[0].reviews).toHaveLength(0);
+    expect(state.stats.todayReviewed).toBe(0);
+  });
+
+  it("reports the undo failure reason for an unknown word", async () => {
+    const response = await handleLearningMessage({ type: "review-undo", id: "en:none" });
+    expect(response).toEqual({ ok: false, reason: "unknown-word" });
+  });
+
+  it("does not treat unrelated messages as learning messages", () => {
+    expect(isLearningMessageType("review-undo")).toBe(true);
+    expect(isLearningMessageType("review-answer")).toBe(true);
+    expect(isLearningMessageType("something-else")).toBe(false);
+    expect(isLearningMessageType(null)).toBe(false);
   });
 
   it("serves the whole learning state", async () => {

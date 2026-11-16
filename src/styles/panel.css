@@ -524,13 +524,68 @@ button:focus-visible {
 
 .ilmt-review-grade {
   appearance: none;
-  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 48px;
   border: 1px solid var(--ilmt-border-soft);
   border-radius: 8px;
   background: var(--ilmt-input);
   color: var(--ilmt-text);
   font: inherit;
   cursor: pointer;
+}
+
+.ilmt-review-grade-word {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.ilmt-review-grade-due {
+  color: var(--ilmt-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ilmt-review-grade-note,
+.ilmt-review-next-note {
+  margin: 0;
+  color: var(--ilmt-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ilmt-review-receipt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(45, 212, 191, 0.08);
+  font-size: 13px;
+}
+
+.ilmt-review-receipt-undo {
+  appearance: none;
+  min-height: 28px;
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--ilmt-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-review-receipt-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .ilmt-review-grade[data-grade="good"] {

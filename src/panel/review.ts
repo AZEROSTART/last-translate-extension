@@ -8,7 +8,7 @@
  */
 
 import { getLearning } from "../shared/learning-storage";
-import { dueCount } from "../shared/srs";
+import { dueCount, formatDueLabel, isDue, previewDueLabel } from "../shared/srs";
 import { buildSpotQuestion, shouldSpotCheck, type SpotQuestion } from "../shared/spot";
 import type {
   LearningGrade,
@@ -17,6 +17,9 @@ import type {
   MnemonicResponse,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
+  ReviewUndoFailure,
+  ReviewUndoMessage,
+  ReviewUndoResponse,
 } from "../shared/types";
 import { getEffect, getEffects } from "../content/effects";
 import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
@@ -65,6 +68,8 @@ function writeSession(key: string, value: string): void {
 export interface ReviewDeps {
   getState(): Promise<LearningState>;
   answer(message: ReviewAnswerMessage): Promise<ReviewAnswerResponse>;
+  /** Undo the last committed review; the background restores the snapshot. */
+  undo(message: ReviewUndoMessage): Promise<ReviewUndoResponse>;
   /** One line of memorisation imagery for a word; cached by the background. */
   mnemonic(id: string): Promise<MnemonicResponse>;
   /** Never undefined when at least one effect is registered. */
@@ -102,6 +107,15 @@ async function defaultAnswer(message: ReviewAnswerMessage): Promise<ReviewAnswer
   }
 }
 
+async function defaultUndo(message: ReviewUndoMessage): Promise<ReviewUndoResponse> {
+  try {
+    const response = await chrome.runtime.sendMessage(message);
+    return (response ?? { ok: false }) as ReviewUndoResponse;
+  } catch {
+    return { ok: false };
+  }
+}
+
 function defaultEffect(id?: string): ClaimEffect {
   const all = getEffects();
   return (id ? getEffect(id) : undefined) ?? all[0];
@@ -135,6 +149,21 @@ interface SceneState {
   caption?: string;
 }
 
+/** The one receipt kept after a successful commit; depth is fixed at one. */
+interface Receipt {
+  id: string;
+  grade: LearningGrade;
+  text: string;
+  undoable: boolean;
+}
+
+const TERMINAL_UNDO_REASONS: ReviewUndoFailure[] = [
+  "too-old",
+  "unsupported",
+  "not-latest",
+  "unknown-word",
+];
+
 interface ReviewState {
   all: LearningState | null;
   queue: LearningWord[];
@@ -153,6 +182,8 @@ interface ReviewState {
   spotResult: { chosen: number; correct: boolean } | null;
   /** The exact question that was answered, frozen so a re-render cannot reshuffle it. */
   spotQuestion: SpotQuestion | null;
+  /** Last committed card; replaced by the next commit and dropped on undo. */
+  receipt: Receipt | null;
 }
 
 /** Ask the background for the scene caption; any failure is a quiet one. */
@@ -170,6 +201,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
     answer: over.answer ?? defaultAnswer,
+    undo: over.undo ?? defaultUndo,
     mnemonic: over.mnemonic ?? defaultMnemonic,
     effect: over.effect ?? defaultEffect,
     now: over.now ?? (() => Date.now()),
@@ -193,6 +225,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     ended: false,
     spotResult: null,
     spotQuestion: null,
+    receipt: null,
   };
 
   let destroyed = false;
@@ -205,6 +238,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   /** Remembered per word so switching cards or grading never re-requests. */
   const scenes = new Map<string, SceneState>();
   const sceneRequests = new Set<string>();
+  /** Undone words this round: never re-ask the question we just rolled back. */
+  const suppressedSpot = new Set<string>();
   /** The word whose scene already performed, so re-renders do not replay it. */
   let playedFor: string | null = null;
 
@@ -475,6 +510,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     sceneEffect = null;
     const card = document.createElement("div");
     card.className = "ilmt-review-card";
+    card.tabIndex = -1;
     const word = current();
     if (!word) return;
 
@@ -547,7 +583,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // question is frozen: changing the answer language must not re-derive it.
     const question =
       state.spotQuestion ??
-      (shouldSpotCheck(word)
+      (shouldSpotCheck(word) && !suppressedSpot.has(word.id)
         ? buildSpotQuestion(
             word,
             state.all?.words ?? [],
@@ -571,6 +607,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   function renderGrades(card: HTMLElement): void {
+    const word = current();
+    if (!word) return;
+    const now = deps.now();
     const grades = document.createElement("div");
     grades.className = "ilmt-review-grades";
     const buttons: Array<[LearningGrade, string]> = [
@@ -583,8 +622,15 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       button.type = "button";
       button.className = "ilmt-review-grade";
       button.dataset.grade = grade;
-      button.textContent = label;
       button.disabled = state.busy;
+      const name = document.createElement("span");
+      name.className = "ilmt-review-grade-word";
+      name.textContent = label;
+      // The consequence is visible before the choice, not after it.
+      const due = document.createElement("span");
+      due.className = "ilmt-review-grade-due";
+      due.textContent = previewDueLabel(word, grade, now);
+      button.append(name, due);
       const active = state.pending === grade;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
@@ -592,9 +638,20 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       grades.appendChild(button);
     }
     card.appendChild(grades);
+
+    const note = document.createElement("p");
+    note.className = "ilmt-review-grade-note";
+    note.textContent = "数字是下次见到它的时间";
+    card.appendChild(note);
   }
 
-  function renderNext(card: HTMLElement): void {
+  function renderNext(card: HTMLElement, note?: string): void {
+    if (note) {
+      const caption = document.createElement("p");
+      caption.className = "ilmt-review-next-note";
+      caption.textContent = note;
+      card.appendChild(caption);
+    }
     const next = document.createElement("button");
     next.type = "button";
     next.className = "ilmt-review-next";
@@ -602,6 +659,15 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     next.disabled = state.busy;
     next.addEventListener("click", () => void commit());
     card.appendChild(next);
+  }
+
+  /** `记为认识 · 明天再见` for the card whose grade was derived, not picked. */
+  function gradeConsequence(grade: LearningGrade): string {
+    const word = current();
+    if (!word) return "";
+    const labels: Record<LearningGrade, string> = { again: "忘了", hard: "模糊", good: "认识" };
+    const due = previewDueLabel(word, grade, deps.now());
+    return `记为${labels[grade]} · ${due}${due === "已毕业" ? "" : "再见"}`;
   }
 
   function renderSpot(word: LearningWord, card: HTMLElement, question: SpotQuestion): void {
@@ -634,39 +700,48 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // One tap away before the check; always open once the card is graded.
     renderAnswer(word, card, "查看完整例句与全部释义");
 
-    if (result) renderNext(card);
+    if (result) renderNext(card, state.pending ? gradeConsequence(state.pending) : undefined);
   }
 
   function renderFinish(): void {
     const card = document.createElement("div");
     card.className = "ilmt-review-done";
 
-    const title = document.createElement("p");
-    title.className = "ilmt-review-done-title";
-    title.textContent = "今天没有要复习的词";
-    card.appendChild(title);
-
     const now = deps.now();
-    const tomorrow = (state.all?.words ?? []).filter(
-      (word) =>
-        word.status === "learning" &&
-        word.dueAt !== null &&
-        word.dueAt > now &&
-        word.dueAt <= now + 24 * 60 * 60 * 1000,
-    ).length;
-    const summary = document.createElement("p");
-    summary.className = "ilmt-review-done-summary";
-    summary.textContent = `本轮 ${state.answered} 个 · 答对 ${state.correct} · 明日还有 ${tomorrow} 个`;
-    card.appendChild(summary);
+    const words = state.all?.words ?? [];
+    const todayReviewed = state.all?.stats.todayReviewed ?? 0;
 
-    const today = document.createElement("p");
-    today.className = "ilmt-review-done-today";
-    today.textContent = `今天已复习 ${state.all?.stats.todayReviewed ?? 0} 个`;
-    card.appendChild(today);
+    // A: nothing has ever been claimed. The three zeros were never the point.
+    if (words.length === 0) {
+      const title = document.createElement("p");
+      title.className = "ilmt-review-done-title";
+      title.textContent = "还没有收录的词";
+      const guide = document.createElement("p");
+      guide.className = "ilmt-review-done-summary";
+      guide.textContent = "翻译一页英文，把鼠标移到浅灰标记的词上，点卡片里的角色就能收进来。";
+      const first = document.createElement("p");
+      first.className = "ilmt-review-done-today";
+      first.textContent = "翻译当前页：⌥A";
+      card.append(title, guide, first);
+      container.appendChild(card);
+      return;
+    }
 
-    // The user ended the round explicitly: offer a way back in without
-    // reopening the panel, since the queue is no longer rebuilt from storage.
-    if (state.ended) {
+    const remaining = words.filter((word) => isDue(word, now)).length;
+
+    // B: the user stopped early and work is genuinely left.
+    if (state.ended && remaining > 0) {
+      const title = document.createElement("p");
+      title.className = "ilmt-review-done-title";
+      title.textContent = "本轮先到这";
+      const summary = document.createElement("p");
+      summary.className = "ilmt-review-done-summary";
+      summary.textContent = `还有 ${remaining} 个到期`;
+      const today = document.createElement("p");
+      today.className = "ilmt-review-done-today";
+      today.textContent = `今天已复习 ${todayReviewed} 个`;
+      card.append(title, summary, today);
+
       const again = document.createElement("button");
       again.type = "button";
       again.className = "ilmt-review-continue";
@@ -675,12 +750,65 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         state.ended = false;
         state.answered = 0;
         state.correct = 0;
+        state.receipt = null;
+        suppressedSpot.clear();
         void refresh();
       });
       card.appendChild(again);
+      container.appendChild(card);
+      return;
     }
 
+    // C: today really is done.
+    const title = document.createElement("p");
+    title.className = "ilmt-review-done-title";
+    title.textContent = "今天没有要复习的词";
+    card.appendChild(title);
+
+    const tomorrow = words.filter(
+      (word) => word.status === "learning" && word.dueAt !== null && word.dueAt > now &&
+        word.dueAt <= now + 24 * 60 * 60 * 1000,
+    ).length;
+    const parts: string[] = [];
+    if (state.answered > 0) parts.push(`本轮 ${state.answered} 个 · 认识 ${state.correct}`);
+    if (tomorrow > 0) parts.push(`明日还有 ${tomorrow} 个`);
+    if (parts.length > 0) {
+      const summary = document.createElement("p");
+      summary.className = "ilmt-review-done-summary";
+      summary.textContent = parts.join(" · ");
+      card.appendChild(summary);
+    }
+
+    const today = document.createElement("p");
+    today.className = "ilmt-review-done-today";
+    today.textContent = `今天已复习 ${todayReviewed} 个`;
+    card.appendChild(today);
+
     container.appendChild(card);
+  }
+
+  /** One line above the card: what was just written, and one way back. */
+  function renderReceipt(): HTMLElement {
+    const receipt = state.receipt!;
+    const row = document.createElement("div");
+    row.className = "ilmt-review-receipt";
+    row.setAttribute("role", "status");
+    row.setAttribute("aria-live", "polite");
+
+    const text = document.createElement("span");
+    text.textContent = receipt.text;
+    row.appendChild(text);
+
+    if (receipt.undoable) {
+      const undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "ilmt-review-receipt-undo";
+      undo.textContent = "撤销";
+      undo.disabled = state.busy;
+      undo.addEventListener("click", () => void undoLast());
+      row.appendChild(undo);
+    }
+    return row;
   }
 
   function render(): void {
@@ -689,6 +817,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     mountedEffect?.destroy();
     mountedEffect = null;
     container.replaceChildren(...renderFilters());
+    if (state.receipt) container.appendChild(renderReceipt());
     if (!current()) {
       renderFinish();
       return;
@@ -789,6 +918,17 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
 
     state.answered += 1;
     if (grade === "good") state.correct += 1;
+    const dueAt = response.word?.dueAt ?? null;
+    // Anchor to the write's own timestamp: the panel's clock is a few ms later
+    // than the background's, which would turn "明天" into "24 小时后".
+    const recordedAt = response.word?.updatedAt ?? deps.now();
+    const due = formatDueLabel(dueAt, recordedAt);
+    state.receipt = {
+      id: word.id,
+      grade,
+      text: `已记录 · ${due}${dueAt === null ? "" : "再见"}`,
+      undoable: true,
+    };
     state.queue.shift();
     state.revealed = false;
     state.pending = null;
@@ -799,12 +939,65 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   /**
+   * Undo the last committed card, once. The background restores the snapshot;
+   * counts roll back here, and the queue is rebuilt from storage so the same
+   * card returns in its idle state.
+   */
+  async function undoLast(): Promise<void> {
+    const receipt = state.receipt;
+    if (!receipt || !receipt.undoable || state.busy || destroyed) return;
+    state.busy = true;
+    render();
+
+    let response: ReviewUndoResponse;
+    try {
+      response = await deps.undo({ type: "review-undo", id: receipt.id });
+    } catch {
+      response = { ok: false };
+    }
+    if (destroyed) return;
+    state.busy = false;
+
+    if (!response || response.ok !== true) {
+      const reason = response && response.ok === false ? response.reason : undefined;
+      const terminal = reason !== undefined && TERMINAL_UNDO_REASONS.includes(reason);
+      state.receipt = terminal
+        ? { ...receipt, text: "这张改不回来了", undoable: false }
+        : { ...receipt, text: "撤销失败 · 再试一次", undoable: true };
+      render();
+      return;
+    }
+
+    state.receipt = null;
+    state.answered = Math.max(0, state.answered - 1);
+    if (receipt.grade === "good") state.correct = Math.max(0, state.correct - 1);
+    suppressedSpot.add(receipt.id);
+    // Undo brings the card back even after 结束, without resetting this round.
+    state.ended = false;
+    state.pending = null;
+    state.revealed = false;
+    state.spotResult = null;
+    state.spotQuestion = null;
+    render();
+    await refresh();
+    if (!destroyed) container.querySelector<HTMLElement>(".ilmt-review-card")?.focus();
+  }
+
+  /**
    * End the round. A visible grade still counts, so commit it first; the latch
    * keeps the write's own storage reload from putting the next card back.
    */
   async function endRound(): Promise<void> {
     state.ended = true;
     if (state.pending !== null) await commit();
+    // One explicit local read so "还有 N 个到期" is not a stale snapshot; the
+    // write above has landed, and nothing else refreshes the finish page.
+    try {
+      state.all = await deps.getState();
+    } catch {
+      // Keep the last snapshot; the finish page can only tell the truth it has.
+    }
+    if (destroyed) return;
     state.queue = [];
     state.revealed = false;
     state.pending = null;

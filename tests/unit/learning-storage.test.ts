@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   MAX_WORDS,
+  UNDO_WINDOW_MS,
   applyReviewAnswer,
   emptyLearningState,
   getLearning,
   mergeLearnedWord,
   parseLearningState,
   saveLearning,
+  undoReviewAnswer,
   wordId,
 } from "../../src/shared/learning-storage";
 import type { LearnWordMessage, LearningState, LearningWord } from "../../src/shared/types";
@@ -198,6 +200,127 @@ describe("applyReviewAnswer", () => {
     const result = applyReviewAnswer(state, { id: "en:missing", grade: "good" }, NOW);
     expect(result.word).toBeNull();
     expect(result.state).toBe(state);
+  });
+});
+
+describe("review snapshots and undo", () => {
+  function snapshotOf(word: LearningWord) {
+    return {
+      box: word.box,
+      dueAt: word.dueAt,
+      status: word.status,
+      reviewsCount: word.reviewsCount,
+      correctCount: word.correctCount,
+      checksSinceSpot: word.checksSinceSpot,
+    };
+  }
+
+  it("stores the pre-review state and keeps only the newest snapshot", () => {
+    let state = mergeLearnedWord(emptyLearningState(), learn(), NOW).state;
+    const before = snapshotOf(state.words[0]);
+
+    state = applyReviewAnswer(state, { id: "en:outlive", grade: "good" }, NOW + 1000).state;
+    expect(state.words[0].reviews.at(-1)?.before).toEqual(before);
+
+    const afterFirst = snapshotOf(state.words[0]);
+    state = applyReviewAnswer(state, { id: "en:outlive", grade: "hard" }, NOW + 2000).state;
+
+    const reviews = state.words[0].reviews;
+    expect(reviews).toHaveLength(2);
+    expect(reviews[0].before).toBeUndefined();
+    expect(reviews[1].before).toEqual(afterFirst);
+    expect(reviews.filter((entry) => entry.before)).toHaveLength(1);
+  });
+
+  it("restores every scheduling field and the counts", () => {
+    let state = mergeLearnedWord(emptyLearningState(), learn(), NOW).state;
+    const before = snapshotOf(state.words[0]);
+    state = applyReviewAnswer(
+      state,
+      { id: "en:outlive", grade: "good", spot: true, spotCorrect: true },
+      NOW + 1000,
+    ).state;
+    expect(state.stats.todayReviewed).toBe(1);
+
+    const undone = undoReviewAnswer(state, { id: "en:outlive" }, NOW + 2000);
+
+    expect(undone.reason).toBeUndefined();
+    expect(undone.word).not.toBeNull();
+    const word = undone.state.words[0];
+    expect(snapshotOf(word)).toEqual(before);
+    expect(word.reviews).toHaveLength(0);
+    expect(undone.state.stats.todayReviewed).toBe(0);
+  });
+
+  it("refuses an unknown word and leaves the state untouched", () => {
+    const state = mergeLearnedWord(emptyLearningState(), learn(), NOW).state;
+    const result = undoReviewAnswer(state, { id: "en:missing" }, NOW);
+
+    expect(result).toMatchObject({ word: null, reason: "unknown-word" });
+    expect(result.state).toBe(state);
+  });
+
+  it("refuses a word with no reviews at all", () => {
+    const state = mergeLearnedWord(emptyLearningState(), learn(), NOW).state;
+    const result = undoReviewAnswer(state, { id: "en:outlive" }, NOW);
+
+    expect(result).toMatchObject({ word: null, reason: "not-latest" });
+    expect(result.state).toBe(state);
+  });
+
+  it("refuses an entry written before snapshots existed", () => {
+    const legacy = makeWord(1, {
+      reviews: [{ at: NOW, grade: "good", box: 1 }],
+      reviewsCount: 1,
+      box: 1,
+      dueAt: NOW + 24 * 60 * 60 * 1000,
+    });
+    const state: LearningState = {
+      version: 1,
+      words: [legacy],
+      stats: { day: "", todayReviewed: 0 },
+      updatedAt: NOW,
+    };
+
+    const result = undoReviewAnswer(state, { id: legacy.id }, NOW);
+
+    expect(result).toMatchObject({ word: null, reason: "unsupported" });
+    expect(result.state).toBe(state);
+  });
+
+  it("refuses an entry older than the ten-minute window", () => {
+    let state = mergeLearnedWord(emptyLearningState(), learn(), NOW).state;
+    state = applyReviewAnswer(state, { id: "en:outlive", grade: "good" }, NOW).state;
+
+    const fresh = undoReviewAnswer(state, { id: "en:outlive" }, NOW + UNDO_WINDOW_MS);
+    expect(fresh.word).not.toBeNull();
+
+    const stale = undoReviewAnswer(state, { id: "en:outlive" }, NOW + UNDO_WINDOW_MS + 1);
+    expect(stale).toMatchObject({ word: null, reason: "too-old" });
+    expect(stale.state).toBe(state);
+  });
+
+  it("parses a snapshot, and only drops the snapshot when it is malformed", () => {
+    const before = snapshotOf(makeWord(2));
+    const entry = { at: NOW, grade: "good" as const, box: 1, before };
+
+    const kept = parseLearningState({
+      words: [{ ...makeWord(1), reviews: [entry] }],
+    });
+    expect(kept.words[0].reviews[0].before).toEqual(before);
+
+    const broken = parseLearningState({
+      words: [{ ...makeWord(1), reviews: [{ ...entry, before: { ...before, box: "1" } }] }],
+    });
+    expect(broken.words[0].reviews).toHaveLength(1);
+    expect(broken.words[0].reviews[0].before).toBeUndefined();
+
+    const legacy = parseLearningState({
+      words: [{ ...makeWord(1), reviews: [{ at: NOW, grade: "good", box: 1 }] }],
+    });
+    expect(legacy.words[0].reviews).toHaveLength(1);
+    expect(legacy.words[0].reviews[0].before).toBeUndefined();
+    expect(legacy.words[0].id).toBe("en:word1");
   });
 });
 

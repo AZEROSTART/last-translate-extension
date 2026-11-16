@@ -5,6 +5,8 @@ import type {
   LearningState,
   LearningWord,
   ReviewEntry,
+  ReviewSnapshot,
+  ReviewUndoFailure,
   WordContext,
   WordGloss,
 } from "./types";
@@ -86,6 +88,24 @@ function parseContexts(value: unknown): WordContext[] {
   return out.slice(-MAX_CONTEXTS);
 }
 
+function parseSnapshot(value: unknown): ReviewSnapshot | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.box !== "number" || !Number.isFinite(value.box)) return undefined;
+  const dueAt = value.dueAt;
+  if (dueAt !== null && (typeof dueAt !== "number" || !Number.isFinite(dueAt))) return undefined;
+  const status = value.status;
+  if (status !== "learning" && status !== "mastered") return undefined;
+  const counts = ["reviewsCount", "correctCount", "checksSinceSpot"] as const;
+  const parsed: number[] = [];
+  for (const key of counts) {
+    const count = value[key];
+    if (typeof count !== "number" || !Number.isFinite(count)) return undefined;
+    parsed.push(count);
+  }
+  const [reviewsCount, correctCount, checksSinceSpot] = parsed;
+  return { box: value.box, dueAt, status, reviewsCount, correctCount, checksSinceSpot };
+}
+
 function parseReviews(value: unknown): ReviewEntry[] {
   if (!Array.isArray(value)) return [];
   const out: ReviewEntry[] = [];
@@ -102,6 +122,9 @@ function parseReviews(value: unknown): ReviewEntry[] {
     if (typeof item.spotCorrect === "boolean") entry.spotCorrect = item.spotCorrect;
     if (typeof item.termLang === "string") entry.termLang = item.termLang;
     if (typeof item.glossLang === "string") entry.glossLang = item.glossLang;
+    // A broken snapshot drops the undo offer, never the entry itself.
+    const before = parseSnapshot(item.before);
+    if (before) entry.before = before;
     out.push(entry);
   }
   return out.slice(-MAX_REVIEWS);
@@ -315,6 +338,14 @@ export function applyReviewAnswer(
     box: graded.box,
     termLang: existing.termLang,
     glossLang: input.glossLang ?? existing.glossLang,
+    before: {
+      box: existing.box,
+      dueAt: existing.dueAt,
+      status: existing.status,
+      reviewsCount: existing.reviewsCount,
+      correctCount: existing.correctCount,
+      checksSinceSpot: existing.checksSinceSpot,
+    },
   };
   if (input.spot !== undefined) entry.spot = input.spot;
   if (input.spotCorrect !== undefined) entry.spotCorrect = input.spotCorrect;
@@ -324,7 +355,8 @@ export function applyReviewAnswer(
     status: graded.status,
     box: graded.box,
     dueAt: graded.dueAt,
-    reviews: [...existing.reviews, entry].slice(-MAX_REVIEWS),
+    // Exactly one snapshot per word: the newest entry keeps it, older ones lose it.
+    reviews: [...existing.reviews.map(withoutSnapshot), entry].slice(-MAX_REVIEWS),
     reviewsCount: existing.reviewsCount + 1,
     correctCount: existing.correctCount + (graded.correct ? 1 : 0),
     checksSinceSpot: input.spot ? 0 : existing.checksSinceSpot + 1,
@@ -346,6 +378,65 @@ export function applyReviewAnswer(
     },
     word,
   };
+}
+
+/** How long after a review its undo stays available. Not a UI countdown. */
+export const UNDO_WINDOW_MS = 10 * 60 * 1000;
+
+export interface UndoResult {
+  state: LearningState;
+  word: LearningWord | null;
+  reason?: ReviewUndoFailure;
+}
+
+function withoutSnapshot(entry: ReviewEntry): ReviewEntry {
+  if (!entry.before) return entry;
+  const { before: _previous, ...rest } = entry;
+  return rest;
+}
+
+/**
+ * Roll back the newest review of one word. One step only: the entry must still
+ * carry the snapshot written by `applyReviewAnswer`, and must be recent.
+ */
+export function undoReviewAnswer(
+  state: LearningState,
+  input: { id: string },
+  now: number,
+): UndoResult {
+  const existing = state.words.find((word) => word.id === input.id);
+  if (!existing) return { state, word: null, reason: "unknown-word" };
+
+  const last = existing.reviews.at(-1);
+  if (!last) return { state, word: null, reason: "not-latest" };
+  if (!last.before) return { state, word: null, reason: "unsupported" };
+  if (now - last.at > UNDO_WINDOW_MS) return { state, word: null, reason: "too-old" };
+
+  const before: ReviewSnapshot = last.before;
+  const word: LearningWord = {
+    ...existing,
+    box: before.box,
+    dueAt: before.dueAt,
+    status: before.status,
+    // Older entries already lost their snapshot; strip any legacy leftovers so
+    // undoing once cannot expose a second step.
+    reviews: existing.reviews.slice(0, -1).map(withoutSnapshot),
+    reviewsCount: before.reviewsCount,
+    correctCount: before.correctCount,
+    checksSinceSpot: before.checksSinceSpot,
+    updatedAt: now,
+  };
+
+  const sameDay = localDay(last.at) === localDay(now);
+  const nextState: LearningState = {
+    ...state,
+    words: state.words.map((item) => (item.id === word.id ? word : item)),
+    stats: sameDay
+      ? { ...state.stats, todayReviewed: Math.max(0, state.stats.todayReviewed - 1) }
+      : state.stats,
+    updatedAt: now,
+  };
+  return { state: nextState, word };
 }
 
 export async function getLearning(): Promise<LearningState> {

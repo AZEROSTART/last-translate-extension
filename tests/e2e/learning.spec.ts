@@ -167,10 +167,13 @@ test.describe("learning loop", () => {
 
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-sentence")).toContainText("____");
+      // Each grade already says when the word would return.
+      await expect(panel.locator('.ilmt-review-grade[data-grade="good"]')).toContainText("明天");
       await panel.locator('[data-grade="good"]').click();
 
       // The card stays put and opens the answer; nothing is written yet.
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
+      await expect(panel.locator('.ilmt-review-grade[data-grade="good"]')).toContainText("明天");
       await expect(panel.locator(".ilmt-review-meaning")).toContainText("比……存在得更久");
       await expect(panel.locator(".ilmt-review-meaning-more")).toContainText("sobrevivir a");
 
@@ -195,6 +198,7 @@ test.describe("learning loop", () => {
         .poll(async () => (await readWords(ext.worker))[0]?.mnemonic?.caption)
         .toBe("outlive 被猫抱进了怀里");
       await expect(panel.locator(".ilmt-review-done")).toContainText("今天没有要复习的词");
+      await expect(panel.locator(".ilmt-review-done")).not.toContainText("答对");
 
       // Answering advanced the card past today, so the badge is cleared.
       await expect
@@ -202,6 +206,57 @@ test.describe("learning loop", () => {
           timeout: 10_000,
         })
         .toBe("");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("undoes the last review and returns the same card", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      const extensionId = new URL(ext.worker.url()).host;
+      await claim(page.locator("[role=tooltip]"));
+
+      // Pretend ten minutes passed, and remember the due time we are rolling back to.
+      const beforeDueAt = await ext.worker.evaluate(async () => {
+        const stored = (await chrome.storage.local.get("learning")).learning as {
+          words: Array<{ dueAt: number | null }>;
+        };
+        stored.words[0].dueAt = Date.now() - 5000;
+        await chrome.storage.local.set({ learning: stored });
+        return stored.words[0].dueAt;
+      });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+      await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
+      await panel.locator('.panel-tab[data-view="review"]').click();
+
+      await panel.locator('[data-grade="good"]').click();
+      await panel.locator(".ilmt-review-next").click();
+
+      await expect
+        .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
+        .toBe(1);
+      const graded = await readWords(ext.worker);
+      expect(graded).toHaveLength(1);
+      expect(graded[0].dueAt).toBeGreaterThan(beforeDueAt ?? 0);
+
+      const receipt = panel.locator(".ilmt-review-receipt");
+      await expect(receipt).toContainText("已记录");
+      await expect(receipt).toContainText("明天再见");
+
+      await panel.locator(".ilmt-review-receipt-undo").click();
+
+      await expect
+        .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
+        .toBe(0);
+      const undone = await readWords(ext.worker);
+      expect(undone).toHaveLength(1);
+      expect(undone[0].dueAt).toBe(beforeDueAt);
+      await expect(panel.locator(".ilmt-review-receipt")).toHaveCount(0);
+      await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
+      await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
     } finally {
       await cleanup();
     }
