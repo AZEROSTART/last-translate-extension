@@ -244,19 +244,6 @@
   margin-top: 4px;
 }
 
-/* 译行：辅助灰，与释义同宽但不抢眼；前缀用更淡的灰 */
-.ilmt-gloss-translated-line {
-  margin-top: 2px;
-  color: #57606a;
-  font-size: 12px;
-  line-height: 1.35;
-  white-space: pre-wrap;
-}
-
-.ilmt-gloss-translated-label {
-  color: #6e7781;
-}
-
 /* 收录特效：宿主只负责定位，造型与动画在特效自己的 CSS 里 */
 .ilmt-gloss-effect-host {
   position: absolute;

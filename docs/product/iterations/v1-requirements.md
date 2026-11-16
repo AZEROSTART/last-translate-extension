@@ -2,7 +2,7 @@
 
 - 日期：2026-11-16
 - 迭代：v1 / 3
-- 状态：待开发（本轮只出需求，不改代码）
+- 状态：已交付（`8969a5b`；2026-11-16 复盘修订：卡片去掉译行，见 §8）
 - 主题（已定）：**翻译的可视化呈现更贴合、更精准**
 - 一句话：让「哪句对应哪句」「这个词在译文里怎么写」在页面上直接可见，同时把悬停卡压到不挡阅读。
 
@@ -88,7 +88,7 @@
 与正文逐字相同的英文例句；在页面底部附近悬停时，卡片下半截直接跑出屏幕。
 
 **期望行为**
-1. 卡面结构固定为三层，自上而下：词头（词 + 词性 + 收录状态）→ 本段释义 → 「译」行（由需求 2 提供）。
+1. 卡面结构固定为两层，自上而下：词头（词 + 词性 + 收录状态）→ 本段释义。译法不再重复进卡片，只在该段译文里点亮（需求 2）。
 2. 不再渲染原文例句：不生成 `.ilmt-gloss-example`，旧缓存里带 `example` 的注释也不显示。
 3. 卡片水平、垂直都夹在视口内，四周各留 8px；卡片与悬停词之间保持 8px 间距，不覆盖词本身。
 4. 宽度自适应：`max-width: min(280px, calc(100vw - 16px))`，320px 宽的侧栏里不横向溢出。
@@ -102,7 +102,7 @@
 | 1.2 | 视口高 300、卡高 120、词 `rect.top=280` 时 `8 ≤ top ≤ 172` 且卡片不遮词；词在视口顶部时同样 `top ≥ 8` | 单测（桩卡片 `getBoundingClientRect`） |
 | 1.3 | 320×600 视口下，滚动到 `#article-p10` 后悬停注释词，卡片 `boundingBox()` 满足 `x ≥ 0 && x+width ≤ 320 && y ≥ 0 && y+height ≤ 600` | E2E，`translate.spec.ts` |
 | 1.4 | 固定贴纸猫时卡片高度 `≤ 175`；固定地鼠或磁铁时 `≤ 155` | E2E（`boundingBox().height`） |
-| 1.5 | 卡内文本顺序为 词头 → 释义 → 译行，三层各至多一个节点（无重复释义、无重复例句） | 单测（DOM 顺序断言） |
+| 1.5 | 卡内文本顺序为 词头 → 释义，两层各至多一个节点；不出现「译 ·」行（无重复释义、无重复例句） | 单测（DOM 顺序断言） |
 
 **涉及界面位置**
 - `.ilmt-gloss-card` 的结构与定位：`src/content/glossary.ts`（`showCard` / `positionCard`）
@@ -127,7 +127,7 @@
 1. 翻译请求的注释 schema 增加 `translated`：**该词在本段译文中的实际写法，必须逐字出现在同段译文里**。
 2. 解析器校验后才保留：非空、长度 ≤ 32、是该段译文里逐字出现的子串；任何一条不满足就丢弃
    `translated`（保留注释本身），绝不把对不上的内容显示给用户。
-3. 卡片在释义下方显示一行「译 · <translated>」；该字段缺失时整行不渲染（不显示「暂无」、不留空行）。
+3. 卡片**不**重复显示译法：`translated` 只用于点亮译文对应处，不渲染「译 ·」行（实测它与释义读起来重复，且译文里已经点亮）。
 4. 卡片打开期间，该段译文节点里 `translated` 那一处用与原文注释词相同的视觉（同色灰 + 同样的
    浮起阴影，独立注册名 `ilmt-gloss-pair`），让用户一眼看到「就是这里」。
 5. 卡片关闭 / 移开 / 滚动 / 还原后，该处标记立即撤销，不残留。
@@ -138,9 +138,9 @@
 | --- | --- | --- |
 | 2.1 | `buildFormatPrompt({glossaryEnabled:true})` 含 `"translated"` 键与「逐字出现在译文里」规则；`FORMAT_VERSION === 4` | 单测，`tests/unit/prompt.test.ts` |
 | 2.2 | `translated` 与译文一致 → note 保留该字段；为空 / 不在译文里 / 超 32 字 → 字段被丢弃且 note 仍在 | 单测，`tests/unit/prompt.test.ts` |
-| 2.3 | note 带 `translated` → 卡内出现 `.ilmt-gloss-translated`，文本等于 `translated`；不带 → 该节点不存在 | 单测，`tests/unit/glossary.test.ts` |
+| 2.3 | note 带 `translated` → 卡内**不**出现 `.ilmt-gloss-translated`/`.ilmt-gloss-translated-line`，卡片文本不含「译 ·」；不带同样不出现 | 单测，`tests/unit/glossary.test.ts` |
 | 2.4 | 卡片打开后 `CSS.highlights.get("ilmt-gloss-pair").size === 1`，且其 range 落在该段 `.ilmt-tr` 的文本节点内；移开（120+180ms）后为 0 | 单测 + E2E |
-| 2.5 | E2E：mock 返回 `translated:"存在得更久"`，翻译后悬停 `outlive`，卡片含「译 · 存在得更久」；`restore()` 后 `ilmt-gloss-pair` 与 `ilmt-gloss` 都为 0 | E2E，`translate.spec.ts` |
+| 2.5 | E2E：mock 返回 `translated:"存在得更久"`，翻译后悬停 `outlive`，卡片不含「译 ·」而译文对应处被点亮；`restore()` 后 `ilmt-gloss-pair` 与 `ilmt-gloss` 都为 0 | E2E，`translate.spec.ts` |
 | 2.6 | 原文注释高亮数量不受影响：加入译行后 `ilmt-gloss` 的 size 与改动前一致（只标原文，不在原文里多标） | E2E（与 2.5 同一条用例） |
 
 **涉及界面位置**
@@ -151,7 +151,7 @@
 - 视觉：`src/styles/inject.css`（`::highlight(ilmt-gloss-pair)`）
 
 **失败 / 边界处理**
-- 模型没给 `translated`（旧缓存、或模型不听话）：卡片少一行，功能安静降级，不弹错误条。
+- 模型没给 `translated`（旧缓存、或模型不听话）：卡片不变，只是译文里不点亮对应处，功能安静降级，不弹错误条。
 - `translated` 命中译文多处：只标第一处（与原文 `findSurfaceRange` 的语义一致）。
 - 译文仍在流式更新：每次打开卡片时重新计算 range；文本节点已不连通则跳过标记，不缓存 Range。
 - 译文被 SPA 重写 / 段落被 prune：随 `.ilmt-tr` 节点一起消失，`ilmt-gloss-pair` 在卡片关闭时清空。
@@ -206,17 +206,16 @@
 │ │ 特效    │   +1 已收录      │  特效尺寸由各自 reserve 决定（48/60/84）
 │ └────────┘                   │
 │ 比……存在得更久                │  释义：13px #1f2328
-│ 译 · 存在得更久               │  译行：12px #57606a，「译 ·」用 #6e7781
 └──────────────────────────────┘
 ```
 
-- 层级：词头（最重）> 释义（正文灰）> 译行（辅助灰）。三行字号比 13 : 13 : 12，靠颜色和前缀区分，
-  不靠加框——卡面已有的 1px 边框足够。
+- 层级：词头（最重）> 释义（正文灰）。两行都是 13px，靠字重和颜色区分，不靠加框——卡面已有的
+  1px 边框足够。
 - 没有例句分隔线后，卡内不再有横向分隔线（现有 `.ilmt-gloss-example` 的 `border-top` 一并消失）。
 - 状态：
-  - 默认（无 `translated`）：两行，卡高自动缩；
-  - 有 `translated`：三行；
-  - 译文仍在 loading（`.ilmt-tr[data-loading]`）：不显示译行，不误标；
+  - 固定两行，卡高自动缩；
+  - 有 `translated` 时不加行：只在译文里点亮（见 4.2）；
+  - 译文仍在 loading（`.ilmt-tr[data-loading]`）：不点亮，不误标；
   - 已收录（`known`）：只影响特效，不影响文字区。
 
 ### 4.2 术语在三处的对应关系
@@ -224,12 +223,12 @@
 | 位置 | 默认 | 卡片打开时 |
 | --- | --- | --- |
 | 原文注释词 | 中性灰 + 浮起阴影（现状，不改） | 不变 |
-| 卡片文字 | `surface` + `pos` + `meaning` + `译 · translated` | — |
+| 卡片文字 | `surface` + `pos` + `meaning`（不重复译法） | — |
 | 该段译文里的对应处 | 与正文一致（不标注） | 同款中性灰 + 同款浮起阴影（`ilmt-gloss-pair`），关闭即撤销 |
 
 - 只在卡片打开期间点亮，避免译文里长期出现灰点和「满页重点」。这是有意的取舍：v1 要的是
   「核对一次」，不是「永不消失的标注」。
-- 文案固定用 `译 · `（中文全角中点 + 空格），不用「译文：」——卡片只有 280px，前缀越短越好。
+- 卡片不再用「译 ·」抄一遍译法：译文里已经点亮，且实测这一行与释义读起来重复。
 
 ### 4.3 段落联动
 
@@ -250,7 +249,7 @@
 | 位置 | 现在 | v1 |
 | --- | --- | --- |
 | 顶部 banner | `翻译已开启 · N 个词可悬停（带虚线的词）` | `翻译已开启 · N 个词可悬停` |
-| 卡片译行 | — | `译 · 存在得更久` |
+| 卡片译行 | — | 不显示（译法只在译文里点亮） |
 
 ---
 
@@ -265,13 +264,13 @@ npm run test:e2e          # headless，含 P0：快捷键/翻译与恢复/popup/
 
 | 验收点 | 层级 | 具体做法 | 判定 |
 | --- | --- | --- | --- |
-| 1.1 / 1.5 | 单测 | `tests/unit/glossary.test.ts`：带 `example` 的 note → 无 `.ilmt-gloss-example`，文本不含例句；三层节点顺序与数量 | 通过 = 断言全绿，且原有「渲染模型文本不走 HTML」用例仍绿 |
+| 1.1 / 1.5 | 单测 | `tests/unit/glossary.test.ts`：带 `example` 的 note → 无 `.ilmt-gloss-example`，文本不含例句；两层节点顺序与数量，且不出现「译 ·」 | 通过 = 断言全绿，且原有「渲染模型文本不走 HTML」用例仍绿 |
 | 1.2 | 单测 | 桩 `Range.getBoundingClientRect`（已有）+ 桩卡片 `getBoundingClientRect`；分别测视口高 300 / 词在顶部两种 | `top` 落在 `[8, innerHeight-height-8]` |
 | 1.3 | E2E | `translate.spec.ts` 新增：`setViewportSize({width:320,height:600})` → 翻译 → 滚到 `#article-p10` → 悬停注释词 → 读 `boundingBox()` | 完全在视口内 |
 | 1.4 | E2E | 同一用例里先固定贴纸猫（`effectSettings` 预置）测一次，再固定地鼠测一次 | 高度 ≤ 175 / ≤ 155 |
 | 2.1 / 2.2 | 单测 | `tests/unit/prompt.test.ts`：提示词含 `translated` 与校验规则；四种解析输入（一致 / 空 / 不在译文 / 超 32 字） | 版本号 = 4，字段保留或丢弃符合预期，note 从不整条丢失 |
-| 2.3 / 2.4 | 单测 | `tests/unit/glossary.test.ts`：有/无 `translated` 的卡面节点；打开卡后 `ilmt-gloss-pair` size=1、移开后=0 | 断言全绿，且 `ilmt-gloss` 数量不变 |
-| 2.5 / 2.6 | E2E | mock 的 glossary 加 `translated:"存在得更久"`（需扩 `MockGlossaryNote` 类型），按现有「悬停出卡」用例走一遍 + `restore()` | 卡含「译 · 存在得更久」；还原后两个 highlight 都为空 |
+| 2.3 / 2.4 | 单测 | `tests/unit/glossary.test.ts`：有/无 `translated` 时卡内都没有译行；打开卡后 `ilmt-gloss-pair` size=1、移开后=0 | 断言全绿，且 `ilmt-gloss` 数量不变 |
+| 2.5 / 2.6 | E2E | mock 的 glossary 加 `translated:"存在得更久"`（需扩 `MockGlossaryNote` 类型），按现有「悬停出卡」用例走一遍 + `restore()` | 卡片不含「译 ·」；译文对应处点亮；还原后两个 highlight 都为空 |
 | 3.1 | 单测 | 新 `tests/unit/peer.test.ts`：构造段根 + 两个 `.ilmt-tr`，调标记函数 | 只有目标 id 带属性；清除后为 0 |
 | 3.2 – 3.4 | E2E | `translate.spec.ts`：`hover()` p3 → p5，断言属性与 computed `opacity`；`restore()` 后无残留 | 同时最多 1 个段落点亮 |
 | 3.5 | E2E | 现有 banner 断言加两条（含 / 不含） | 文案一致 |
@@ -332,3 +331,13 @@ npm run test:e2e          # headless，含 P0：快捷键/翻译与恢复/popup/
 
 三条需求的验收表全部为 PASS，且 `npm run verify:delivery`、`npm run test:e2e` 的 P0 主流程
 （快捷键绑定 / 翻译与恢复 / popup / 复习链路）保持通过，才算 v1 交付完成。
+
+## 8. 修订（2026-11-16，交付后复盘）
+
+- 原因：用户实测卡片里「译 · 存在得更久」与释义「比……存在得更久」读起来是同一件事；
+  译文里已经点亮对应词，第三行只增加高度，与 v1「不挡阅读」的目标相反。
+- 决定：卡片固定两层（词头 → 释义）。`translated` 的生成、逐字校验与译文点亮
+  （需求 2 的第 1、2、4、5 条）全部保留——双译仍然是学习入口，只是不把译法再抄进卡片。
+- 验收调整：1.5 改为两层；2.3 改为「带/不带 translated 都不出现译行」；
+  2.5 改为「卡片不含『译 ·』，译文对应处点亮」。
+- 落实：`src/content/glossary.ts` 删除译行渲染与对应 CSS；两处测试同步更新，与本文档同一次提交。

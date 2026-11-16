@@ -484,7 +484,7 @@ test.describe("loaded extension", () => {
       await page.mouse.move(rect!.x, rect!.y);
       await expect(page.locator("[role=tooltip]")).toContainText("outlive");
       await expect(page.locator("[role=tooltip]")).toContainText("比……存在得更久");
-      await expect(page.locator("[role=tooltip]")).toContainText("译 · 存在得更久");
+      await expect(page.locator("[role=tooltip]")).not.toContainText("译 ·");
       await expect(page.locator("[role=tooltip] .ilmt-gloss-example")).toHaveCount(0);
 
       // The term's translated wording is lit inside this paragraph's translation,

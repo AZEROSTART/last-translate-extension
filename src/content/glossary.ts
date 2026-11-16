@@ -344,25 +344,9 @@ export function createGlossController(
     meaning.textContent = entry.note.meaning;
     element.append(word, meaning);
 
-    // 译 line: only when the parser could prove the term's translated wording.
-    const translated = entry.note.translated;
-    const translationNode = translated
-      ? doc.querySelector(`.ilmt-tr[data-ilmt-for="${entry.paragraphId}"]`)
-      : null;
-    const translationLoading = translationNode?.getAttribute("data-loading") === "1";
-    if (translated && !translationLoading) {
-      const line = doc.createElement("div");
-      line.className = "ilmt-gloss-translated-line";
-      const label = doc.createElement("span");
-      label.className = "ilmt-gloss-translated-label";
-      label.textContent = "译 · ";
-      const value = doc.createElement("span");
-      value.className = "ilmt-gloss-translated";
-      value.textContent = translated;
-      line.append(label, value);
-      element.appendChild(line);
-    }
-
+    // `note.translated` is not repeated in the card: the term is already lit in
+    // the paragraph translation while the card is open, and the wording usually
+    // reads like a second copy of `meaning`. The field still drives that highlight.
     ensureEffectStyles();
 
     const effect = nextEffect();

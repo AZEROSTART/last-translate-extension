@@ -300,38 +300,32 @@ describe("card layers, positioning, and the 译 line", () => {
     expect(card.textContent).not.toContain("Small tools often outlive their makers.");
   });
 
-  it("stacks exactly one node per layer: word → meaning → 译 line", () => {
+  it("stacks exactly one node per layer: word → meaning", () => {
     const card = showCardFor({
       notes: [{ surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" }],
     });
     const layers = Array.from(
-      card.querySelectorAll(
-        ".ilmt-gloss-word, .ilmt-gloss-meaning, .ilmt-gloss-translated-line",
-      ),
+      card.querySelectorAll(".ilmt-gloss-word, .ilmt-gloss-meaning"),
     ).map((node) => node.className);
-    expect(layers).toEqual([
-      "ilmt-gloss-word",
-      "ilmt-gloss-meaning",
-      "ilmt-gloss-translated-line",
-    ]);
+    expect(layers).toEqual(["ilmt-gloss-word", "ilmt-gloss-meaning"]);
     expect(card.querySelectorAll(".ilmt-gloss-meaning")).toHaveLength(1);
     expect(card.querySelectorAll(".ilmt-gloss-word")).toHaveLength(1);
   });
 
-  it("shows the 译 · line only when the note carries translated", () => {
+  it("keeps the translated wording out of the card, even when the note carries it", () => {
     const withTranslated = showCardFor({
       notes: [{ surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" }],
     });
-    expect(withTranslated.querySelector(".ilmt-gloss-translated")?.textContent).toBe(
-      "存在得更久",
-    );
-    expect(withTranslated.textContent).toContain("译 · 存在得更久");
+    // `translated` still drives the in-translation highlight (next test); the
+    // card itself must not repeat it as a third, near-duplicate line.
+    expect(withTranslated.querySelector(".ilmt-gloss-translated")).toBeNull();
+    expect(withTranslated.querySelector(".ilmt-gloss-translated-line")).toBeNull();
+    expect(withTranslated.textContent).not.toContain("译 ·");
 
     document.body.innerHTML = "";
     const withoutTranslated = showCardFor({
       notes: [{ surface: "outlive", meaning: "比……存在得更久" }],
     });
-    expect(withoutTranslated.querySelector(".ilmt-gloss-translated")).toBeNull();
     expect(withoutTranslated.querySelector(".ilmt-gloss-translated-line")).toBeNull();
   });
 
