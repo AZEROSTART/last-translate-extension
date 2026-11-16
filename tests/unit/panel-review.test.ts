@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildReviewQueue, mountReview } from "../../src/panel/review";
+import { buildReviewQueue, mountReview, type ReviewOptions } from "../../src/panel/review";
 import type { ClaimEffect } from "../../src/content/effects/types";
 import type { LearningWord, LearningState } from "../../src/shared/types";
 
@@ -34,7 +34,7 @@ function state(words: LearningWord[]): LearningState {
   return { version: 1, words, stats: { day: "2026-11-12", todayReviewed: 0 }, updatedAt: NOW };
 }
 
-function mount(words: LearningWord[]) {
+function mount(words: LearningWord[], over: Partial<ReviewOptions> = {}) {
   const root = document.createElement("div");
   document.body.appendChild(root);
   const answer = vi.fn(async (message: { id: string; grade: string }) => ({
@@ -45,8 +45,20 @@ function mount(words: LearningWord[]) {
     getState: async () => state(words),
     answer,
     now: () => NOW,
+    ...over,
   });
   return { root, view, answer };
+}
+
+/** An effect whose performance is observable, without any real animation. */
+function stageEffect(play = vi.fn()) {
+  return {
+    id: "fake",
+    label: "假",
+    summary: "",
+    reserve: { above: 0, below: 0 },
+    mount: () => ({ setState: () => {}, play, destroy: () => {} }),
+  } as unknown as ClaimEffect;
 }
 
 beforeEach(() => {
@@ -202,6 +214,136 @@ describe("review card effect", () => {
 
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
     expect(root.querySelector(".ilmt-review-grade")).toBeTruthy();
+    view.destroy();
+  });
+});
+
+
+describe("review scene", () => {
+  const sceneWord = () =>
+    word(1, {
+      surface: "outlive",
+      glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
+    });
+
+  it("asks the background for a picture on reveal and performs it once", async () => {
+    const play = vi.fn();
+    const mnemonic = vi.fn().mockResolvedValue({
+      ok: true as const,
+      mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+    });
+    const { root, view } = mount([sceneWord()], {
+      mnemonic,
+      effect: () => stageEffect(play),
+    });
+    await view.refresh();
+
+    expect(mnemonic).not.toHaveBeenCalled();
+    root.querySelector<HTMLButtonElement>('[data-grade="again"]')!.click();
+
+    expect(root.querySelector(".ilmt-review-scene")?.getAttribute("data-scene")).toBe("loading");
+    expect(root.querySelector(".ilmt-review-scene-caption")?.textContent).toContain("想一个画面");
+    expect(play).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-scene-caption")?.textContent).toBe("猫把词抱进怀里");
+    });
+    expect(mnemonic).toHaveBeenCalledTimes(1);
+    expect(mnemonic).toHaveBeenCalledWith("en:word1");
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(root.querySelector(".ilmt-review-scene-replay")).toBeTruthy();
+    view.destroy();
+  });
+
+  it("uses the stored caption without asking again", async () => {
+    const mnemonic = vi.fn();
+    const play = vi.fn();
+    const { root, view } = mount(
+      [word(1, { mnemonic: { caption: "地鼠把词拖进洞里", lang: "zh", at: NOW } })],
+      { mnemonic, effect: () => stageEffect(play) },
+    );
+    await view.refresh();
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    expect(mnemonic).not.toHaveBeenCalled();
+    expect(root.querySelector(".ilmt-review-scene-caption")?.textContent).toBe("地鼠把词拖进洞里");
+    view.destroy();
+  });
+
+  it("offers a retry after a failed generation and asks again", async () => {
+    const mnemonic = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, reason: "no-provider" })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        mnemonic: { caption: "贴纸猫掀起来上色", lang: "zh", at: NOW },
+      });
+    const { root, view } = mount([sceneWord()], {
+      mnemonic,
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-scene-retry")).toBeTruthy();
+    });
+    expect(mnemonic).toHaveBeenCalledTimes(1);
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-scene-retry")!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-scene-caption")?.textContent).toBe("贴纸猫掀起来上色");
+    });
+    expect(mnemonic).toHaveBeenCalledTimes(2);
+    view.destroy();
+  });
+
+  it("replays on 再看一次 without another request", async () => {
+    const play = vi.fn();
+    const mnemonic = vi.fn().mockResolvedValue({
+      ok: true as const,
+      mnemonic: { caption: "磁铁把词吸过去", lang: "zh", at: NOW },
+    });
+    const { root, view } = mount([sceneWord()], {
+      mnemonic,
+      effect: () => stageEffect(play),
+    });
+    await view.refresh();
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-scene-replay")!.click();
+
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(mnemonic).toHaveBeenCalledTimes(1);
+    view.destroy();
+  });
+
+  it("hides the corner mascot once the answer is on screen", async () => {
+    const { root, view } = mount([sceneWord()], { effect: () => stageEffect() });
+    await view.refresh();
+
+    expect(root.querySelector<HTMLElement>(".ilmt-review-mascot")!.hidden).toBe(false);
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    expect(root.querySelector<HTMLElement>(".ilmt-review-mascot")!.hidden).toBe(true);
+    view.destroy();
+  });
+
+  it("keeps grading available when the scene request throws", async () => {
+    const mnemonic = vi.fn().mockRejectedValue(new Error("offline"));
+    const { root, view } = mount([sceneWord()], {
+      mnemonic,
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-scene-retry")).toBeTruthy());
+    expect(root.querySelector(".ilmt-review-grade")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-meaning")?.textContent).toContain("比……存在得更久");
     view.destroy();
   });
 });

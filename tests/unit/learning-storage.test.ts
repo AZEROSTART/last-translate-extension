@@ -57,6 +57,37 @@ describe("parseLearningState", () => {
     expect(parseLearningState({ version: 99, words: [] }).version).toBe(1);
   });
 
+  it("keeps a stored mnemonic and drops broken ones", () => {
+    const base = {
+      id: "en:outlive",
+      termLang: "en",
+      surface: "outlive",
+      glossLang: "zh-CN",
+      glosses: [{ lang: "zh-CN", meaning: "比…久", source: "translation", at: 1 }],
+      contexts: [],
+      status: "learning",
+      box: 0,
+      dueAt: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      lastSeenAt: 0,
+      reviews: [],
+      reviewsCount: 0,
+      correctCount: 0,
+      checksSinceSpot: 0,
+    };
+
+    const kept = parseLearningState({
+      words: [{ ...base, mnemonic: { caption: "猫把词藏进怀里", lang: "zh-CN", at: 7 } }],
+    });
+    expect(kept.words[0].mnemonic).toEqual({ caption: "猫把词藏进怀里", lang: "zh-CN", at: 7 });
+
+    for (const mnemonic of [null, "nope", {}, { caption: "" }, { caption: 42 }]) {
+      const parsed = parseLearningState({ words: [{ ...base, mnemonic }] });
+      expect(parsed.words[0].mnemonic).toBeUndefined();
+    }
+  });
+
   it("drops malformed words but keeps valid ones", () => {
     const state = parseLearningState({
       version: 1,

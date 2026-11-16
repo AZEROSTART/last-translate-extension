@@ -43,6 +43,8 @@ export interface MockServerOptions {
   glossary?: (index: number, sourceText: string) => MockGlossaryNote[] | undefined;
   /** Emit the glossary block between numbered lines, as some models do. */
   splitGlossary?: boolean;
+  /** One-line picture for a review mnemonic request; defaults to a fixed scene. */
+  mnemonic?: (surface: string) => string;
   /** Directory containing the HTML fixtures (defaults to `tests/fixtures`). */
   fixtureDir?: string;
 }
@@ -87,16 +89,28 @@ function buildTranslationReply(
   reply: NonNullable<MockServerOptions["reply"]>,
   glossary?: NonNullable<MockServerOptions["glossary"]>,
   splitGlossary = false,
+  mnemonic?: NonNullable<MockServerOptions["mnemonic"]>,
 ): string {
   const messages = (body as { messages?: unknown })?.messages;
   if (!Array.isArray(messages)) return "[1] 译文";
 
+  const system = [...messages]
+    .reverse()
+    .find((message) => (message as { role?: unknown })?.role === "system") as
+    | { content?: unknown }
+    | undefined;
   const user = [...messages]
     .reverse()
     .find((message) => (message as { role?: unknown })?.role === "user") as
     | { content?: unknown }
     | undefined;
   const content = typeof user?.content === "string" ? user.content : "";
+
+  // The review scene asks for one line of imagery, not a numbered translation.
+  if (typeof system?.content === "string" && system.content.includes("画面钩子")) {
+    const surface = /^词：([^\s（(]+)/m.exec(content)?.[1] ?? "这个词";
+    return mnemonic ? mnemonic(surface) : `${surface} 被猫抱进了怀里`;
+  }
 
   const lines: string[] = [];
   const notes: Record<string, MockGlossaryNote[]> = {};
@@ -194,6 +208,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
           reply,
           options.glossary,
           options.splitGlossary,
+          options.mnemonic,
         );
 
         if ((body as { stream?: unknown })?.stream === true) {

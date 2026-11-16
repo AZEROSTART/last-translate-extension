@@ -173,6 +173,13 @@ test.describe("learning loop", () => {
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-meaning")).toContainText("比……存在得更久");
       await expect(panel.locator(".ilmt-review-meaning-more")).toContainText("sobrevivir a");
+
+      // The reveal stages the word's own effect with one line of imagery.
+      await expect(panel.locator(".ilmt-review-scene-caption")).toContainText(
+        "outlive 被猫抱进了怀里",
+      );
+      await expect(panel.locator('[data-ilmt-effect="gopher-hole"]')).toHaveCount(2);
+      await panel.locator(".ilmt-review-scene-replay").click();
       await expect(panel.locator(".ilmt-review-next")).toBeVisible();
       await expect
         .poll(async () => (await readWords(ext.worker))[0]?.box)
@@ -183,6 +190,10 @@ test.describe("learning loop", () => {
       await expect
         .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
         .toBe(1);
+      // The picture is cached on the word so the next review needs no model.
+      await expect
+        .poll(async () => (await readWords(ext.worker))[0]?.mnemonic?.caption)
+        .toBe("outlive 被猫抱进了怀里");
       await expect(panel.locator(".ilmt-review-done")).toContainText("今天没有要复习的词");
 
       // Answering advanced the card past today, so the badge is cleared.

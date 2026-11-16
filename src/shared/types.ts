@@ -73,6 +73,14 @@ export interface ReviewEntry {
   glossLang?: string;
 }
 
+/** One memorisation picture for a word, generated once and kept. */
+export interface WordMnemonic {
+  /** A single line of concrete imagery, capped by `MNEMONIC_MAX_CHARS`. */
+  caption: string;
+  lang: string;
+  at: number;
+}
+
 export interface WordContext {
   /** Source sentence containing the word, capped at 240 chars. */
   sentence: string;
@@ -107,6 +115,8 @@ export interface LearningWord {
   updatedAt: number;
   lastSeenAt: number;
   reviews: ReviewEntry[];
+  /** Absent until the review scene has asked for one; never regenerated after. */
+  mnemonic?: WordMnemonic;
   reviewsCount: number;
   correctCount: number;
   checksSinceSpot: number;
@@ -354,6 +364,18 @@ export interface ReviewAnswerResponse {
   ok: true;
   word: LearningWord;
 }
+
+/** Ask for the one-line picture the review scene performs. Cached per word. */
+export interface MnemonicMessage {
+  type: "mnemonic";
+  id: string;
+}
+
+export type MnemonicFailure = "no-provider" | "failed" | "unknown-word";
+
+export type MnemonicResponse =
+  | { ok: true; mnemonic: WordMnemonic }
+  | { ok: false; reason: MnemonicFailure };
 
 export interface GetLearningMessage {
   type: "get-learning";

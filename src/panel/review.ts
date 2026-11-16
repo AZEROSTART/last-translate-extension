@@ -14,6 +14,7 @@ import type {
   LearningGrade,
   LearningState,
   LearningWord,
+  MnemonicResponse,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
 } from "../shared/types";
@@ -64,6 +65,8 @@ function writeSession(key: string, value: string): void {
 export interface ReviewDeps {
   getState(): Promise<LearningState>;
   answer(message: ReviewAnswerMessage): Promise<ReviewAnswerResponse>;
+  /** One line of memorisation imagery for a word; cached by the background. */
+  mnemonic(id: string): Promise<MnemonicResponse>;
   /** Never undefined when at least one effect is registered. */
   effect(id?: string): ClaimEffect;
   now(): number;
@@ -127,6 +130,11 @@ export interface ReviewView {
   destroy(): void;
 }
 
+interface SceneState {
+  status: "loading" | "ready" | "failed";
+  caption?: string;
+}
+
 interface ReviewState {
   all: LearningState | null;
   queue: LearningWord[];
@@ -147,10 +155,22 @@ interface ReviewState {
   spotQuestion: SpotQuestion | null;
 }
 
+/** Ask the background for the scene caption; any failure is a quiet one. */
+async function defaultMnemonic(id: string): Promise<MnemonicResponse> {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "mnemonic", id });
+    if (response && typeof response === "object") return response as MnemonicResponse;
+  } catch {
+    // The panel stays usable without a background; the scene is optional.
+  }
+  return { ok: false, reason: "failed" };
+}
+
 export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
     answer: over.answer ?? defaultAnswer,
+    mnemonic: over.mnemonic ?? defaultMnemonic,
     effect: over.effect ?? defaultEffect,
     now: over.now ?? (() => Date.now()),
   };
@@ -180,6 +200,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   let pendingReload = false;
   /** The current card's decorative effect; rebuilt on every render. */
   let mountedEffect: ClaimHandle | null = null;
+  /** The scene's own effect instance; rebuilt with the card. */
+  let sceneEffect: ClaimHandle | null = null;
+  /** Remembered per word so switching cards or grading never re-requests. */
+  const scenes = new Map<string, SceneState>();
+  const sceneRequests = new Set<string>();
+  /** The word whose scene already performed, so re-renders do not replay it. */
+  let playedFor: string | null = null;
 
   function current(): LearningWord | undefined {
     return state.queue[0];
@@ -282,6 +309,112 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return state.revealed || state.pending !== null;
   }
 
+  /** Fetch the caption once per word; success/failure both re-render. */
+  function ensureScene(word: LearningWord): void {
+    // A failed scene waits for an explicit retry; retrying on every render
+    // would hammer the provider in a loop.
+    if (scenes.has(word.id)) return;
+    if (sceneRequests.has(word.id)) return;
+    if (word.mnemonic) {
+      scenes.set(word.id, { status: "ready", caption: word.mnemonic.caption });
+      return;
+    }
+    sceneRequests.add(word.id);
+    scenes.set(word.id, { status: "loading" });
+    void deps
+      .mnemonic(word.id)
+      .then((response) => {
+        scenes.set(
+          word.id,
+          response.ok
+            ? { status: "ready", caption: response.mnemonic.caption }
+            : { status: "failed" },
+        );
+      })
+      .catch(() => {
+        scenes.set(word.id, { status: "failed" });
+      })
+      .finally(() => {
+        sceneRequests.delete(word.id);
+        if (!destroyed) render();
+      });
+  }
+
+  /**
+   * The memorisation scene: the word's own claim effect performs while the
+   * caption (one line of imagery) sits next to it. Not a second definition —
+   * the picture is the point.
+   */
+  function renderScene(word: LearningWord, parent: HTMLElement): void {
+    ensureScene(word);
+    const scene = scenes.get(word.id) ?? { status: "loading" as const };
+
+    const box = document.createElement("div");
+    box.className = "ilmt-review-scene";
+    box.dataset.scene = scene.status;
+
+    const stage = document.createElement("div");
+    stage.className = "ilmt-review-scene-stage";
+    box.appendChild(stage);
+
+    try {
+      const effect = deps.effect(word.mascotId);
+      ensureEffectStyles();
+      const reduced = document.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      sceneEffect = effect.mount({
+        doc: document,
+        surface: stage,
+        root: stage,
+        theme: currentTheme(),
+        animations: !reduced,
+        claim: async () => ({ ok: true, created: false }),
+        announce: () => {},
+        label: (verb) => `${verb}`,
+      });
+      for (const button of stage.querySelectorAll("button")) button.tabIndex = -1;
+    } catch {
+      // A broken effect must never block reviewing.
+      sceneEffect = null;
+    }
+
+    const text = document.createElement("div");
+    text.className = "ilmt-review-scene-text";
+
+    if (scene.status === "loading") {
+      const pending = document.createElement("p");
+      pending.className = "ilmt-review-scene-caption is-pending";
+      pending.textContent = "给它想一个画面…";
+      text.appendChild(pending);
+    } else if (scene.status === "failed") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "ilmt-review-scene-retry";
+      retry.textContent = "画面没生成出来 · 重试";
+      retry.addEventListener("click", () => {
+        scenes.delete(word.id);
+        render();
+      });
+      text.appendChild(retry);
+    } else {
+      const caption = document.createElement("p");
+      caption.className = "ilmt-review-scene-caption";
+      caption.textContent = scene.caption ?? "";
+      const replay = document.createElement("button");
+      replay.type = "button";
+      replay.className = "ilmt-review-scene-replay";
+      replay.textContent = "再看一次";
+      replay.addEventListener("click", () => sceneEffect?.play?.());
+      text.append(caption, replay);
+      if (playedFor !== word.id) {
+        playedFor = word.id;
+        sceneEffect?.play?.();
+      }
+    }
+
+    box.appendChild(text);
+    parent.appendChild(box);
+  }
+
   function renderAnswer(word: LearningWord, card: HTMLElement, label = "想不起来，看答案"): void {
     if (!answerShown()) {
       const reveal = document.createElement("button");
@@ -324,6 +457,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       answer.appendChild(more);
     }
 
+    renderScene(word, answer);
+
     const { full } = blankedSentence(word);
     const fullSentence = document.createElement("p");
     fullSentence.className = "ilmt-review-sentence-full";
@@ -336,6 +471,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   function renderCard(): void {
     mountedEffect?.destroy();
     mountedEffect = null;
+    sceneEffect?.destroy();
+    sceneEffect = null;
     const card = document.createElement("div");
     card.className = "ilmt-review-card";
     const word = current();
@@ -375,6 +512,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         label: (verb) => `把${effect.label}${verb}下去`,
       });
       mascot.setAttribute("aria-hidden", "true");
+      mascot.hidden = answerShown();
       for (const button of mascot.querySelectorAll("button")) button.tabIndex = -1;
     } catch {
       // A broken effect is decoration only; never block a review.

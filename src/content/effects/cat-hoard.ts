@@ -554,6 +554,9 @@ export const catHoardEffect: ClaimEffect = {
     let busy = false;
     let destroyed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let playTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Phase to restore when the review scene finishes the performance. */
+    let playReturn: LocalPhase | undefined;
 
     const paint = (): void => {
       root.dataset.ilmtState = phase;
@@ -597,13 +600,30 @@ export const catHoardEffect: ClaimEffect = {
 
     return {
       setState(next: ClaimPhase): void {
-        if (busy) return;
+        if (busy || playReturn !== undefined) return;
         phase = next;
         paint();
+      },
+      /** Review scene: perform the claim animation without claiming anything. */
+      play(): void {
+        if (destroyed || busy || playReturn !== undefined) return;
+        playReturn = phase;
+        phase = "hit";
+        paint();
+        playTimer = setTimeout(() => {
+          playTimer = undefined;
+          if (destroyed) return;
+          phase = playReturn ?? "idle";
+          playReturn = undefined;
+          paint();
+        }, HUG_MS);
       },
       destroy(): void {
         destroyed = true;
         if (timer !== undefined) clearTimeout(timer);
+        if (playTimer !== undefined) clearTimeout(playTimer);
+        playTimer = undefined;
+        playReturn = undefined;
         button.remove();
       },
     };

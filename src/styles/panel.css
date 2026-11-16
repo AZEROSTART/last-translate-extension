@@ -642,3 +642,90 @@ button:focus-visible {
   font: inherit;
   cursor: pointer;
 }
+
+/* --- review scene: the claim effect performs, the caption carries the hook --- */
+.ilmt-review-scene {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 6px 8px 6px 4px;
+  border-radius: 10px;
+  background: rgba(45, 212, 191, 0.05);
+  text-align: left;
+}
+
+.ilmt-review-scene-stage {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 58px;
+  overflow: hidden;
+}
+
+.ilmt-review-scene-stage > * {
+  transform: scale(0.72);
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.ilmt-review-scene-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ilmt-review-scene-caption {
+  margin: 0;
+  color: var(--ilmt-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ilmt-review-scene-caption.is-pending {
+  color: var(--ilmt-muted);
+  animation: ilmt-scene-pulse 1.4s ease-in-out infinite;
+}
+
+.ilmt-review-scene-replay,
+.ilmt-review-scene-retry {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ilmt-accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-review-scene-retry {
+  color: var(--ilmt-muted);
+}
+
+.ilmt-review-scene-replay:hover,
+.ilmt-review-scene-retry:hover {
+  color: var(--ilmt-accent);
+}
+
+@keyframes ilmt-scene-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ilmt-review-scene-caption.is-pending {
+    animation: none;
+  }
+}

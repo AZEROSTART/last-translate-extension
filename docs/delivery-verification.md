@@ -325,3 +325,20 @@ P0 交付验证：通过 / 未通过
 - 设置页：四个特效都能「试一试」并落定（`gopher-hole` / `magnet` / `cat-hoard` / `cat-sticker`）
 - 视觉确认：真实 `dist/` + headless Chromium 截了悬停卡四态、5× 局部、复习卡头像（`docs/previews/cat-shots/sticker-*.png`）
 - 真机肉眼：未执行——需要先在 `chrome://extensions` 重新加载 `dist/`（本轮沿用不代点 `chrome://` 的约定）
+
+## 17. 本次验证记录（2026-11-16，复习揭晓画面钩子）
+
+**改动**：复习揭晓多了一块「场景」——该词收录时选的角色把词演一次（四个特效新增可选 `play()`，只演出不收录），
+旁边是模型生成的一行画面钩子（`src/shared/mnemonic.ts`）。每词只生成一次并随词落库（`LearningWord.mnemonic`），
+生成失败只显示「重试」，不挡评级与间隔；「再看一次」只重播不重新请求。答案展开后右上角装饰头像隐藏。
+设计见 `docs/superpowers/specs/2026-11-16-review-mnemonic-scene-design.md`，截图 `docs/previews/mnemonic/review-scene.png`。
+
+**验证**：
+- 自动门禁：通过（713/713 单测，47 个文件；`tsc`、build、`check-build`）
+- E2E（headless）：通过（14/14、21.2s）——复习用例新增：点「认识」后字幕出现（mock provider 返回画面）、
+  「再看一次」可见、落库后 `mnemonic.caption` 已缓存；快捷键 `⌥A / ⌥Q / ⌥S` 仍被 Chrome 解析
+- popup：通过（provider/model 用例全绿）
+- 控制台：`opencli browser delivery console` 无 error
+- 真实 Chrome 抽查：**未执行（环境阻塞）**——opencli 的 delivery 会话打开 `article.html` 后
+  `globalThis.__ilmtMain` 为 `undefined`，扩展的 content script 没有注入；本次不代用户点 `chrome://extensions`。
+  需要用户重新加载 `dist/` 并刷新测试页后再肉眼确认新场景。

@@ -165,6 +165,7 @@ export interface StoredWord {
   box: number;
   dueAt: number | null;
   mascotId?: string;
+  mnemonic?: { caption: string; lang: string; at: number };
   glosses: Array<{ lang: string; meaning: string }>;
 }
 

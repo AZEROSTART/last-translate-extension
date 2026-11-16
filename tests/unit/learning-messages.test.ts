@@ -28,6 +28,23 @@ describe("handleLearningMessage", () => {
     expect(state.words[0].contexts).toHaveLength(2);
   });
 
+  it("answers mnemonic requests for stored words only", async () => {
+    await handleLearningMessage(learn);
+
+    expect(await handleLearningMessage({ type: "mnemonic", id: "en:gone" })).toEqual({
+      ok: false,
+      reason: "unknown-word",
+    });
+    // No provider is configured in this test, so nothing is generated and the
+    // stored word stays untouched.
+    expect(await handleLearningMessage({ type: "mnemonic", id: "en:outlive" })).toEqual({
+      ok: false,
+      reason: "no-provider",
+    });
+    const state = await getLearning();
+    expect(state.words[0].mnemonic).toBeUndefined();
+  });
+
   it("returns a due label with the first card", async () => {
     const response = (await handleLearningMessage(learn)) as {
       dueAt: number;

@@ -7,13 +7,21 @@ import { formatDueLabel } from "../shared/srs";
 import type {
   LearnWordMessage,
   LearnWordResponse,
+  MnemonicMessage,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
 } from "../shared/types";
+import { createMnemonicDeps, generateMnemonic } from "./mnemonic";
 import { runLearningUpdate } from "./storage-queue";
 import { refreshBadge } from "./badge";
 
-const LEARNING_TYPES = new Set(["learn-word", "review-answer", "get-learning", "lookup-gloss"]);
+const LEARNING_TYPES = new Set([
+  "learn-word",
+  "review-answer",
+  "get-learning",
+  "lookup-gloss",
+  "mnemonic",
+]);
 
 export function isLearningMessageType(type: unknown): boolean {
   return typeof type === "string" && LEARNING_TYPES.has(type);
@@ -60,6 +68,13 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
       return { ok: true, state: await getLearning() };
     case "lookup-gloss":
       return { ok: false, reason: "not-implemented" };
+    case "mnemonic": {
+      const input = msg as MnemonicMessage;
+      if (typeof input.id !== "string" || input.id.length === 0) {
+        return { ok: false, reason: "unknown-word" };
+      }
+      return generateMnemonic(input.id, createMnemonicDeps());
+    }
     default:
       return null;
   }

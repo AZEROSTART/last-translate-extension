@@ -107,6 +107,17 @@ function parseReviews(value: unknown): ReviewEntry[] {
   return out.slice(-MAX_REVIEWS);
 }
 
+function parseMnemonic(value: unknown): LearningWord["mnemonic"] | undefined {
+  if (!isRecord(value)) return undefined;
+  const caption = asString(value.caption).trim();
+  if (!caption) return undefined;
+  return {
+    caption,
+    lang: asString(value.lang) || "zh-CN",
+    at: asNumber(value.at, 0),
+  };
+}
+
 function parseWord(value: unknown): LearningWord | null {
   if (!isRecord(value)) return null;
   const id = asString(value.id);
@@ -141,6 +152,8 @@ function parseWord(value: unknown): LearningWord | null {
   };
   if (typeof value.pos === "string") word.pos = value.pos;
   if (typeof value.mascotId === "string") word.mascotId = value.mascotId;
+  const mnemonic = parseMnemonic(value.mnemonic);
+  if (mnemonic) word.mnemonic = mnemonic;
   return word;
 }
 

@@ -33,6 +33,11 @@ export interface ClaimContext {
 export interface ClaimHandle {
   /** Called with `known` when the word was already captured earlier. */
   setState(phase: ClaimPhase): void;
+  /**
+   * Optional: play the claim animation without claiming. The review scene
+   * uses it to stage the word's mnemonic picture; the hover card never does.
+   */
+  play?(): void;
   /** Clear timers and listeners; the caller removes the DOM. */
   destroy(): void;
 }
