@@ -19,8 +19,11 @@ import "./effects/cat-hoard";
 import "./effects/cat-sticker";
 
 const HIGHLIGHT_NAME = "ilmt-gloss";
+const PAIR_HIGHLIGHT_NAME = "ilmt-gloss-pair";
 const SHOW_DELAY_MS = 120;
 const HIDE_DELAY_MS = 180;
+const CARD_MARGIN = 8;
+const CARD_GAP = 8;
 const MAX_ENTRIES = 500;
 const EFFECT_HISTORY_KEY = "ilmt:effect-history";
 
@@ -134,6 +137,31 @@ export function createGlossController(
     );
   }
 
+  /** The translated wording of a term inside its own paragraph's translation. */
+  function pairRange(entry: GlossEntry): Range | undefined {
+    const translated = entry.note.translated;
+    if (!translated) return undefined;
+    const node = doc.querySelector(`.ilmt-tr[data-ilmt-for="${entry.paragraphId}"]`);
+    if (!node || node.getAttribute("data-loading") === "1") return undefined;
+    const textNodes: Node[] = [];
+    const walker = doc.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+      textNodes.push(current);
+    }
+    return findSurfaceRange(textNodes, translated, { allowTranslation: true });
+  }
+
+  /** Registers the pair highlight for the open card; undefined clears it. */
+  function setPairHighlight(range: Range | undefined): void {
+    const { css, ctor } = highlightParts();
+    if (!css?.highlights) return;
+    if (!range || !ctor) {
+      css.highlights.delete(PAIR_HIGHLIGHT_NAME);
+      return;
+    }
+    css.highlights.set(PAIR_HIGHLIGHT_NAME, new ctor(range));
+  }
+
   function clearShowTimer(): void {
     if (showTimer !== undefined) {
       clearTimeout(showTimer);
@@ -163,6 +191,7 @@ export function createGlossController(
     cancelHide();
     hoverCard = false;
     currentEntry = null;
+    setPairHighlight(undefined);
     cardEffect?.destroy();
     cardEffect = null;
     if (card) {
@@ -269,9 +298,23 @@ export function createGlossController(
     const cardRect = element.getBoundingClientRect();
     const width = cardRect.width || element.offsetWidth || 280;
     const height = cardRect.height || element.offsetHeight || 80;
-    const maxLeft = Math.max(8, (view?.innerWidth ?? 0) - width - 8);
-    const left = Math.min(Math.max(8, rect.left), maxLeft);
-    const top = rect.top >= height + 8 ? rect.top - height - 8 : rect.bottom + 8;
+    const viewWidth = view?.innerWidth ?? 0;
+    const viewHeight = view?.innerHeight ?? 0;
+
+    // Both axes stay inside the viewport with an 8px margin.
+    const maxLeft = Math.max(CARD_MARGIN, viewWidth - width - CARD_MARGIN);
+    const left = Math.min(Math.max(CARD_MARGIN, rect.left), maxLeft);
+
+    // Prefer above the word, then below it, keeping an 8px gap either way.
+    const maxTop = Math.max(CARD_MARGIN, viewHeight - height - CARD_MARGIN);
+    const above = rect.top - height - CARD_GAP;
+    const below = rect.bottom + CARD_GAP;
+    let top: number;
+    if (above >= CARD_MARGIN) top = above;
+    else if (below <= maxTop) top = below;
+    else top = maxTop;
+    top = Math.min(Math.max(CARD_MARGIN, top), maxTop);
+
     element.style.left = `${left}px`;
     element.style.top = `${top}px`;
   }
@@ -301,11 +344,23 @@ export function createGlossController(
     meaning.textContent = entry.note.meaning;
     element.append(word, meaning);
 
-    if (entry.note.example) {
-      const example = doc.createElement("div");
-      example.className = "ilmt-gloss-example";
-      example.textContent = entry.note.example;
-      element.appendChild(example);
+    // 译 line: only when the parser could prove the term's translated wording.
+    const translated = entry.note.translated;
+    const translationNode = translated
+      ? doc.querySelector(`.ilmt-tr[data-ilmt-for="${entry.paragraphId}"]`)
+      : null;
+    const translationLoading = translationNode?.getAttribute("data-loading") === "1";
+    if (translated && !translationLoading) {
+      const line = doc.createElement("div");
+      line.className = "ilmt-gloss-translated-line";
+      const label = doc.createElement("span");
+      label.className = "ilmt-gloss-translated-label";
+      label.textContent = "译 · ";
+      const value = doc.createElement("span");
+      value.className = "ilmt-gloss-translated";
+      value.textContent = translated;
+      line.append(label, value);
+      element.appendChild(line);
     }
 
     ensureEffectStyles();
@@ -383,6 +438,7 @@ export function createGlossController(
     if (stored) cardEffect.setState(stored);
 
     positionCard(element, entry.range);
+    setPairHighlight(pairRange(entry));
   }
 
   function hitTest(): void {

@@ -7,21 +7,33 @@
  */
 
 const SKIP_ANCESTOR = "code, pre, kbd, samp, .ilmt-tr";
+/** Source matching never reaches into translations; pair lookup must. */
+const SKIP_ANCESTOR_ALLOW_TRANSLATION = "code, pre, kbd, samp";
 const ASCII_WORD = /^[A-Za-z0-9_]$/;
 
 function isAsciiWordChar(char: string | undefined): boolean {
   return char !== undefined && ASCII_WORD.test(char);
 }
 
-export function findSurfaceRange(textNodes: Node[], surface: string): Range | undefined {
+export interface FindSurfaceOptions {
+  /** Allow matching inside `.ilmt-tr` (used to light a term in the translation). */
+  allowTranslation?: boolean;
+}
+
+export function findSurfaceRange(
+  textNodes: Node[],
+  surface: string,
+  options: FindSurfaceOptions = {},
+): Range | undefined {
   const needle = surface.trim().toLowerCase();
   if (!needle) return undefined;
+  const skipSelector = options.allowTranslation ? SKIP_ANCESTOR_ALLOW_TRANSLATION : SKIP_ANCESTOR;
 
   for (const node of textNodes) {
     if (node.nodeType !== Node.TEXT_NODE) continue;
     const text = node as Text;
     const parent = text.parentElement;
-    if (!parent || parent.closest(SKIP_ANCESTOR)) continue;
+    if (!parent || parent.closest(skipSelector)) continue;
 
     const haystack = text.data.toLowerCase();
     let from = 0;

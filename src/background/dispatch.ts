@@ -612,7 +612,13 @@ async function runGroup(
           if (joined.trim() === "") {
             throw new ProviderError("bad_response", EMPTY_TRANSLATION_MESSAGE, { retryable: false });
           }
-          const glossary = parseGlossaryNotes(notesRaw, group, glossLangs).get(single) ?? [];
+          const glossary =
+            parseGlossaryNotes(
+              notesRaw,
+              group,
+              glossLangs,
+              new Map([[single, joined]]),
+            ).get(single) ?? [];
           return new Map([[single, { text: joined, glossary }]]);
         }
 

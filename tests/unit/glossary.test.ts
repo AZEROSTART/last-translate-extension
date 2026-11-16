@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGlossController, type GlossControllerDeps } from "../../src/content/glossary";
 import { getEffect } from "../../src/content/effects";
+import type { GlossaryNote } from "../../src/shared/types";
 
 function stubHighlights(): Map<string, unknown> {
   const registry = new Map<string, unknown>();
   vi.stubGlobal(
     "Highlight",
-    class {
-      ranges: Range[];
+    class extends Set<Range> {
       constructor(...ranges: Range[]) {
-        this.ranges = ranges;
+        super(ranges);
       }
     },
   );
@@ -40,6 +40,29 @@ function stubRangeRect(rect: DOMRect = RECT as DOMRect): void {
   });
 }
 
+const CARD_RECT = {
+  left: 8,
+  top: 8,
+  right: 288,
+  bottom: 128,
+  width: 280,
+  height: 120,
+  x: 8,
+  y: 8,
+};
+
+function stubCardRect(rect: typeof CARD_RECT = CARD_RECT): void {
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => rect,
+  });
+}
+
+function stubViewport(height: number, width = 1024): void {
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   document.body.innerHTML = "";
@@ -50,6 +73,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   delete (Range.prototype as unknown as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+  delete (HTMLElement.prototype as unknown as { getBoundingClientRect?: unknown })
+    .getBoundingClientRect;
+  delete (window as unknown as { innerHeight?: number }).innerHeight;
+  delete (window as unknown as { innerWidth?: number }).innerWidth;
   document.body.innerHTML = "";
 });
 
@@ -83,7 +110,8 @@ describe("createGlossController", () => {
     expect(card.textContent).toContain("outlive");
     expect(card.textContent).toContain("v.");
     expect(card.textContent).toContain("比……存在得更久");
-    expect(card.textContent).toContain("Small tools often outlive their makers.");
+    expect(card.querySelector(".ilmt-gloss-example")).toBeNull();
+    expect(card.textContent).not.toContain("Small tools often outlive their makers.");
   });
 
   it("reports how many annotated ranges are currently highlighted", () => {
@@ -223,6 +251,149 @@ function openCard(termLang?: string): HTMLElement {
   vi.advanceTimersByTime(150);
   return document.querySelector("[role=tooltip]") as HTMLElement;
 }
+
+describe("card layers, positioning, and the 译 line", () => {
+  function showCardFor(options: {
+    notes?: GlossaryNote[];
+    html?: string;
+    rangeRect?: DOMRect;
+    cardRect?: typeof CARD_RECT;
+    viewport?: { width: number; height: number };
+  }): HTMLElement {
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML =
+      options.html ?? `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const controller = createGlossController(document, {
+      resolveEffect: () => getEffect("gopher-hole")!,
+    });
+    controller.start();
+    controller.setParagraph(
+      "p_1",
+      [text],
+      options.notes ?? [{ surface: "outlive", meaning: "比……存在得更久" }],
+    );
+    stubRangeRect(options.rangeRect);
+    if (options.cardRect) stubCardRect(options.cardRect);
+    if (options.viewport) stubViewport(options.viewport.height, options.viewport.width);
+    stubCaret(text, 20);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    vi.advanceTimersByTime(150);
+    return document.querySelector("[role=tooltip]") as HTMLElement;
+  }
+
+  it("never renders the legacy source example", () => {
+    const card = showCardFor({
+      notes: [
+        {
+          surface: "outlive",
+          pos: "v.",
+          meaning: "比……存在得更久",
+          example: "Small tools often outlive their makers.",
+        },
+      ],
+    });
+    expect(card.querySelector(".ilmt-gloss-example")).toBeNull();
+    expect(card.textContent).not.toContain("Small tools often outlive their makers.");
+  });
+
+  it("stacks exactly one node per layer: word → meaning → 译 line", () => {
+    const card = showCardFor({
+      notes: [{ surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" }],
+    });
+    const layers = Array.from(
+      card.querySelectorAll(
+        ".ilmt-gloss-word, .ilmt-gloss-meaning, .ilmt-gloss-translated-line",
+      ),
+    ).map((node) => node.className);
+    expect(layers).toEqual([
+      "ilmt-gloss-word",
+      "ilmt-gloss-meaning",
+      "ilmt-gloss-translated-line",
+    ]);
+    expect(card.querySelectorAll(".ilmt-gloss-meaning")).toHaveLength(1);
+    expect(card.querySelectorAll(".ilmt-gloss-word")).toHaveLength(1);
+  });
+
+  it("shows the 译 · line only when the note carries translated", () => {
+    const withTranslated = showCardFor({
+      notes: [{ surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" }],
+    });
+    expect(withTranslated.querySelector(".ilmt-gloss-translated")?.textContent).toBe(
+      "存在得更久",
+    );
+    expect(withTranslated.textContent).toContain("译 · 存在得更久");
+
+    document.body.innerHTML = "";
+    const withoutTranslated = showCardFor({
+      notes: [{ surface: "outlive", meaning: "比……存在得更久" }],
+    });
+    expect(withoutTranslated.querySelector(".ilmt-gloss-translated")).toBeNull();
+    expect(withoutTranslated.querySelector(".ilmt-gloss-translated-line")).toBeNull();
+  });
+
+  it("lights the translated term while the card is open and clears it on leave", () => {
+    const registry = stubHighlights();
+    stubFrame();
+    document.body.innerHTML =
+      `<p>Small tools often outlive their makers.</p>` +
+      `<span class="ilmt-tr ilmt-block" data-ilmt-for="p_1">小工具往往比制造者存在得更久。</span>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const translationText = document.querySelector(".ilmt-tr")!.firstChild!;
+    const controller = createGlossController(document, {
+      resolveEffect: () => getEffect("gopher-hole")!,
+    });
+    controller.start();
+    controller.setParagraph("p_1", [text], [
+      { surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" },
+    ]);
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    vi.advanceTimersByTime(150);
+
+    const pair = registry.get("ilmt-gloss-pair") as Set<Range>;
+    expect(pair.size).toBe(1);
+    const range = [...pair][0];
+    expect(range.startContainer).toBe(translationText);
+    expect((range.startContainer.parentElement as Element).closest(".ilmt-tr")).not.toBeNull();
+    // Only the source term is annotated; the pair highlight never adds a second one.
+    expect((registry.get("ilmt-gloss") as Set<Range>).size).toBe(1);
+
+    stubCaret(text, 0);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+    vi.advanceTimersByTime(180);
+    expect(registry.get("ilmt-gloss-pair")).toBeUndefined();
+    expect((registry.get("ilmt-gloss") as Set<Range>).size).toBe(1);
+  });
+
+  it("keeps the card inside a 300px-tall viewport and above a word near the bottom", () => {
+    const card = showCardFor({
+      rangeRect: { left: 10, top: 280, right: 70, bottom: 296, width: 60, height: 16 } as DOMRect,
+      cardRect: CARD_RECT,
+      viewport: { width: 1024, height: 300 },
+    });
+    const top = parseFloat(card.style.top);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(top).toBeLessThanOrEqual(172);
+    // The card sits above the word and never covers it.
+    expect(top + CARD_RECT.height).toBeLessThanOrEqual(280);
+  });
+
+  it("keeps an 8px top margin when the word is at the very top", () => {
+    const card = showCardFor({
+      rangeRect: { left: 10, top: 0, right: 70, bottom: 16, width: 60, height: 16 } as DOMRect,
+      cardRect: CARD_RECT,
+      viewport: { width: 1024, height: 300 },
+    });
+    expect(parseFloat(card.style.top)).toBeGreaterThanOrEqual(8);
+  });
+});
 
 describe("hover intent", () => {
   it("keeps the card open while the pointer is inside it", () => {

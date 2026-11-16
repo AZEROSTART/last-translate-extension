@@ -19,7 +19,7 @@ export const GLOSSARY_INSTRUCTIONS = `注意：启用学习注释时，最终输
 从每段原文中挑出 0～3 个最值得学习的词或短语（每段尽量给 1～2 个），给出它在当前句子里的 {{targetLang}} 释义。确实没有合适内容才留空。
 在全部译文之后另起一行输出 ${GLOSSARY_MARKER}，下一行只输出一个 JSON 对象，键是译文里的段号（字符串），值是该段的注释数组：`;
 
-const GLOSSARY_RULES = `规则：surface 必须逐字出现在对应段原文中；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
+const GLOSSARY_RULES = `规则：surface 必须逐字出现在对应段原文中；translated 必须逐字出现在译文里，写该词在同段译文中的实际写法，没有把握就省略这个键；不要输出音标；不要解释协议；JSON 必须是单行合法对象。`;
 
 /**
  * The schema is the only place the model learns where extra-language meanings
@@ -31,7 +31,7 @@ function glossarySchema(glossLangs: string[]): string {
     '"surface":"原文中的词或短语"',
     '"pos":"词性，可省略"',
     '"meaning":"当前语境下的释义"',
-    '"example":"原文中的短例句，可省略"',
+    '"translated":"该词在本段译文里的实际写法，可省略"',
   ];
   if (glossLangs.length > 0) {
     const glosses = glossLangs.map((lang) => `"${lang}":"…"`).join(",");
@@ -41,7 +41,7 @@ function glossarySchema(glossLangs: string[]): string {
 }
 
 /** Developer-owned format contract version; bump when the contract changes. */
-export const FORMAT_VERSION = 3;
+export const FORMAT_VERSION = 4;
 
 export interface FormatOptions {
   targetLang: string;
@@ -227,6 +227,8 @@ export function parseNumberedResponse(raw: string, expectedIds: string[]): Map<s
 }
 
 const MAX_GLOSSARY_NOTES = 3;
+/** Guard against a model pasting a whole sentence into the card's 译 line. */
+const MAX_TRANSLATED_LENGTH = 32;
 const ASCII_WORD_RE = /[A-Za-z0-9_]/;
 
 function normalizeSurface(value: string): string {
@@ -301,14 +303,31 @@ function parseNoteGlosses(
 }
 
 /**
+ * Keep `translated` only when it can be proven: non-empty, short enough, and a
+ * verbatim substring of that paragraph's translation. A mismatch is dropped
+ * silently; the note itself survives.
+ */
+function parseTranslated(value: unknown, translation: string | undefined): string | undefined {
+  if (typeof translation !== "string" || !translation) return undefined;
+  if (typeof value !== "string") return undefined;
+  const translated = value.trim();
+  if (!translated || translated.length > MAX_TRANSLATED_LENGTH) return undefined;
+  if (!translation.includes(translated)) return undefined;
+  return translated;
+}
+
+/**
  * Validate and normalize the model's glossary object. Every failure is
  * non-fatal: invalid keys, unknown surfaces, duplicates, malformed entries and
  * excess notes are simply dropped. The result only contains non-empty arrays.
+ * `translations` maps segment ids to translated text; without it `translated`
+ * cannot be verified and is dropped.
  */
 export function parseGlossaryNotes(
   raw: string,
   items: Segment[],
   glossLangs: string[] = [],
+  translations: Map<string, string> = new Map(),
 ): Map<string, GlossaryNote[]> {
   const result = new Map<string, GlossaryNote[]>();
   const parsed = parseJsonObject(raw);
@@ -345,6 +364,8 @@ export function parseGlossaryNotes(
       if (typeof candidate.example === "string" && candidate.example.trim()) {
         note.example = candidate.example.trim();
       }
+      const translated = parseTranslated(candidate.translated, translations.get(item.id));
+      if (translated) note.translated = translated;
       const glosses = parseNoteGlosses(candidate.glosses, glossLangs);
       if (glosses) note.glosses = glosses;
 
@@ -462,7 +483,7 @@ export function parseAnnotatedResponse(
   }
 
   const glossary = notesRaw.trim()
-    ? parseGlossaryNotes(notesRaw, items, glossLangs)
+    ? parseGlossaryNotes(notesRaw, items, glossLangs, translations)
     : new Map<string, GlossaryNote[]>();
   return { translations, glossary };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { estimateTokens } from "../../src/shared/token-estimate";
 import {
+  FORMAT_VERSION,
   GLOSSARY_INSTRUCTIONS,
   GLOSSARY_MARKER,
   buildFormatPrompt,
@@ -335,6 +336,80 @@ describe("parseAnnotatedResponse glosses", () => {
       en: "to last longer than",
       ja: "より長く存続する",
     });
+  });
+});
+
+describe("translated wording contract", () => {
+  const items = [
+    { id: "p_1", text: "Small tools often outlive their makers." },
+    { id: "p_2", text: "Alpha beta." },
+  ];
+  const translations = new Map([
+    ["p_1", "小工具往往比制造者存在得更久。"],
+    ["p_2", "阿尔法贝塔。"],
+  ]);
+  const note = (extra: Record<string, unknown>) => ({
+    surface: "outlive",
+    meaning: "比……存在得更久",
+    ...extra,
+  });
+
+  it('asks for "translated" and requires it to appear verbatim in the translation', () => {
+    const prompt = buildFormatPrompt({ targetLang: "zh-CN", glossaryEnabled: true, glossLangs: [] });
+    expect(prompt).toContain('"translated"');
+    expect(prompt).toContain("逐字出现在译文里");
+    expect(FORMAT_VERSION).toBe(4);
+  });
+
+  it("keeps translated when it matches the paragraph's translation", () => {
+    const raw = JSON.stringify({ "1": [note({ translated: "存在得更久" })] });
+    expect(parseGlossaryNotes(raw, items, [], translations).get("p_1")).toEqual([
+      note({ translated: "存在得更久" }),
+    ]);
+  });
+
+  it("keeps translated through the full annotated-response parse", () => {
+    const raw = [
+      "[1] 小工具往往比制造者存在得更久。",
+      "[2] 阿尔法贝塔。",
+      GLOSSARY_MARKER,
+      JSON.stringify({ "1": [note({ translated: "存在得更久" })] }),
+    ].join("\n");
+    const parsed = parseAnnotatedResponse(raw, items);
+    expect(parsed.glossary.get("p_1")).toEqual([note({ translated: "存在得更久" })]);
+  });
+
+  it("drops empty, missing, and overlong translated values but keeps the note", () => {
+    const cases: Array<{ label: string; value: unknown; translation: string }> = [
+      { label: "empty", value: "   ", translation: "小工具往往比制造者存在得更久。" },
+      { label: "missing from translation", value: "根本不存在", translation: "小工具往往比制造者存在得更久。" },
+      {
+        label: "overlong",
+        value: "长".repeat(33),
+        translation: `前缀${"长".repeat(33)}后缀`,
+      },
+      { label: "not a string", value: 42, translation: "小工具往往比制造者存在得更久。" },
+    ];
+
+    for (const testCase of cases) {
+      const raw = JSON.stringify({
+        "1": [note({ translated: testCase.value })],
+      });
+      const parsed = parseGlossaryNotes(
+        raw,
+        [{ id: "p_1", text: "Small tools often outlive their makers." }],
+        [],
+        new Map([["p_1", testCase.translation]]),
+      );
+      expect(parsed.get("p_1"), testCase.label).toEqual([
+        { surface: "outlive", meaning: "比……存在得更久" },
+      ]);
+    }
+  });
+
+  it("drops translated when no translation map proves it", () => {
+    const raw = JSON.stringify({ "1": [note({ translated: "存在得更久" })] });
+    expect(parseGlossaryNotes(raw, items).get("p_1")).toEqual([note({})]);
   });
 });
 

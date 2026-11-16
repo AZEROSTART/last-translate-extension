@@ -130,7 +130,7 @@ it("streams only translation text and returns glossary notes", async () => {
   const streamCompletion = vi.fn(async function* () {
     yield "[1] 小工具";
     yield "比制造者存在得更久。\n<<<ILMT_";
-    yield 'GLOSSARY>>>\n{"1":[{"surface":"outlive","meaning":"比……存在得更久"}]}';
+    yield 'GLOSSARY>>>\n{"1":[{"surface":"outlive","meaning":"比……存在得更久","translated":"存在得更久"}]}';
   });
   const put = vi.fn(async () => {});
   const settingsWithGlossary = { ...settings, glossaryEnabled: true };
@@ -158,14 +158,18 @@ it("streams only translation text and returns glossary notes", async () => {
     {
       id: "p_1",
       text: "小工具比制造者存在得更久。\n",
-      glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+      glossary: [
+        { surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" },
+      ],
     },
   ]);
   expect(put).toHaveBeenCalledWith(
     expect.any(String),
     {
       text: "小工具比制造者存在得更久。\n",
-      glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+      glossary: [
+        { surface: "outlive", meaning: "比……存在得更久", translated: "存在得更久" },
+      ],
     },
     { modelId: "m" },
   );

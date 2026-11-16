@@ -32,6 +32,8 @@ export interface MockGlossaryNote {
   pos?: string;
   meaning: string;
   example?: string;
+  /** Verbatim wording of the term in the same segment's translation. */
+  translated?: string;
   /** Extra language → meaning, forwarded verbatim in the glossary block. */
   glosses?: Record<string, string>;
 }

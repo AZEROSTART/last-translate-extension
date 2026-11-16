@@ -74,8 +74,17 @@ async function launchExtension(): Promise<Extension> {
   }
 }
 
-async function seedSettings(worker: Worker, baseURL: string): Promise<void> {
-  await worker.evaluate(async (origin) => {
+async function seedSettings(
+  worker: Worker,
+  baseURL: string,
+  mascot?: {
+    mode: "rotate" | "fixed";
+    fixedId?: string;
+    enabledIds: string[];
+    animations: boolean;
+  },
+): Promise<void> {
+  await worker.evaluate(async ({ origin, mascotSettings }) => {
     await chrome.storage.local.set({
       settings: {
         providers: [
@@ -101,9 +110,28 @@ async function seedSettings(worker: Worker, baseURL: string): Promise<void> {
         siteRules: {},
         theme: "system",
         glossaryEnabled: true,
+        ...(mascotSettings ? { mascot: mascotSettings } : {}),
       },
     });
-  }, baseURL);
+  }, { origin: baseURL, mascotSettings: mascot });
+}
+
+/** Change only the claim effect, keeping every other seeded setting. */
+async function setMascot(
+  worker: Worker,
+  mascot: {
+    mode: "rotate" | "fixed";
+    fixedId?: string;
+    enabledIds: string[];
+    animations: boolean;
+  },
+): Promise<void> {
+  await worker.evaluate(async (value) => {
+    const stored = (await chrome.storage.local.get("settings")).settings as
+      | Record<string, unknown>
+      | undefined;
+    await chrome.storage.local.set({ settings: { ...stored, mascot: value } });
+  }, mascot);
 }
 
 async function activeTabId(worker: Worker, pageUrl: string): Promise<number> {
@@ -399,6 +427,10 @@ test.describe("loaded extension", () => {
   test("shows a glossary card on hover and clears it on restore", async () => {
     try {
       server = await startMockServer({
+        reply: (index) =>
+          index === 1
+            ? "小工具往往比它们更大的竞争对手存在得更久。"
+            : "译文",
         glossary: (index) =>
           index === 1
             ? [
@@ -407,6 +439,7 @@ test.describe("loaded extension", () => {
                   pos: "v.",
                   meaning: "比……存在得更久",
                   example: "Small tools often outlive their larger competitors.",
+                  translated: "存在得更久",
                 },
               ]
             : undefined,
@@ -424,12 +457,12 @@ test.describe("loaded extension", () => {
       // banner hint) before checking the highlight registry.
       await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
       await expect(page.locator(".ilmt-active-banner")).toContainText("1 个词可悬停");
-      expect(
-        await evaluateInContent<number>(
-          content,
-          'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
-        ),
-      ).toBeGreaterThan(0);
+      await expect(page.locator(".ilmt-active-banner")).not.toContainText("虚线");
+      const glossCount = await evaluateInContent<number>(
+        content,
+        'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
+      );
+      expect(glossCount).toBeGreaterThan(0);
 
       const rect = await page.evaluate(() => {
         const p = document.querySelector("#article-p1")!;
@@ -451,9 +484,32 @@ test.describe("loaded extension", () => {
       await page.mouse.move(rect!.x, rect!.y);
       await expect(page.locator("[role=tooltip]")).toContainText("outlive");
       await expect(page.locator("[role=tooltip]")).toContainText("比……存在得更久");
+      await expect(page.locator("[role=tooltip]")).toContainText("译 · 存在得更久");
+      await expect(page.locator("[role=tooltip] .ilmt-gloss-example")).toHaveCount(0);
+
+      // The term's translated wording is lit inside this paragraph's translation,
+      // and the source highlight keeps exactly the same number of ranges.
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss-pair")?.size ?? 0',
+        ),
+      ).toBe(1);
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
+        ),
+      ).toBe(glossCount);
 
       await page.mouse.move(0, 0);
       await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss-pair")?.size ?? 0',
+        ),
+      ).toBe(0);
 
       await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
       await expect(page.locator(".ilmt-tr")).toHaveCount(0);
@@ -464,6 +520,181 @@ test.describe("loaded extension", () => {
           'CSS.highlights?.get("ilmt-gloss")?.size ?? 0',
         ),
       ).toBe(0);
+      expect(
+        await evaluateInContent<number>(
+          content,
+          'CSS.highlights?.get("ilmt-gloss-pair")?.size ?? 0',
+        ),
+      ).toBe(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("keeps the hover card inside a narrow viewport for every card size", async () => {
+    try {
+      server = await startMockServer({
+        reply: (index) => (index === 10 ? "最后一段以把工具挂回钩子作结。" : "译文"),
+        glossary: (index) =>
+          index === 10
+            ? [{ surface: "hooks", pos: "n.", meaning: "挂钩", translated: "钩子" }]
+            : undefined,
+      });
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin, {
+        mode: "fixed",
+        fixedId: "cat-sticker",
+        enabledIds: [],
+        animations: false,
+      });
+
+      const page = await extension.context.newPage();
+      await page.setViewportSize({ width: 320, height: 600 });
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
+
+      // Room below the article so the last paragraph can be parked mid-viewport,
+      // clear of the fixed banner that sits at the bottom edge.
+      await page.evaluate(() => {
+        const spacer = document.createElement("div");
+        spacer.style.height = "500px";
+        document.body.appendChild(spacer);
+      });
+
+      const termPoint = () =>
+        page.evaluate(() => {
+          const p = document.querySelector("#article-p10")!;
+          const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const text = node as Text;
+            const index = text.data.indexOf("hooks");
+            if (index < 0) continue;
+            const range = document.createRange();
+            range.setStart(text, index);
+            range.setEnd(text, index + "hooks".length);
+            const box = range.getBoundingClientRect();
+            return {
+              x: box.left + box.width / 2,
+              y: box.top + box.height / 2,
+              top: box.top,
+            };
+          }
+          return null;
+        });
+
+      /** Wait for pending scroll events: the card hides on scroll. */
+      const settleScroll = async () => {
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        await page.waitForTimeout(50);
+      };
+
+      const hoverLastTerm = async () => {
+        await page.locator("#article-p10").scrollIntoViewIfNeeded();
+        const initial = await termPoint();
+        expect(initial).not.toBeNull();
+        // Park the word mid-viewport so the fixed banner at the bottom can
+        // never intercept the pointer.
+        await page.evaluate((delta) => window.scrollBy(0, delta), initial!.top - 300);
+        await settleScroll();
+
+        const point = await termPoint();
+        expect(point).not.toBeNull();
+        await page.mouse.move(point!.x, point!.y);
+        await expect(page.locator("[role=tooltip]")).toContainText("hooks");
+        const box = await page.locator("[role=tooltip]").boundingBox();
+        expect(box).not.toBeNull();
+        return box!;
+      };
+
+      const insideViewport = (box: { x: number; y: number; width: number; height: number }) =>
+        box.x >= 0 &&
+        box.y >= 0 &&
+        box.x + box.width <= 320 &&
+        box.y + box.height <= 600;
+
+      const sticker = await hoverLastTerm();
+      expect(insideViewport(sticker)).toBe(true);
+      expect(sticker.height).toBeLessThanOrEqual(175);
+
+      await page.mouse.move(0, 0);
+      await expect(page.locator("[role=tooltip]")).toHaveCount(0);
+
+      await setMascot(extension.worker, {
+        mode: "fixed",
+        fixedId: "gopher-hole",
+        enabledIds: [],
+        animations: false,
+      });
+      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      // Lazy loading only queues the band around the current scroll position,
+      // so wait for this paragraph specifically instead of a page-wide count.
+      await expect(page.locator("#article-p10 .ilmt-tr")).toHaveCount(1);
+      await expect(page.locator('#article-p10 .ilmt-tr[data-loading="1"]')).toHaveCount(0);
+
+      const gopher = await hoverLastTerm();
+      expect(insideViewport(gopher)).toBe(true);
+      expect(gopher.height).toBeLessThanOrEqual(155);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("lights only the hovered paragraph's translation", async () => {
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      await seedSettings(extension.worker, server.origin);
+
+      const page = await extension.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      await activate(extension.worker, await activeTabId(extension.worker, page.url()));
+      const content = await findContentMainContext(page);
+      await evaluateInContent(content, "globalThis.__ilmtMain.translatePage()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect(page.locator('.ilmt-tr[data-loading="1"]')).toHaveCount(0);
+
+      await page.locator("#article-p3").hover();
+      await expect(page.locator("#article-p3 .ilmt-tr")).toHaveAttribute(
+        "data-ilmt-peer",
+        "1",
+      );
+      await expect(page.locator("#article-p2 .ilmt-tr")).not.toHaveAttribute(
+        "data-ilmt-peer",
+        "1",
+      );
+      expect(
+        await page
+          .locator("#article-p3 .ilmt-tr")
+          .evaluate((node) => getComputedStyle(node).opacity),
+      ).toBe("1");
+      expect(await page.locator("[data-ilmt-peer]").count()).toBe(1);
+
+      await page.locator("#article-p5").hover();
+      await expect(page.locator("#article-p5 .ilmt-tr")).toHaveAttribute(
+        "data-ilmt-peer",
+        "1",
+      );
+      await expect(page.locator("#article-p3 .ilmt-tr")).not.toHaveAttribute(
+        "data-ilmt-peer",
+        "1",
+      );
+      const lit = page.locator("[data-ilmt-peer]");
+      expect(await lit.count()).toBe(1);
+      expect(await lit.getAttribute("data-ilmt-for")).toBe("p_5");
+
+      await evaluateInContent(content, "globalThis.__ilmtMain.restore()");
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await expect(page.locator("[data-ilmt-peer]")).toHaveCount(0);
     } finally {
       await cleanup();
     }

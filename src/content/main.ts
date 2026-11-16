@@ -140,6 +140,82 @@ let pendingScan: ScanTicket | null = null;
 let activeBanner: HTMLElement | null = null;
 let errorBanner: HTMLElement | null = null;
 
+/** Paragraph whose translation block is currently lit (requirement: one at a time). */
+let peerRoot: Element | null = null;
+let peerStarted = false;
+
+const PEER_ATTR = "data-ilmt-peer";
+
+/**
+ * Light every translation block owned by `root` and clear every other one.
+ * Attribute-only: no DOM moves, no layout reads, so scrolling never shifts.
+ * Passing null clears all marks.
+ */
+export function setPeerTranslation(root: Element | null): void {
+  const scope = root?.ownerDocument ?? document;
+  for (const node of scope.querySelectorAll(`.ilmt-tr[${PEER_ATTR}]`)) {
+    node.removeAttribute(PEER_ATTR);
+  }
+  if (!root) return;
+  const ids = (root.getAttribute("data-ilmt-p") ?? "").split(/\s+/).filter(Boolean);
+  for (const id of ids) {
+    for (const node of scope.querySelectorAll(`.ilmt-tr[data-ilmt-for="${id}"]`)) {
+      node.setAttribute(PEER_ATTR, "1");
+    }
+  }
+}
+
+function handlePeerOver(event: PointerEvent): void {
+  if (event.pointerType === "touch") return;
+  const selection = document.getSelection?.();
+  if (selection && !selection.isCollapsed) return;
+  const target = event.target;
+  const element =
+    target instanceof Element
+      ? target
+      : target instanceof Node
+        ? target.parentElement
+        : null;
+  const root = element?.closest("[data-ilmt-p]") ?? null;
+  if (!root || root === peerRoot) return;
+  peerRoot = root;
+  setPeerTranslation(root);
+}
+
+function handlePeerOut(event: PointerEvent): void {
+  if (!peerRoot) return;
+  const related = event.relatedTarget;
+  if (related instanceof Node && peerRoot.contains(related)) return;
+  peerRoot = null;
+  setPeerTranslation(null);
+}
+
+function handlePeerScroll(): void {
+  if (!peerRoot) return;
+  peerRoot = null;
+  setPeerTranslation(null);
+}
+
+/** Delegated paragraph hover wiring; active only while translation is on. */
+function startPeerHighlight(): void {
+  if (peerStarted) return;
+  peerStarted = true;
+  document.addEventListener("pointerover", handlePeerOver, { passive: true });
+  document.addEventListener("pointerout", handlePeerOut, { passive: true });
+  window.addEventListener("scroll", handlePeerScroll, true);
+}
+
+function stopPeerHighlight(): void {
+  if (peerStarted) {
+    peerStarted = false;
+    document.removeEventListener("pointerover", handlePeerOver);
+    document.removeEventListener("pointerout", handlePeerOut);
+    window.removeEventListener("scroll", handlePeerScroll, true);
+  }
+  peerRoot = null;
+  setPeerTranslation(null);
+}
+
 /** Latest streamed text per paragraph; deltas append rather than replace. */
 const deltaBuffers = new Map<string, string>();
 /** `chrome.i18n.detectLanguage` results, bounded to one page's paragraphs. */
@@ -172,6 +248,7 @@ async function translatePage(): Promise<void> {
 
   try {
     gloss.start();
+    startPeerHighlight();
     showActiveBanner();
     startPruneTimer();
     startVisibilityObserver();
@@ -202,6 +279,8 @@ async function rescan(): Promise<void> {
   stopVisibilityObserver();
   registry = new ParagraphRegistry();
   gloss.clear();
+  peerRoot = null;
+  setPeerTranslation(null);
   // `restoreAll` removes both injected translation spans and `data-ilmt-p`
   // marks. Without it a surviving SPA paragraph would keep its previous
   // translation, and `collectParagraphs` would read `textContent` polluted by
@@ -481,6 +560,7 @@ function restore(): void {
   lastCompletedRequestId = null;
 
   gloss.stop();
+  stopPeerHighlight();
   if (document.body) restoreAll(document.body);
   resetPieceCache();
   registry = new ParagraphRegistry();
@@ -997,9 +1077,8 @@ function showActiveBanner(): void {
 }
 
 /**
- * Make the hover affordance discoverable: a bare dotted underline is easy to
- * miss, and "no annotations this time" is otherwise indistinguishable from a
- * broken feature.
+ * Make the hover affordance discoverable: "no annotations this time" is
+ * otherwise indistinguishable from a broken feature.
  */
 function updateActiveBannerHint(): void {
   const text = activeBanner?.querySelector(".ilmt-active-text");
@@ -1007,7 +1086,7 @@ function updateActiveBannerHint(): void {
   const count = gloss.count();
   text.textContent =
     count > 0
-      ? `翻译已开启 · ${count} 个词可悬停（带虚线的词）`
+      ? `翻译已开启 · ${count} 个词可悬停`
       : "翻译已开启 · 本次没有可悬停的注释";
 }
 

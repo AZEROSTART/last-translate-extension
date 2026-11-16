@@ -34,8 +34,10 @@ export interface GlossaryNote {
   pos?: string;
   /** Context-specific meaning in the target language. */
   meaning: string;
-  /** Optional short source example. */
+  /** Optional short source example; legacy caches only, never rendered. */
   example?: string;
+  /** How this word appears verbatim in the paragraph's translation. */
+  translated?: string;
   /** Extra-language meanings, e.g. `{ es: "sobrevivir a" }`. */
   glosses?: Record<string, string>;
 }
