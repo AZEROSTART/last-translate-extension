@@ -7,7 +7,7 @@
  * its own container and keeps the conversation alive while review is open.
  */
 
-import { getLearning } from "../shared/learning-storage";
+import { daysSinceDay, getLearning, localDay } from "../shared/learning-storage";
 import { dueCount, formatDueLabel, isDue, previewDueLabel } from "../shared/srs";
 import { buildSpotQuestion, shouldSpotCheck, type SpotQuestion } from "../shared/spot";
 import type {
@@ -184,6 +184,8 @@ interface ReviewState {
   spotQuestion: SpotQuestion | null;
   /** Last committed card; replaced by the next commit and dropped on undo. */
   receipt: Receipt | null;
+  /** Words that finished the ladder this round; memory only, never stored. */
+  graduated: LearningWord[];
 }
 
 /** Ask the background for the scene caption; any failure is a quiet one. */
@@ -226,6 +228,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     spotResult: null,
     spotQuestion: null,
     receipt: null,
+    graduated: [],
   };
 
   let destroyed = false;
@@ -235,6 +238,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   let mountedEffect: ClaimHandle | null = null;
   /** The scene's own effect instance; rebuilt with the card. */
   let sceneEffect: ClaimHandle | null = null;
+  /** Static effects on the finish page's graduation rows; rebuilt on render. */
+  let graduatedEffects: ClaimHandle[] = [];
   /** Remembered per word so switching cards or grading never re-requests. */
   const scenes = new Map<string, SceneState>();
   const sceneRequests = new Set<string>();
@@ -262,6 +267,44 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       hash = Math.imul(hash, 16777619);
     }
     return hash >>> 0;
+  }
+
+  /**
+   * The library itself, not the debt: counted over every word and every
+   * language, and never clickable. Zero words is the empty-state guide's job.
+   */
+  function renderShelf(): HTMLElement | null {
+    const words = state.all?.words;
+    if (!words || words.length === 0) return null;
+    const mastered = words.filter((word) => word.status === "mastered").length;
+    const shelf = document.createElement("p");
+    shelf.className = "ilmt-review-shelf";
+    shelf.textContent =
+      mastered > 0
+        ? `已收录 ${words.length} 个 · 已毕业 ${mastered} 个`
+        : `已收录 ${words.length} 个`;
+    return shelf;
+  }
+
+  /**
+   * Only when the absence is real (3+ days), the work is real (something is
+   * due), and the date can be trusted. It states; it never asks for anything.
+   */
+  function renderReturn(): HTMLElement | null {
+    const all = state.all;
+    if (!all) return null;
+    const now = deps.now();
+    const gap = daysSinceDay(all.stats.day, now);
+    if (gap === null || gap < 3) return null;
+    if (dueCount(all.words, now) <= 0) return null;
+
+    const row = document.createElement("p");
+    row.className = "ilmt-review-return";
+    row.textContent =
+      gap <= 13
+        ? `有 ${gap} 天没见了 · ${all.words.length} 个词都还在`
+        : `有一阵子没见了 · ${all.words.length} 个词都还在`;
+    return row;
   }
 
   function renderFilters(): HTMLElement[] {
@@ -297,6 +340,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
           state.ended = false;
           state.answered = 0;
           state.correct = 0;
+          state.graduated = [];
           state.revealed = false;
           void refresh();
         });
@@ -703,13 +747,75 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (result) renderNext(card, state.pending ? gradeConsequence(state.pending) : undefined);
   }
 
+  function destroyGraduated(): void {
+    for (const handle of graduatedEffects) handle.destroy();
+    graduatedEffects = [];
+  }
+
+  /**
+   * One quiet closing line per word that finished the ladder: the mascot that
+   * kept it, held still, and its name. Three rows at most; the rest is a count.
+   */
+  function renderGraduated(): HTMLElement | null {
+    if (state.graduated.length === 0) return null;
+    const block = document.createElement("div");
+    block.className = "ilmt-review-graduated";
+
+    for (const word of state.graduated.slice(0, 3)) {
+      const row = document.createElement("div");
+      row.className = "ilmt-review-graduated-row";
+
+      const stage = document.createElement("div");
+      stage.className = "ilmt-review-scene-stage";
+      stage.setAttribute("aria-hidden", "true");
+      row.appendChild(stage);
+      try {
+        const effect = deps.effect(word.mascotId);
+        ensureEffectStyles();
+        const handle = effect.mount({
+          doc: document,
+          surface: stage,
+          root: stage,
+          theme: currentTheme(),
+          animations: false,
+          claim: async () => ({ ok: true, created: false }),
+          announce: () => {},
+          label: (verb) => `${verb}`,
+        });
+        graduatedEffects.push(handle);
+        // The word is already kept: hold the effect in its quiet kept pose.
+        handle.setState("known");
+        for (const button of stage.querySelectorAll("button")) button.tabIndex = -1;
+      } catch {
+        // Decoration only: the word's line still carries the news.
+        stage.remove();
+      }
+
+      const label = document.createElement("span");
+      label.className = "ilmt-review-graduated-word";
+      label.textContent = `${word.surface} 毕业了`;
+      row.appendChild(label);
+      block.appendChild(row);
+    }
+
+    const rest = state.graduated.length - 3;
+    if (rest > 0) {
+      const more = document.createElement("p");
+      more.className = "ilmt-review-graduated-more";
+      more.textContent = `还有 ${rest} 个也毕业了`;
+      block.appendChild(more);
+    }
+    return block;
+  }
+
   function renderFinish(): void {
     const card = document.createElement("div");
     card.className = "ilmt-review-done";
 
     const now = deps.now();
     const words = state.all?.words ?? [];
-    const todayReviewed = state.all?.stats.todayReviewed ?? 0;
+    const todayReviewed =
+      state.all && state.all.stats.day === localDay(now) ? state.all.stats.todayReviewed : 0;
 
     // A: nothing has ever been claimed. The three zeros were never the point.
     if (words.length === 0) {
@@ -728,6 +834,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
 
     const remaining = words.filter((word) => isDue(word, now)).length;
+    const graduated = renderGraduated();
 
     // B: the user stopped early and work is genuinely left.
     if (state.ended && remaining > 0) {
@@ -740,7 +847,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       const today = document.createElement("p");
       today.className = "ilmt-review-done-today";
       today.textContent = `今天已复习 ${todayReviewed} 个`;
-      card.append(title, summary, today);
+      card.append(title, summary);
+      if (graduated) card.appendChild(graduated);
+      card.appendChild(today);
 
       const again = document.createElement("button");
       again.type = "button";
@@ -750,6 +859,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         state.ended = false;
         state.answered = 0;
         state.correct = 0;
+        state.graduated = [];
         state.receipt = null;
         suppressedSpot.clear();
         void refresh();
@@ -778,6 +888,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       summary.textContent = parts.join(" · ");
       card.appendChild(summary);
     }
+
+    if (graduated) card.appendChild(graduated);
 
     const today = document.createElement("p");
     today.className = "ilmt-review-done-today";
@@ -816,7 +928,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // Also covers leaving the card for the finish view, where renderCard never runs.
     mountedEffect?.destroy();
     mountedEffect = null;
-    container.replaceChildren(...renderFilters());
+    destroyGraduated();
+    container.replaceChildren();
+    const shelf = renderShelf();
+    if (shelf) container.appendChild(shelf);
+    const comeback = renderReturn();
+    if (comeback) container.appendChild(comeback);
+    container.append(...renderFilters());
     if (state.receipt) container.appendChild(renderReceipt());
     if (!current()) {
       renderFinish();
@@ -916,6 +1034,23 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       return;
     }
 
+    // Replace in place so the shelf shows a graduation on this very frame,
+    // without waiting for the storage change listener.
+    const updated = response.word;
+    if (updated && state.all) {
+      state.all = {
+        ...state.all,
+        words: state.all.words.map((item) => (item.id === updated.id ? updated : item)),
+      };
+    }
+
+    if (
+      updated?.status === "mastered" &&
+      !state.graduated.some((word) => word.id === updated.id)
+    ) {
+      state.graduated.push(updated);
+    }
+
     state.answered += 1;
     if (grade === "good") state.correct += 1;
     const dueAt = response.word?.dueAt ?? null;
@@ -969,6 +1104,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
 
     state.receipt = null;
+    state.graduated = state.graduated.filter((word) => word.id !== receipt.id);
     state.answered = Math.max(0, state.answered - 1);
     if (receipt.grade === "good") state.correct = Math.max(0, state.correct - 1);
     suppressedSpot.add(receipt.id);
@@ -1031,6 +1167,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       destroyed = true;
       mountedEffect?.destroy();
       mountedEffect = null;
+      destroyGraduated();
       container.remove();
     },
   };

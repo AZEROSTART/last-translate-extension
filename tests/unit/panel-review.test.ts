@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReviewQueue, mountReview, type ReviewOptions } from "../../src/panel/review";
-import type { ClaimEffect } from "../../src/content/effects/types";
-import { applyReviewAnswer, undoReviewAnswer } from "../../src/shared/learning-storage";
+import type { ClaimContext, ClaimEffect } from "../../src/content/effects/types";
+import {
+  applyReviewAnswer,
+  localDay,
+  undoReviewAnswer,
+} from "../../src/shared/learning-storage";
 import type {
   LearningGrade,
   LearningWord,
@@ -36,8 +40,16 @@ function word(index: number, over: Partial<LearningWord> = {}): LearningWord {
   };
 }
 
-function state(words: LearningWord[]): LearningState {
-  return { version: 1, words, stats: { day: "2026-11-12", todayReviewed: 0 }, updatedAt: NOW };
+function state(
+  words: LearningWord[],
+  stats?: Partial<LearningState["stats"]>,
+): LearningState {
+  return {
+    version: 1,
+    words,
+    stats: { day: "2026-11-12", todayReviewed: 0, ...stats },
+    updatedAt: NOW,
+  };
 }
 
 function mount(words: LearningWord[], over: Partial<ReviewOptions> = {}) {
@@ -176,6 +188,79 @@ describe("mountReview", () => {
     expect(root.textContent).not.toContain("答对");
     expect(root.textContent).not.toContain("明日还有 0");
     expect(root.textContent).not.toContain("今天已复习");
+    expect(root.querySelector(".ilmt-review-shelf")).toBeNull();
+  });
+
+  it("keeps the library size above everything, counting mastered words", async () => {
+    const words = [
+      word(1),
+      word(2),
+      word(3, { status: "mastered", box: 5, dueAt: null }),
+    ];
+    const { root, view } = mount(words);
+    await view.refresh();
+
+    const shelf = root.querySelector<HTMLElement>(".ilmt-review-shelf");
+    expect(shelf?.textContent).toBe("已收录 3 个 · 已毕业 1 个");
+    const review = root.querySelector(".ilmt-review")!;
+    expect(review.firstElementChild).toBe(shelf);
+  });
+
+  it("drops the graduated part of the shelf when nothing has graduated", async () => {
+    const { root, view } = mount([word(1), word(2), word(3)]);
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 3 个");
+    expect(root.textContent).not.toContain("已毕业");
+  });
+
+  it("keeps the shelf before the language chips and unchanged when a chip is picked", async () => {
+    const words = [
+      word(1),
+      word(2, { id: "es:actual", termLang: "es", surface: "actual" }),
+    ];
+    const { root, view } = mount(words);
+    await view.refresh();
+
+    const shelf = root.querySelector<HTMLElement>(".ilmt-review-shelf")!;
+    const langs = root.querySelector<HTMLElement>(".ilmt-review-langs")!;
+    expect(shelf.compareDocumentPosition(langs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    root.querySelector<HTMLButtonElement>('.ilmt-review-lang[data-lang="es"]')!.click();
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-lang.is-active")?.textContent).toContain("西语");
+    });
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 2 个");
+  });
+
+  it("keeps the shelf on the card and on both finish pages", async () => {
+    const words = [word(1), word(2), word(3)];
+
+    const card = mount(words);
+    await card.view.refresh();
+    expect(card.root.querySelector(".ilmt-review-card")).toBeTruthy();
+    expect(card.root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 3 个");
+    card.view.destroy();
+
+    // B: the round was ended with work left.
+    const early = mount(words);
+    await early.view.refresh();
+    early.root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+    await vi.waitFor(() => {
+      expect(early.root.querySelector(".ilmt-review-done-title")?.textContent).toBe("本轮先到这");
+    });
+    expect(early.root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 3 个");
+    early.view.destroy();
+
+    // C: everything is scheduled for later.
+    const done = mount(words.map((item) => ({ ...item, dueAt: NOW + HOUR })));
+    await done.view.refresh();
+    expect(done.root.querySelector(".ilmt-review-done-title")?.textContent).toBe(
+      "今天没有要复习的词",
+    );
+    expect(done.root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 3 个");
+    done.view.destroy();
   });
 
   it("says how many cards are still due when the round is ended early", async () => {
@@ -913,6 +998,331 @@ describe("receipt and undo", () => {
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
     expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(3);
+  });
+});
+
+describe("graduation send-off", () => {
+  async function finishWith(
+    root: HTMLElement,
+    clicks: number,
+    names: string[] = [],
+  ): Promise<void> {
+    for (let i = 0; i < clicks; i++) {
+      root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+      root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+      const next = names[i];
+      if (next) {
+        await vi.waitFor(() => {
+          expect(root.querySelector(".ilmt-review-word")?.textContent).toBe(next);
+        });
+      }
+    }
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done")).toBeTruthy();
+    });
+  }
+
+  it("says which word finished the ladder, on the same frame as the shelf", async () => {
+    const { root, view } = mountStored([word(1, { box: 5, surface: "word1" })]);
+    await view.refresh();
+    await finishWith(root, 1);
+
+    expect(root.querySelector(".ilmt-review-graduated")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-graduated-word")?.textContent).toBe("word1 毕业了");
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe(
+      "已收录 1 个 · 已毕业 1 个",
+    );
+    expect(root.querySelector(".ilmt-review-receipt")?.textContent).toContain("已毕业");
+    view.destroy();
+  });
+
+  it("stays quiet for an ordinary 认识", async () => {
+    const { root, view } = mountStored([word(1)]);
+    await view.refresh();
+    await finishWith(root, 1);
+
+    expect(root.querySelector(".ilmt-review-graduated")).toBeNull();
+    expect(root.textContent).not.toContain("毕业了");
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 1 个");
+    view.destroy();
+  });
+
+  it("shows at most three rows and counts the rest in one line", async () => {
+    const words = [1, 2, 3, 4].map((i) =>
+      word(i, { box: 5, surface: `word${i}`, dueAt: NOW - (10 - i) * HOUR }),
+    );
+    const { root, view } = mountStored(words);
+    await view.refresh();
+    await finishWith(root, 4, ["word2", "word3", "word4"]);
+
+    const rows = [...root.querySelectorAll(".ilmt-review-graduated-row")];
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.querySelector(".ilmt-review-graduated-word")?.textContent)).toEqual(
+      ["word1 毕业了", "word2 毕业了", "word3 毕业了"],
+    );
+    expect(root.querySelector(".ilmt-review-graduated-more")?.textContent).toBe(
+      "还有 1 个也毕业了",
+    );
+    view.destroy();
+  });
+
+  it("keeps the early-finish page intact and still names the graduate", async () => {
+    const words = [word(1, { box: 5, surface: "word1" }), word(2), word(3)];
+    const { root, view } = mountStored(words);
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
+    });
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("本轮先到这");
+    });
+    expect(root.querySelector(".ilmt-review-graduated-word")?.textContent).toBe("word1 毕业了");
+    expect(root.textContent).toContain("还有 2 个到期");
+    expect(root.querySelector(".ilmt-review-continue")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 1 个");
+    view.destroy();
+  });
+
+  it("lets one undo take the send-off back, then graduates again without duplicating", async () => {
+    const { root, view } = mountStored([word(1, { box: 5, surface: "word1" })]);
+    await view.refresh();
+    await finishWith(root, 1);
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-receipt-undo")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
+    });
+    expect(root.querySelector(".ilmt-review-graduated")).toBeNull();
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 1 个");
+
+    await finishWith(root, 1);
+    expect(root.querySelectorAll(".ilmt-review-graduated-row")).toHaveLength(1);
+    expect(root.querySelector(".ilmt-review-graduated-more")).toBeNull();
+    view.destroy();
+  });
+
+  it("keeps the words readable when their effect cannot mount", async () => {
+    const broken: ClaimEffect = {
+      id: "broken",
+      label: "坏",
+      summary: "",
+      reserve: { above: 0, below: 0 },
+      mount: () => {
+        throw new Error("boom");
+      },
+    };
+    const { root, view } = mountStored([word(1, { box: 5, surface: "outlive" })], {
+      effect: () => broken,
+    });
+    await view.refresh();
+    await finishWith(root, 1);
+
+    expect(root.querySelector(".ilmt-review-graduated-word")?.textContent).toBe("outlive 毕业了");
+    expect(root.querySelector(".ilmt-review-graduated [data-ilmt-effect]")).toBeNull();
+    view.destroy();
+  });
+
+  it("mounts the graduation effect as a static, hidden decoration and destroys it", async () => {
+    const mounted: ClaimContext[] = [];
+    const destroy = vi.fn();
+    const effect: ClaimEffect = {
+      id: "recording",
+      label: "记录",
+      summary: "",
+      reserve: { above: 0, below: 0 },
+      mount: (ctx) => {
+        mounted.push(ctx);
+        const button = document.createElement("button");
+        button.textContent = "hit";
+        ctx.root.appendChild(button);
+        return {
+          setState: (phase) => {
+            ctx.root.dataset.ilmtState = phase;
+          },
+          destroy,
+        };
+      },
+    };
+    const { root, view } = mountStored(
+      [word(1, { box: 5, surface: "outlive", mascotId: "recording" })],
+      { effect: () => effect },
+    );
+    await view.refresh();
+    await finishWith(root, 1);
+
+    const stage = root.querySelector<HTMLElement>(
+      ".ilmt-review-graduated-row .ilmt-review-scene-stage",
+    )!;
+    expect(stage.getAttribute("aria-hidden")).toBe("true");
+    expect(stage.querySelector("button")!.tabIndex).toBe(-1);
+    expect(stage.dataset.ilmtState).toBe("known");
+    const graduationMounts = mounted.filter(
+      (ctx) =>
+        (ctx.root as HTMLElement).isConnected &&
+        ctx.root.closest(".ilmt-review-graduated"),
+    );
+    expect(graduationMounts).toHaveLength(1);
+    expect(graduationMounts.every((ctx) => ctx.animations === false)).toBe(true);
+
+    const afterMount = destroy.mock.calls.length;
+    await view.refresh();
+    expect(destroy.mock.calls.length).toBeGreaterThan(afterMount);
+
+    const beforeDestroy = destroy.mock.calls.length;
+    view.destroy();
+    expect(destroy.mock.calls.length).toBeGreaterThan(beforeDestroy);
+  });
+});
+
+describe("today and coming back", () => {
+  const today = localDay(NOW);
+  const daysAgo = (days: number) => localDay(NOW - days * 24 * HOUR);
+
+  function mountState(words: LearningWord[], stats: Partial<LearningState["stats"]>) {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState: async () => state(words, stats),
+      now: () => NOW,
+    });
+    return { root, view };
+  }
+
+  function library(): LearningWord[] {
+    return [
+      word(1),
+      ...Array.from({ length: 20 }, (_, index) => word(index + 2, { dueAt: NOW + HOUR })),
+      ...Array.from({ length: 3 }, (_, index) =>
+        word(index + 22, { status: "mastered", box: 5, dueAt: null }),
+      ),
+    ];
+  }
+
+  it("counts today's reviews only when the stored day is today", async () => {
+    const { root, view } = mountState([word(1, { dueAt: NOW + HOUR })], {
+      day: today,
+      todayReviewed: 4,
+    });
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 4 个");
+    view.destroy();
+  });
+
+  it("does not report yesterday's count as today's", async () => {
+    const { root, view } = mountState([word(1, { dueAt: NOW + HOUR })], {
+      day: daysAgo(1),
+      todayReviewed: 4,
+    });
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("今天没有要复习的词");
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 0 个");
+    expect(root.textContent).not.toContain("已复习 4 个");
+    view.destroy();
+  });
+
+  it("also zeroes the count on the early-finish page after a day change", async () => {
+    const { root, view } = mountState([word(1), word(2)], {
+      day: daysAgo(1),
+      todayReviewed: 4,
+    });
+    await view.refresh();
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("本轮先到这");
+    });
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 0 个");
+    view.destroy();
+  });
+
+  it("welcomes someone back with the exact gap and the whole library", async () => {
+    const { root, view } = mountState(library(), { day: daysAgo(5), todayReviewed: 4 });
+    await view.refresh();
+
+    const shelf = root.querySelector(".ilmt-review-shelf")!;
+    const comeback = root.querySelector<HTMLElement>(".ilmt-review-return");
+    expect(shelf.textContent).toBe("已收录 24 个 · 已毕业 3 个");
+    expect(comeback?.textContent).toBe("有 5 天没见了 · 24 个词都还在");
+    expect(shelf.nextElementSibling).toBe(comeback);
+    view.destroy();
+  });
+
+  it("stops counting precise days after two weeks", async () => {
+    const { root, view } = mountState(library(), { day: daysAgo(14), todayReviewed: 4 });
+    await view.refresh();
+
+    expect(root.querySelector(".ilmt-review-return")?.textContent).toBe(
+      "有一阵子没见了 · 24 个词都还在",
+    );
+    view.destroy();
+  });
+
+  it("only speaks up from three days on, with a due word and a real day", async () => {
+    const two = mountState(library(), { day: daysAgo(2), todayReviewed: 4 });
+    await two.view.refresh();
+    expect(two.root.querySelector(".ilmt-review-return")).toBeNull();
+    two.view.destroy();
+
+    const three = mountState(library(), { day: daysAgo(3), todayReviewed: 4 });
+    await three.view.refresh();
+    expect(three.root.querySelector(".ilmt-review-return")?.textContent).toBe(
+      "有 3 天没见了 · 24 个词都还在",
+    );
+    three.view.destroy();
+
+    const never = mountState(library(), { day: "", todayReviewed: 0 });
+    await never.view.refresh();
+    expect(never.root.querySelector(".ilmt-review-return")).toBeNull();
+    never.view.destroy();
+
+    const nothingDue = mountState(
+      library().map((item) => ({ ...item, status: "learning" as const, dueAt: NOW + HOUR })),
+      { day: daysAgo(5), todayReviewed: 4 },
+    );
+    await nothingDue.view.refresh();
+    expect(nothingDue.root.querySelector(".ilmt-review-return")).toBeNull();
+    nothingDue.view.destroy();
+
+    const future = mountState(library(), { day: daysAgo(-5), todayReviewed: 4 });
+    await future.view.refresh();
+    expect(future.root.querySelector(".ilmt-review-return")).toBeNull();
+    future.view.destroy();
+  });
+
+  it("falls silent after one review, while the shelf stays", async () => {
+    const words = [word(1)];
+    let current = state(words, { day: daysAgo(5), todayReviewed: 4 });
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState: async () => current,
+      answer: async (message) => {
+        const next = applyReviewAnswer(current, { id: message.id, grade: message.grade }, NOW);
+        current = next.state;
+        return { ok: true as const, word: next.word! };
+      },
+      now: () => NOW,
+    });
+    await view.refresh();
+    expect(root.querySelector(".ilmt-review-return")).toBeTruthy();
+
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
+    root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy();
+    });
+
+    await view.refresh();
+    expect(root.querySelector(".ilmt-review-return")).toBeNull();
+    expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 1 个");
+    view.destroy();
   });
 });
 

@@ -341,6 +341,26 @@ button:focus-visible {
   overflow-y: auto;
 }
 
+/* The library's size: a quiet statement, not a target or a button. */
+.ilmt-review-shelf {
+  margin: 0;
+  color: var(--ilmt-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* "You were away; nothing was lost." A statement, not a task. */
+.ilmt-review-return {
+  margin: 0;
+  color: var(--ilmt-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+}
+
 .ilmt-review-langs {
   display: flex;
   flex-wrap: wrap;
@@ -638,6 +658,33 @@ button:focus-visible {
   margin: 0;
   color: var(--ilmt-muted);
   font-size: 12px;
+}
+
+/* A word that finished the ladder: the kept mascot, held still, one line. */
+.ilmt-review-graduated {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 2px 0;
+}
+
+.ilmt-review-graduated-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ilmt-review-graduated-word {
+  color: var(--ilmt-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ilmt-review-graduated-more {
+  margin: 0;
+  color: var(--ilmt-muted);
+  font-size: 11px;
 }
 
 .ilmt-review-options {

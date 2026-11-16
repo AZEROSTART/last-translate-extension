@@ -36,11 +36,37 @@ export function emptyLearningState(): LearningState {
   };
 }
 
-function localDay(now: number): string {
+/** The local calendar day (`YYYY-MM-DD`) a timestamp falls on. */
+export function localDay(now: number): string {
   const date = new Date(now);
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Whole local days between `day` (YYYY-MM-DD) and today: 0 = today, 1 =
+ * yesterday, negative = future. Empty or impossible dates have no answer.
+ * Midnight-to-midnight with rounding keeps DST from turning a day into 23/25h.
+ */
+export function daysSinceDay(day: string, now: number): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const date = Number(match[3]);
+  const then = new Date(year, month - 1, date);
+  // A date like 2026-13-40 rolls over instead of failing; reject the rollover.
+  if (
+    then.getFullYear() !== year ||
+    then.getMonth() !== month - 1 ||
+    then.getDate() !== date
+  ) {
+    return null;
+  }
+  const today = new Date(now);
+  const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.round((midnight.getTime() - then.getTime()) / (24 * 60 * 60 * 1000));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

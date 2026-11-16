@@ -3,8 +3,10 @@ import {
   MAX_WORDS,
   UNDO_WINDOW_MS,
   applyReviewAnswer,
+  daysSinceDay,
   emptyLearningState,
   getLearning,
+  localDay,
   mergeLearnedWord,
   parseLearningState,
   saveLearning,
@@ -321,6 +323,32 @@ describe("review snapshots and undo", () => {
     expect(legacy.words[0].reviews).toHaveLength(1);
     expect(legacy.words[0].reviews[0].before).toBeUndefined();
     expect(legacy.words[0].id).toBe("en:word1");
+  });
+});
+
+describe("local days", () => {
+  // Local wall-clock time, so the assertions hold in any time zone.
+  const at = new Date(2026, 10, 16, 9, 30).getTime();
+
+  it("names the local calendar day", () => {
+    expect(localDay(at)).toBe("2026-11-16");
+    expect(localDay(new Date(2026, 0, 2, 0, 0).getTime())).toBe("2026-01-02");
+  });
+
+  it("counts whole days since a local date", () => {
+    expect(daysSinceDay("2026-11-16", at)).toBe(0);
+    expect(daysSinceDay("2026-11-15", at)).toBe(1);
+    expect(daysSinceDay("2026-11-17", at)).toBe(-1);
+    // Across a month boundary and across a year boundary.
+    expect(daysSinceDay("2026-10-31", at)).toBe(16);
+    expect(daysSinceDay("2025-12-31", at)).toBe(320);
+  });
+
+  it("returns null when the day cannot be trusted", () => {
+    expect(daysSinceDay("", at)).toBeNull();
+    expect(daysSinceDay("2026-13-40", at)).toBeNull();
+    expect(daysSinceDay("2026-02-30", at)).toBeNull();
+    expect(daysSinceDay("2026-11-16T00:00", at)).toBeNull();
   });
 });
 

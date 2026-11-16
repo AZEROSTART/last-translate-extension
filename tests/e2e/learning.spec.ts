@@ -211,6 +211,106 @@ test.describe("learning loop", () => {
     }
   });
 
+  test("shows the size of the library once the first word is kept", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      const extensionId = new URL(ext.worker.url()).host;
+      await claim(page.locator("[role=tooltip]"));
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+      await panel.locator('.panel-tab[data-view="review"]').click();
+
+      await expect(panel.locator(".ilmt-review-shelf")).toHaveText("已收录 1 个");
+      await expect(panel.locator(".ilmt-review-shelf")).not.toContainText("已毕业");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("graduates the last due word and clears the badge", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      const extensionId = new URL(ext.worker.url()).host;
+      await claim(page.locator("[role=tooltip]"));
+
+      // One 认识 away from graduating, and due right now.
+      await ext.worker.evaluate(async () => {
+        const stored = (await chrome.storage.local.get("learning")).learning as {
+          words: Array<{ box: number; dueAt: number | null }>;
+        };
+        stored.words[0].box = 5;
+        stored.words[0].dueAt = Date.now() - 1000;
+        await chrome.storage.local.set({ learning: stored });
+      });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+      await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
+      await panel.locator('.panel-tab[data-view="review"]').click();
+
+      await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
+      await expect(panel.locator('.ilmt-review-grade[data-grade="good"]')).toContainText("已毕业");
+      await panel.locator('[data-grade="good"]').click();
+      await panel.locator(".ilmt-review-next").click();
+
+      await expect(panel.locator(".ilmt-review-done")).toContainText("今天没有要复习的词");
+      await expect(panel.locator(".ilmt-review-graduated-word")).toHaveText("outlive 毕业了");
+      await expect(panel.locator(".ilmt-review-shelf")).toHaveText("已收录 1 个 · 已毕业 1 个");
+      await expect
+        .poll(() =>
+          ext.worker.evaluate(async () => {
+            const stored = (await chrome.storage.local.get("learning")).learning as
+              | { words?: Array<{ status?: string }> }
+              | undefined;
+            return stored?.words?.[0]?.status ?? "";
+          }),
+        )
+        .toBe("mastered");
+      await expect
+        .poll(async () => ext.worker.evaluate(async () => chrome.action.getBadgeText({})), {
+          timeout: 10_000,
+        })
+        .toBe("");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("tells a returning user the truth about the gap and about today", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      const extensionId = new URL(ext.worker.url()).host;
+      await claim(page.locator("[role=tooltip]"));
+
+      // One due word, last reviewed five local days ago.
+      await ext.worker.evaluate(async () => {
+        const stored = (await chrome.storage.local.get("learning")).learning as {
+          words: Array<{ dueAt: number | null }>;
+          stats: { day: string; todayReviewed: number };
+        };
+        stored.words[0].dueAt = Date.now() - 1000;
+        const past = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+        const local = `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, "0")}-${String(past.getDate()).padStart(2, "0")}`;
+        stored.stats = { day: local, todayReviewed: 4 };
+        await chrome.storage.local.set({ learning: stored });
+      });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${extensionId}/panel.html`);
+      await panel.locator('.panel-tab[data-view="review"]').click();
+
+      await expect(panel.locator(".ilmt-review-return")).toContainText("有 5 天没见了");
+      await panel.locator(".ilmt-review-end").click();
+
+      await expect(panel.locator(".ilmt-review-done-title")).toHaveText("本轮先到这");
+      await expect(panel.locator(".ilmt-review-done-today")).toHaveText("今天已复习 0 个");
+      await expect(panel.locator(".ilmt-review-done")).not.toContainText("今天已复习 4 个");
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("undoes the last review and returns the same card", async () => {
     try {
       const { extension: ext, page } = await openClaimCard();
