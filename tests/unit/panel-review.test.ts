@@ -316,6 +316,7 @@ describe("revealed", () => {
     });
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
     expect(root.querySelector(".ilmt-review-reveal")?.textContent).toBe("看答案");
+    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-reveal"));
     expect(root.querySelector(".ilmt-review-next")).toBeNull();
     const receipt = root.querySelector(".ilmt-review-receipt")!;
     expect(receipt.firstElementChild?.textContent).toBe("word1 · 词1 · 明天再见");
@@ -436,6 +437,7 @@ describe("lesson", () => {
     });
     expect(answer).toHaveBeenCalledTimes(1);
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
+    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-reveal"));
     expect(root.querySelector(".ilmt-review-receipt")?.firstElementChild?.textContent).toBe(
       "word1 · 词1 · 10 分钟后再见",
     );

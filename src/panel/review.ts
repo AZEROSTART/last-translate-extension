@@ -761,6 +761,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       state.phase = "prompt";
       state.error = null;
       render();
+      focusReveal();
       flushPending();
     } else {
       // The word is written; this card now teaches, and 下一张 only turns it.
@@ -775,7 +776,14 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.phase = "prompt";
     state.error = null;
     render();
+    focusReveal();
     flushPending();
+  }
+
+  /** A turned card starts at its one action, not at the top of the panel. */
+  function focusReveal(): void {
+    if (destroyed) return;
+    container.querySelector<HTMLButtonElement>(".ilmt-review-reveal")?.focus();
   }
 
   /**
