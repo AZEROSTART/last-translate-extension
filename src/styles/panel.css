@@ -361,58 +361,17 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.ilmt-review-langs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.ilmt-review-lang {
-  appearance: none;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--ilmt-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.ilmt-review-lang.is-active {
-  border-color: var(--ilmt-accent);
-  color: var(--ilmt-accent);
-  background: rgba(45, 212, 191, 0.1);
-}
-
-.ilmt-review-gloss {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  color: var(--ilmt-muted);
-  font-size: 12px;
-}
-
-.ilmt-review-gloss-lang {
-  padding: 3px 6px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 6px;
-  background: var(--ilmt-input);
-  color: var(--ilmt-text);
-  font: inherit;
-}
-
+/* One reading axis: word, sentence, meaning, action — all left aligned. */
 .ilmt-review-card {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 268px;
   padding: 14px;
   border: 1px solid var(--ilmt-border);
   border-radius: var(--ilmt-radius);
   background: var(--ilmt-glass);
-  box-shadow: var(--ilmt-glow);
+  text-align: left;
 }
 
 .ilmt-review-head {
@@ -420,51 +379,38 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   color: var(--ilmt-muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .ilmt-review-end {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   border: 0;
-  padding: 2px 4px;
+  padding: 0 4px;
   background: transparent;
   color: var(--ilmt-muted);
   font: inherit;
+  font-size: 11px;
   cursor: pointer;
 }
 
 .ilmt-review-end:hover {
-  color: var(--ilmt-danger);
+  color: var(--ilmt-text);
 }
 
-.ilmt-review-mascot {
-  position: absolute;
-  top: 44px;
-  right: 12px;
-  width: 50px;
-  height: 44px;
-  opacity: 0.85;
-  pointer-events: none;
-}
-
-/* Keep a long headword from running under the effect. */
 .ilmt-review-term {
   display: flex;
   align-items: baseline;
-  justify-content: center;
   gap: 8px;
-  padding-right: 64px;
 }
 
-.ilmt-review-effect-host {
-  position: relative;
-  display: block;
-}
-
+/* The word is the question, not a link. */
 .ilmt-review-word {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--ilmt-accent-2);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ilmt-text);
 }
 
 .ilmt-review-pos {
@@ -483,39 +429,51 @@ button:focus-visible {
 .ilmt-review-sentence {
   margin: 0;
   color: var(--ilmt-text);
-  font-size: 14px;
-  line-height: 1.6;
-  text-align: center;
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: left;
+}
+
+.ilmt-review-blank {
+  color: var(--ilmt-muted);
+  border-bottom: 1px solid var(--ilmt-border);
+  padding: 0 2px;
+}
+
+/* The action area is pinned to the card's floor, so 8 cards never move it. */
+.ilmt-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
 }
 
 .ilmt-review-reveal {
   appearance: none;
   width: 100%;
   min-height: 44px;
-  border: 1px dashed var(--ilmt-border);
+  border: 1px solid var(--ilmt-accent);
   border-radius: 8px;
-  background: transparent;
+  background: rgba(45, 212, 191, 0.12);
   color: var(--ilmt-accent);
   font: inherit;
   cursor: pointer;
 }
 
 .ilmt-review-reveal:hover {
-  background: rgba(45, 212, 191, 0.08);
+  background: rgba(45, 212, 191, 0.18);
 }
 
+/* The answer is a line of text, not a coloured block. */
 .ilmt-review-answer {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px;
-  border-radius: 8px;
-  background: rgba(45, 212, 191, 0.07);
-  text-align: center;
+  text-align: left;
 }
 
 .ilmt-review-meaning {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -524,74 +482,62 @@ button:focus-visible {
   font-weight: 400;
 }
 
-.ilmt-review-meaning-more {
-  color: var(--ilmt-muted);
-  font-size: 12px;
-}
-
-.ilmt-review-sentence-full {
-  margin: 4px 0 0;
-  color: var(--ilmt-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.ilmt-review-grades {
+/* Two equal buttons: neither is the right answer. */
+.ilmt-review-choices {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
 }
 
 .ilmt-review-grade {
   appearance: none;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  min-height: 48px;
+  min-height: 44px;
   border: 1px solid var(--ilmt-border-soft);
   border-radius: 8px;
   background: var(--ilmt-input);
   color: var(--ilmt-text);
   font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
   cursor: pointer;
 }
 
-.ilmt-review-grade-word {
-  font-size: 14px;
-  line-height: 1.2;
+.ilmt-review-grade:hover:not(:disabled) {
+  border-color: var(--ilmt-accent);
 }
 
-.ilmt-review-grade-due {
-  color: var(--ilmt-muted);
-  font-size: 11px;
-  line-height: 1.2;
-  white-space: nowrap;
+.ilmt-review-grade:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.ilmt-review-grade-note,
-.ilmt-review-next-note {
+.ilmt-review-error {
   margin: 0;
   color: var(--ilmt-muted);
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
+/* The receipt is the card you just passed, in one quiet line. */
 .ilmt-review-receipt {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(45, 212, 191, 0.08);
-  font-size: 13px;
+  padding-top: 6px;
+  border-top: 1px solid var(--ilmt-border-soft);
+  font-size: 12px;
 }
 
 .ilmt-review-receipt-undo {
   appearance: none;
-  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: -13px 0;
   border: 0;
   padding: 0 2px;
   background: none;
@@ -604,26 +550,6 @@ button:focus-visible {
 }
 
 .ilmt-review-receipt-undo:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.ilmt-review-grade[data-grade="good"] {
-  border-color: var(--ilmt-accent);
-  color: var(--ilmt-accent);
-}
-
-.ilmt-review-grade[data-grade="again"] {
-  border-color: rgba(251, 113, 133, 0.4);
-  color: var(--ilmt-danger);
-}
-
-.ilmt-review-grade.is-active {
-  background: rgba(45, 212, 191, 0.16);
-  border-color: var(--ilmt-accent);
-}
-
-.ilmt-review-grade:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -687,52 +613,6 @@ button:focus-visible {
   font-size: 11px;
 }
 
-.ilmt-review-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ilmt-review-option {
-  appearance: none;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 8px;
-  background: var(--ilmt-input);
-  color: var(--ilmt-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.ilmt-review-option:hover:not(:disabled) {
-  border-color: var(--ilmt-accent);
-}
-
-.ilmt-review-option.is-correct {
-  border-color: var(--ilmt-accent);
-  background: rgba(45, 212, 191, 0.14);
-  color: var(--ilmt-accent);
-}
-
-.ilmt-review-option.is-wrong {
-  border-color: var(--ilmt-danger);
-  background: rgba(251, 113, 133, 0.1);
-  color: var(--ilmt-danger);
-}
-
-.ilmt-review-option:disabled {
-  cursor: default;
-}
-
-.ilmt-review-spot-note {
-  margin: 0;
-  color: var(--ilmt-accent);
-  font-size: 12px;
-  text-align: center;
-}
-
 .ilmt-review-next,
 .ilmt-review-continue {
   appearance: none;
@@ -745,12 +625,21 @@ button:focus-visible {
   cursor: pointer;
 }
 
+/* --- lesson: the one screen that teaches, after 没想起来 --- */
+.ilmt-review-lesson {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
 /* --- review scene: the claim effect performs, the caption carries the hook --- */
 .ilmt-review-scene {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 6px 0 2px;
+  margin: 2px 0;
   padding: 6px 8px 6px 4px;
   border-radius: 10px;
   background: rgba(45, 212, 191, 0.05);
@@ -793,13 +682,15 @@ button:focus-visible {
   animation: ilmt-scene-pulse 1.4s ease-in-out infinite;
 }
 
-.ilmt-review-scene-replay,
 .ilmt-review-scene-retry {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   border: 0;
   padding: 0;
   background: none;
-  color: var(--ilmt-accent);
+  color: var(--ilmt-muted);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
@@ -807,11 +698,6 @@ button:focus-visible {
   text-underline-offset: 2px;
 }
 
-.ilmt-review-scene-retry {
-  color: var(--ilmt-muted);
-}
-
-.ilmt-review-scene-replay:hover,
 .ilmt-review-scene-retry:hover {
   color: var(--ilmt-accent);
 }
