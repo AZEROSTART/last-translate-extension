@@ -1,7 +1,7 @@
 # 复习页重设计：把「结算」改成「回忆」
 
 - 日期：2026-11-17
-- 状态：设计（未实施）
+- 状态：已实施（第一阶段，见 v4-test-report）
 - 范围：只重做侧栏复习视图（`src/panel/review.ts` + 对应 CSS）；不动 SRS 间隔表、学习库 schema、翻译链路、popup、快捷键
 - 取代：`2026-11-12-review-reveal-after-grade-design.md` 的**交互顺序**（揭晓从「评级之后」移到「评级之前」），其余三条实质保留
 - 修订：`2026-11-16-review-mnemonic-scene-design.md`（演出只在「没想起来」时发生，删「再看一次」）
