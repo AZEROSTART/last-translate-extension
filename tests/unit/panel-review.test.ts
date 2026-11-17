@@ -291,6 +291,62 @@ describe("revealed", () => {
     view.destroy();
   });
 
+  it("uses the settings-level answer language when that gloss exists", async () => {
+    const { root, view } = mount(
+      [
+        word(1, {
+          glossLang: "zh",
+          glosses: [
+            { lang: "zh", meaning: "中文义", source: "translation", at: NOW },
+            { lang: "ja", meaning: "日语义", source: "translation", at: NOW },
+          ],
+        }),
+      ],
+      { defaultGlossLang: () => "ja" },
+    );
+    await view.refresh();
+    reveal(root);
+
+    expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("日语义");
+    view.destroy();
+  });
+
+  it("falls back to the word's language and then to the first gloss", async () => {
+    const { root, view } = mount(
+      [
+        word(1, {
+          glossLang: "ja",
+          glosses: [
+            { lang: "zh", meaning: "中文义", source: "translation", at: NOW },
+            { lang: "ja", meaning: "日语义", source: "translation", at: NOW },
+          ],
+        }),
+      ],
+      { defaultGlossLang: () => "fr" },
+    );
+    await view.refresh();
+    reveal(root);
+    expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("日语义");
+    view.destroy();
+
+    const first = mount(
+      [
+        word(2, {
+          glossLang: "de",
+          glosses: [
+            { lang: "es", meaning: "西语义", source: "translation", at: NOW },
+            { lang: "zh", meaning: "中文义", source: "translation", at: NOW },
+          ],
+        }),
+      ],
+      { defaultGlossLang: () => "fr" },
+    );
+    await first.view.refresh();
+    reveal(first.root);
+    expect(first.root.querySelector(".ilmt-review-meaning")?.textContent).toBe("西语义");
+    first.view.destroy();
+  });
+
   it("says when no meaning was generated and still offers both grades", async () => {
     const { root, view } = mount([word(1, { glosses: [] })]);
     await view.refresh();
@@ -441,6 +497,31 @@ describe("lesson", () => {
     expect(root.querySelector(".ilmt-review-receipt")?.firstElementChild?.textContent).toBe(
       "word1 · 词1 · 10 分钟后再见",
     );
+    view.destroy();
+  });
+
+  it("turns only one card when the old 下一张 is triggered again", async () => {
+    const { root, view, answer } = mountStored([word(1), word(2), word(3)], {
+      mnemonic: vi.fn().mockResolvedValue({
+        ok: true as const,
+        mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+      }),
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+    reveal(root);
+    pick(root, "again");
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-next")).toBeTruthy());
+
+    const next = root.querySelector<HTMLButtonElement>(".ilmt-review-next")!;
+    next.click();
+    next.click();
+    next.click();
+
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy();
     view.destroy();
   });
 

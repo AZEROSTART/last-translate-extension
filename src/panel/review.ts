@@ -55,16 +55,12 @@ export interface ReviewDeps {
   mnemonic(id: string): Promise<MnemonicResponse>;
   /** Never undefined when at least one effect is registered. */
   effect(id?: string): ClaimEffect;
+  /** Settings-level answer language; it wins over the word's own gloss. */
+  defaultGlossLang(): string;
   now(): number;
 }
 
-export interface ReviewOptions extends Partial<ReviewDeps> {
-  /**
-   * Kept for the panel's call site: the review view no longer offers an
-   * answer-language choice, and settings still own that preference.
-   */
-  defaultGlossLang?: () => string;
-}
+export interface ReviewOptions extends Partial<ReviewDeps> {}
 
 /** Due cards only, oldest due first. */
 export function buildReviewQueue(
@@ -192,9 +188,12 @@ async function defaultMnemonic(id: string): Promise<MnemonicResponse> {
   return { ok: false, reason: "failed" };
 }
 
-/** The one meaning a card needs: its own language first, then any gloss. */
-function primaryMeaning(word: LearningWord): string {
-  const primary = word.glosses.find((gloss) => gloss.lang === word.glossLang) ?? word.glosses[0];
+/** The preferred answer language, then the word's own, then the first gloss. */
+function primaryMeaning(word: LearningWord, preferred: string): string {
+  const primary =
+    (preferred ? word.glosses.find((gloss) => gloss.lang === preferred) : undefined) ??
+    word.glosses.find((gloss) => gloss.lang === word.glossLang) ??
+    word.glosses[0];
   return primary?.meaning.trim() ?? "";
 }
 
@@ -205,6 +204,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     undo: over.undo ?? defaultUndo,
     mnemonic: over.mnemonic ?? defaultMnemonic,
     effect: over.effect ?? defaultEffect,
+    defaultGlossLang: over.defaultGlossLang ?? (() => ""),
     now: over.now ?? (() => Date.now()),
   };
 
@@ -376,7 +376,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     const answer = node("div", "ilmt-review-answer");
     answer.setAttribute("aria-live", "polite");
     const meaning = node("div", "ilmt-review-meaning");
-    const text = primaryMeaning(word);
+    const text = primaryMeaning(word, deps.defaultGlossLang());
     if (text) {
       meaning.textContent = text;
     } else {
@@ -750,7 +750,11 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.receipt = {
       id: word.id,
       grade,
-      text: [updated.surface, primaryMeaning(updated), dueAt === null ? due : `${due}再见`]
+      text: [
+        updated.surface,
+        primaryMeaning(updated, deps.defaultGlossLang()),
+        dueAt === null ? due : `${due}再见`,
+      ]
         .filter((part) => part.length > 0)
         .join(" · "),
       undoable: true,
@@ -771,7 +775,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   function advance(): void {
-    if (state.busy || destroyed) return;
+    // Idempotent: only a written lesson may turn, and only once. A detached
+    // old 下一张 firing again must not eat the next card.
+    if (destroyed || state.busy || state.phase !== "lesson" || !current()) return;
     state.queue.shift();
     state.phase = "prompt";
     state.error = null;
