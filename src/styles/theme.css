@@ -16,6 +16,24 @@
   --ilmt-glow: 0 0 18px rgba(45, 212, 191, 0.35);
   --ilmt-radius: 10px;
   --ilmt-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 浮层材质：壁纸之上的一片玻璃，所有设置面板共用 */
+  --ilmt-radius-sheet: 16px;
+  --ilmt-radius-control: 10px;
+  --ilmt-surface: rgba(26, 54, 50, 0.42);
+  --ilmt-surface-open: rgba(32, 62, 57, 0.56);
+  --ilmt-surface-row: rgba(255, 255, 255, 0.035);
+  --ilmt-rim: rgba(255, 255, 255, 0.08);
+  --ilmt-sheet-shadow:
+    inset 0 1px 0 var(--ilmt-rim),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 12px 32px -14px rgba(0, 0, 0, 0.7);
+  --ilmt-sheet-shadow-open:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 18px 44px -16px rgba(0, 0, 0, 0.75);
+  --ilmt-blur: saturate(150%) blur(18px);
+  --ilmt-press: 0.985;
 }
 
 :root[data-theme="quantum"] body {

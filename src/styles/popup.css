@@ -6,6 +6,13 @@
 
 :root {
   color-scheme: dark;
+  /* The popup's wallpaper: one definition, used by the popup and by ?mode=page. */
+  --ilmt-popup-wallpaper:
+    radial-gradient(circle at 1px 1px, rgba(103, 232, 249, 0.09) 1px, transparent 0) 0 0 / 18px 18px,
+    radial-gradient(140% 90% at -10% -22%, rgba(45, 212, 191, 0.4), transparent 64%),
+    radial-gradient(80% 50% at 70% 40%, rgba(45, 212, 191, 0.14), transparent 72%),
+    radial-gradient(120% 80% at 112% 116%, rgba(103, 232, 249, 0.28), transparent 66%),
+    linear-gradient(165deg, #0a2723, #040a0e 56%, #05070b);
 }
 
 html,
@@ -18,34 +25,57 @@ body {
   width: 400px;
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
   color: var(--ilmt-text, #dffcf7);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/*
+ * The wallpaper, not a card: `#root` only has to give the glass sheets
+ * something to sit on. Two soft colour fields + the dot grid are what the
+ * sections' backdrop-filter picks up, which is what makes them read as glass
+ * instead of "a darker rectangle".
+ */
 #root {
+  position: relative;
   min-height: 420px;
-  max-height: 800px;
+  /* Chrome caps a popup at 600px: follow the window so the footer pins and the
+     sections scroll inside the sheet instead of the whole popup scrolling. */
+  max-height: min(800px, 100vh);
   display: flex;
   flex-direction: column;
-  padding: 14px;
-  border-radius: 16px;
+  padding: 16px;
   overflow: hidden;
-  box-shadow: 0 0 0 1px var(--ilmt-border-soft);
-  background:
-    radial-gradient(circle at 1px 1px, rgba(103, 232, 249, 0.08) 1px, transparent 0) 0 0 / 16px 16px,
-    linear-gradient(160deg, rgba(7, 22, 21, 0.98), rgba(4, 10, 12, 0.98));
+  background: var(--ilmt-popup-wallpaper);
+}
+
+/* A 1px rim so the window edge is a surface, not a cut. */
+#root::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 body.page-mode {
-  width: min(560px, 100%);
-  margin: 0 auto;
-  background: var(--ilmt-bg);
+  width: 100%;
+  background: var(--ilmt-popup-wallpaper);
 }
 
+/* Page mode is the same sheets on the same wallpaper, just a wider column. */
 body.page-mode #root {
+  width: min(560px, 100%);
+  margin: 0 auto;
   min-height: 100vh;
   max-height: none;
+  background: transparent;
   border-radius: 0;
   box-shadow: none;
   overflow: visible;
+}
+
+body.page-mode #root::after {
+  display: none;
 }
 
 /* --- header --- */
@@ -53,15 +83,15 @@ body.page-mode #root {
 .popup-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   flex: 0 0 auto;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
 }
 
 .popup-logo {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
   background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
   box-shadow: var(--ilmt-glow);
   flex: 0 0 auto;
@@ -69,16 +99,22 @@ body.page-mode #root {
 
 .popup-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
 }
 
 .popup-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-color: var(--ilmt-border) transparent;
+  margin-right: -4px;
+  padding-right: 4px;
+  /* The last sheet fades out at the footer instead of being cut by it. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(45, 212, 191, 0.25) transparent;
 }
 
 body.page-mode .popup-scroll {
@@ -89,18 +125,29 @@ body.page-mode .popup-scroll {
 
 button {
   appearance: none;
-  border: 1px solid var(--ilmt-border);
-  border-radius: 7px;
-  padding: 7px 13px;
-  background: rgba(7, 22, 21, 0.4);
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  border-radius: var(--ilmt-radius-control);
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.045);
   color: var(--ilmt-text);
   font: inherit;
   line-height: 1.2;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 90ms ease-out;
 }
 
 button:hover:not(:disabled) {
   background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.28);
+}
+
+/* iOS-style press feedback: the surface gives, nothing moves around it. */
+button:active:not(:disabled) {
+  transform: scale(var(--ilmt-press));
 }
 
 button:disabled {
@@ -109,7 +156,7 @@ button:disabled {
 }
 
 button.danger {
-  border-color: rgba(251, 113, 133, 0.55);
+  border-color: rgba(251, 113, 133, 0.45);
   color: var(--ilmt-danger);
 }
 
@@ -119,16 +166,31 @@ input[type="number"],
 select,
 textarea {
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 7px;
-  background: var(--ilmt-input);
+  padding: 9px 11px;
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  border-radius: var(--ilmt-radius-control);
+  background: rgba(2, 10, 10, 0.5);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   color: var(--ilmt-text);
   font: inherit;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: rgba(110, 159, 153, 0.75);
+}
+
 textarea {
   resize: vertical;
+}
+
+/* A hairline chevron instead of the native (heavy) select arrow. */
+select {
+  appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e9f99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
 }
 
 input:focus-visible,
@@ -146,18 +208,24 @@ button:focus-visible {
   flex-direction: column;
   gap: 6px;
   flex: 0 0 auto;
-  padding-top: 12px;
+  padding-top: 14px;
 }
 
 .popup-open-sidepanel {
   width: 100%;
+  min-height: 40px;
   border-color: transparent;
+  border-radius: 12px;
   background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
   color: #04100f;
+  font-weight: 600;
+  box-shadow: 0 8px 20px -10px rgba(45, 212, 191, 0.55);
 }
 
 .popup-open-sidepanel:hover:not(:disabled) {
+  border-color: transparent;
   background: linear-gradient(135deg, var(--ilmt-accent-2), var(--ilmt-accent));
+  box-shadow: 0 10px 24px -10px rgba(45, 212, 191, 0.65);
 }
 
 .popup-hint {
@@ -181,14 +249,15 @@ button:focus-visible {
   flex: 0 0 auto;
   margin-bottom: 10px;
   min-height: 40px;
-  padding: 8px 12px;
-  border: 1px solid var(--ilmt-accent);
-  border-radius: 9px;
+  padding: 9px 13px;
+  border: 1px solid rgba(45, 212, 191, 0.55);
+  border-radius: 12px;
   background: rgba(45, 212, 191, 0.12);
   color: var(--ilmt-accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 6px 18px -12px rgba(45, 212, 191, 0.6);
 }
 
 .popup-review-entry:hover {

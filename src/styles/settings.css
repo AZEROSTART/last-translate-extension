@@ -7,40 +7,74 @@
 }
 
 .settings-section {
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: var(--ilmt-radius);
-  background: rgba(7, 22, 21, 0.55);
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  border-radius: var(--ilmt-radius-sheet);
+  background-color: var(--ilmt-surface);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 46%);
+  box-shadow: var(--ilmt-sheet-shadow);
+  -webkit-backdrop-filter: var(--ilmt-blur);
+  backdrop-filter: var(--ilmt-blur);
   overflow: hidden;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+  animation: ilmt-sheet-in 180ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* The open sheet is the one the user is working in: it lifts and firms up. */
+.settings-section[open] {
+  background-color: var(--ilmt-surface-open);
+  border-color: rgba(45, 212, 191, 0.26);
+  box-shadow: var(--ilmt-sheet-shadow-open);
+}
+
+@keyframes ilmt-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .settings-summary {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 11px 12px;
+  padding: 12px 14px;
   cursor: pointer;
   list-style: none;
   user-select: none;
-  background: rgba(45, 212, 191, 0.16);
 }
 
 .settings-summary::-webkit-details-marker {
   display: none;
 }
 
-.settings-summary::before {
-  content: "▸";
-  color: var(--ilmt-accent);
-  font-size: 11px;
-  transform: translateY(-1px);
+/* iOS disclosure: a chevron on the trailing edge, turning down when open. */
+.settings-summary::after {
+  content: "›";
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--ilmt-muted);
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition:
+    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    color 120ms ease;
 }
 
-.settings-section[open] > .settings-summary::before {
-  content: "▾";
+.settings-section[open] > .settings-summary::after {
+  color: var(--ilmt-accent);
+  transform: rotate(90deg);
 }
 
 .settings-summary:hover {
-  background: rgba(45, 212, 191, 0.24);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .settings-summary-title {
@@ -60,9 +94,8 @@
 }
 
 .settings-section-content {
-  padding: 0 12px 12px;
-  border-top: 1px solid var(--ilmt-border-soft);
-  background: rgba(2, 7, 9, 0.8);
+  padding: 2px 14px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .settings-section-content > .field:first-child,
@@ -85,10 +118,11 @@
 }
 
 .settings-model-summary {
-  padding: 10px 11px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 8px;
-  background: var(--ilmt-panel-2);
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: var(--ilmt-surface-row);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   font-size: 12px;
 }
 
@@ -180,18 +214,19 @@
 
 .empty {
   margin: 0;
-  padding: 18px;
-  border: 1px dashed var(--ilmt-border-soft);
-  border-radius: 9px;
+  padding: 20px;
+  border: 1px dotted rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
   color: var(--ilmt-muted);
   text-align: center;
 }
 
 .provider-card {
   padding: 13px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 10px;
-  background: var(--ilmt-panel-2);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  background: var(--ilmt-surface-row);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .provider-card-head {
@@ -209,7 +244,7 @@
 .badge {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(45, 212, 191, 0.12);
+  background: rgba(45, 212, 191, 0.14);
   color: var(--ilmt-accent-2);
   font-size: 11px;
 }
@@ -269,10 +304,14 @@
 
 .provider-form {
   margin-top: 14px;
-  padding: 13px;
-  border: 1px solid var(--ilmt-border);
-  border-radius: 10px;
-  background: var(--ilmt-glass);
+  padding: 14px;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: var(--ilmt-radius-sheet);
+  background: var(--ilmt-surface-open);
+  box-shadow: var(--ilmt-sheet-shadow);
+  -webkit-backdrop-filter: var(--ilmt-blur);
+  backdrop-filter: var(--ilmt-blur);
+  animation: ilmt-sheet-in 180ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 .form-title {
@@ -305,9 +344,9 @@
 
 .field-group {
   margin: 0 0 12px;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--ilmt-border-soft);
-  border-radius: 9px;
+  padding: 11px 12px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
 }
 
 .field-group legend {
@@ -381,10 +420,10 @@
   align-items: center;
   gap: 8px;
   margin-top: 10px;
-  padding: 9px 10px;
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  border-radius: 8px;
-  background: rgba(251, 113, 133, 0.06);
+  padding: 10px 11px;
+  border: 1px solid rgba(251, 113, 133, 0.32);
+  border-radius: 12px;
+  background: rgba(251, 113, 133, 0.07);
   font-size: 12px;
 }
 
@@ -471,8 +510,11 @@
 .global-save,
 .pf-test-connection {
   border-color: transparent;
+  border-radius: 12px;
   background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
   color: #04100f;
+  font-weight: 600;
+  box-shadow: 0 8px 20px -12px rgba(45, 212, 191, 0.7);
 }
 
 .provider-add:hover:not(:disabled),
@@ -551,9 +593,10 @@
 
 .effect-settings .effect-preview {
   flex: 1 1 100%;
-  padding: 8px 10px 8px;
-  border: 1px dashed var(--border, rgba(0, 0, 0, 0.16));
-  border-radius: 8px;
+  padding: 9px 11px;
+  border: 1px dotted var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .effect-settings .effect-preview-line {
