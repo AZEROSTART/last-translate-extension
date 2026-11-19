@@ -117,6 +117,11 @@ function buildShell(): void {
   root = document.getElementById("root") ?? document.body;
   root.replaceChildren();
 
+  // Cropped from the design reference; decorative only, so screen readers skip it.
+  const hero = el("div", "popup-hero");
+  hero.setAttribute("aria-hidden", "true");
+  root.appendChild(hero);
+
   const header = el("header", "popup-header");
   header.append(el("span", "popup-logo"), el("h1", "popup-title", "翻译设置"));
   root.appendChild(header);

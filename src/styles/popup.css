@@ -4,15 +4,52 @@
   box-sizing: border-box;
 }
 
-:root {
-  color-scheme: dark;
-  /* The popup's wallpaper: one definition, used by the popup and by ?mode=page. */
+:root[data-theme="quantum"] {
+  color-scheme: light;
+
+  /* Warm paper + vermillion + ink: the illustration's palette, reused by the
+     whole settings surface so the hero and the cards read as one sheet. */
+  --ilmt-bg: #f2e4cd;
+  --ilmt-panel: #fbf3e3;
+  --ilmt-panel-2: #f7ecd8;
+  --ilmt-glass: rgba(255, 250, 240, 0.94);
+  --ilmt-accent: #bf4a33;
+  --ilmt-accent-2: #d99a3e;
+  --ilmt-text: #3d3028;
+  --ilmt-muted: #8a7560;
+  --ilmt-border: rgba(126, 86, 56, 0.3);
+  --ilmt-border-soft: rgba(126, 86, 56, 0.16);
+  --ilmt-input: #fffdf6;
+  --ilmt-danger: #ae392c;
+  --ilmt-success: #4f7a45;
+  --ilmt-glow: 0 6px 18px -10px rgba(154, 74, 43, 0.45);
+  --ilmt-radius: 10px;
+  --ilmt-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 材质：壁纸上的暖色纸片，所有设置面板共用 */
+  --ilmt-radius-sheet: 16px;
+  --ilmt-radius-control: 10px;
+  --ilmt-surface: #fbf3e3;
+  --ilmt-surface-open: #fffaf0;
+  --ilmt-surface-row: rgba(178, 132, 92, 0.09);
+  --ilmt-rim: rgba(255, 255, 255, 0.72);
+  --ilmt-sheet-shadow:
+    inset 0 1px 0 var(--ilmt-rim),
+    0 1px 2px rgba(92, 61, 40, 0.06),
+    0 10px 24px -20px rgba(92, 61, 40, 0.4);
+  --ilmt-sheet-shadow-open:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(92, 61, 40, 0.07),
+    0 14px 30px -22px rgba(92, 61, 40, 0.5);
+  --ilmt-blur: none;
+  --ilmt-press: 0.99;
+
+  /* The popup's wallpaper: warm parchment with a faint washi dot grid. */
   --ilmt-popup-wallpaper:
-    radial-gradient(circle at 1px 1px, rgba(103, 232, 249, 0.09) 1px, transparent 0) 0 0 / 18px 18px,
-    radial-gradient(140% 90% at -10% -22%, rgba(45, 212, 191, 0.4), transparent 64%),
-    radial-gradient(80% 50% at 70% 40%, rgba(45, 212, 191, 0.14), transparent 72%),
-    radial-gradient(120% 80% at 112% 116%, rgba(103, 232, 249, 0.28), transparent 66%),
-    linear-gradient(165deg, #0a2723, #040a0e 56%, #05070b);
+    radial-gradient(circle at 1px 1px, rgba(120, 82, 58, 0.07) 1px, transparent 0) 0 0 / 20px 20px,
+    radial-gradient(120% 55% at 100% 0%, rgba(224, 166, 100, 0.22), transparent 62%),
+    radial-gradient(90% 60% at 0% 100%, rgba(191, 74, 51, 0.1), transparent 68%),
+    linear-gradient(180deg, #f8eedc, #f2e4cd 58%, #ecdcbf);
 }
 
 html,
@@ -20,30 +57,37 @@ body {
   background: transparent;
 }
 
+:root[data-theme="quantum"] body {
+  background: var(--ilmt-bg);
+  color: var(--ilmt-text);
+}
+
 body {
   margin: 0;
-  width: 400px;
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-  color: var(--ilmt-text, #dffcf7);
+  width: 320px;
+  min-width: 0;
+  overflow-x: hidden;
+  font: 12.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--ilmt-text, #3d3028);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 /*
- * The wallpaper, not a card: `#root` only has to give the glass sheets
- * something to sit on. Two soft colour fields + the dot grid are what the
- * sections' backdrop-filter picks up, which is what makes them read as glass
- * instead of "a darker rectangle".
+ * The wallpaper, not a card: `#root` gives the paper sheets something to sit
+ * on. The hero illustration is the top edge of the sheet.
  */
 #root {
   position: relative;
+  width: 100%;
   min-height: 420px;
   /* Chrome caps a popup at 600px: follow the window so the footer pins and the
      sections scroll inside the sheet instead of the whole popup scrolling. */
-  max-height: min(800px, 100vh);
+  max-height: min(600px, 100vh);
   display: flex;
   flex-direction: column;
-  padding: 16px;
+  padding: 12px;
   overflow: hidden;
   background: var(--ilmt-popup-wallpaper);
 }
@@ -54,20 +98,40 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* --- hero illustration --- */
+
+.popup-hero {
+  flex: 0 0 auto;
+  width: 100%;
+  aspect-ratio: 704 / 220;
+  margin-bottom: 10px;
+  border: 1px solid rgba(126, 86, 56, 0.24);
+  border-radius: 14px;
+  background: #e8d8bd url("/popup-hero.webp") center / cover no-repeat;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    0 10px 22px -18px rgba(80, 50, 30, 0.85);
 }
 
 body.page-mode {
   width: 100%;
-  background: var(--ilmt-popup-wallpaper);
+  overflow-x: hidden;
 }
 
 /* Page mode is the same sheets on the same wallpaper, just a wider column. */
+:root[data-theme="quantum"] body.page-mode {
+  background: var(--ilmt-popup-wallpaper);
+}
+
 body.page-mode #root {
   width: min(560px, 100%);
   margin: 0 auto;
   min-height: 100vh;
   max-height: none;
+  padding: 20px;
   background: transparent;
   border-radius: 0;
   box-shadow: none;
@@ -78,6 +142,10 @@ body.page-mode #root::after {
   display: none;
 }
 
+body.page-mode .popup-hero {
+  margin-bottom: 14px;
+}
+
 /* --- header --- */
 
 .popup-header {
@@ -85,36 +153,60 @@ body.page-mode #root::after {
   align-items: center;
   gap: 9px;
   flex: 0 0 auto;
-  padding-bottom: 14px;
+  padding: 2px 2px 12px;
 }
 
+/* A red seal with a paper-white character, not a button. */
 .popup-logo {
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-  background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
-  box-shadow: var(--ilmt-glow);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: linear-gradient(150deg, #cf6247, #b13f2b);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 4px 10px -6px rgba(154, 74, 43, 0.7);
   flex: 0 0 auto;
+}
+
+.popup-logo::before {
+  content: "译";
+  color: #fff7e8;
+  font: 11px/1 "Songti SC", "Noto Serif SC", "STSong", serif;
 }
 
 .popup-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  color: #3a2b22;
+  font-family: "Songti SC", "Noto Serif SC", "STSong", Georgia, serif;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* A thin brush stroke running out from the title. */
+.popup-header::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 1px;
+  margin-left: 3px;
+  background: linear-gradient(90deg, rgba(191, 74, 51, 0.55), rgba(191, 74, 51, 0));
 }
 
 .popup-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
-  margin-right: -4px;
-  padding-right: 4px;
-  /* The last sheet fades out at the footer instead of being cut by it. */
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  overflow-x: hidden;
+  margin-right: -2px;
+  padding-right: 2px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(45, 212, 191, 0.25) transparent;
+  scrollbar-color: rgba(126, 86, 56, 0.28) transparent;
 }
 
 body.page-mode .popup-scroll {
@@ -125,10 +217,12 @@ body.page-mode .popup-scroll {
 
 button {
   appearance: none;
-  border: 1px solid rgba(45, 212, 191, 0.16);
+  max-width: 100%;
+  border: 1px solid rgba(126, 86, 56, 0.24);
   border-radius: var(--ilmt-radius-control);
-  padding: 8px 14px;
-  background: rgba(255, 255, 255, 0.045);
+  padding: 7px 12px;
+  background: #fffaf0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
   color: var(--ilmt-text);
   font: inherit;
   line-height: 1.2;
@@ -141,8 +235,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: rgba(45, 212, 191, 0.12);
-  border-color: rgba(45, 212, 191, 0.28);
+  background: #fff5e4;
+  border-color: rgba(191, 74, 51, 0.4);
 }
 
 /* iOS-style press feedback: the surface gives, nothing moves around it. */
@@ -156,7 +250,7 @@ button:disabled {
 }
 
 button.danger {
-  border-color: rgba(251, 113, 133, 0.45);
+  border-color: rgba(174, 57, 44, 0.45);
   color: var(--ilmt-danger);
 }
 
@@ -166,18 +260,19 @@ input[type="number"],
 select,
 textarea {
   width: 100%;
-  padding: 9px 11px;
-  border: 1px solid rgba(45, 212, 191, 0.16);
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(126, 86, 56, 0.26);
   border-radius: var(--ilmt-radius-control);
-  background: rgba(2, 10, 10, 0.5);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  background: var(--ilmt-input);
+  box-shadow: inset 0 1px 2px rgba(92, 61, 40, 0.06);
   color: var(--ilmt-text);
   font: inherit;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: rgba(110, 159, 153, 0.75);
+  color: rgba(138, 117, 96, 0.86);
 }
 
 textarea {
@@ -187,17 +282,17 @@ textarea {
 /* A hairline chevron instead of the native (heavy) select arrow. */
 select {
   appearance: none;
-  padding-right: 32px;
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e9f99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a6a4f' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 12px center;
+  background-position: right 10px center;
 }
 
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 button:focus-visible {
-  outline: 2px solid var(--ilmt-accent);
+  outline: 2px solid rgba(191, 74, 51, 0.35);
   outline-offset: 2px;
 }
 
@@ -208,29 +303,36 @@ button:focus-visible {
   flex-direction: column;
   gap: 6px;
   flex: 0 0 auto;
-  padding-top: 14px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(126, 86, 56, 0.22);
 }
 
 .popup-open-sidepanel {
   width: 100%;
-  min-height: 40px;
+  min-height: 38px;
   border-color: transparent;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--ilmt-accent), var(--ilmt-accent-2));
-  color: #04100f;
+  border-radius: 11px;
+  background: linear-gradient(180deg, #c9563e, #b2422d);
+  color: #fff8ec;
   font-weight: 600;
-  box-shadow: 0 8px 20px -10px rgba(45, 212, 191, 0.55);
+  letter-spacing: 0.02em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 10px 20px -14px rgba(154, 74, 43, 0.85);
 }
 
 .popup-open-sidepanel:hover:not(:disabled) {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--ilmt-accent-2), var(--ilmt-accent));
-  box-shadow: 0 10px 24px -10px rgba(45, 212, 191, 0.65);
+  background: linear-gradient(180deg, #bd4b34, #a53a26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 12px 22px -14px rgba(154, 74, 43, 0.9);
 }
 
 .popup-hint {
   color: var(--ilmt-muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: var(--ilmt-mono);
   text-align: center;
 }
@@ -247,19 +349,21 @@ button:focus-visible {
 .popup-review-entry {
   appearance: none;
   flex: 0 0 auto;
-  margin-bottom: 10px;
-  min-height: 40px;
-  padding: 9px 13px;
-  border: 1px solid rgba(45, 212, 191, 0.55);
-  border-radius: 12px;
-  background: rgba(45, 212, 191, 0.12);
-  color: var(--ilmt-accent);
+  width: 100%;
+  margin: 0 0 10px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(191, 74, 51, 0.32);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f6dfb9, #efd09f);
+  color: #6b3a24;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 6px 18px -12px rgba(45, 212, 191, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .popup-review-entry:hover {
-  background: rgba(45, 212, 191, 0.2);
+  background: linear-gradient(180deg, #f3d6a8, #eac489);
+  border-color: rgba(191, 74, 51, 0.45);
 }
