@@ -7,7 +7,7 @@
  * its own container and keeps the conversation alive while review is open.
  */
 
-import { daysSinceDay, getLearning, localDay } from "../shared/learning-storage";
+import { daysSinceDay, getLearning, localDay, normalizeSurface } from "../shared/learning-storage";
 import { dueCount, formatDueLabel, isDue } from "../shared/srs";
 import type {
   LearningGrade,
@@ -197,6 +197,28 @@ function primaryMeaning(word: LearningWord, preferred: string): string {
   return primary?.meaning.trim() ?? "";
 }
 
+/** Prefer the latest context with a complete, maskable occurrence. */
+function recallContext(word: LearningWord): { sentence: string; parts: string[] } | null {
+  const surface = word.surface.trim();
+  if (!surface) return null;
+  const literal = surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  // Script boundaries, unlike JavaScript's ASCII-only \b, allow adjacent CJK
+  // characters while keeping e.g. “été” out of the middle of a French word.
+  const spaced = /[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}\p{N}_]/u;
+  const boundary = "[\\p{Script=Latin}\\p{Script=Cyrillic}\\p{Script=Greek}\\p{N}\\p{M}_]";
+  const left = spaced.test(surface[0]) ? `(?<!${boundary})` : "";
+  const right = spaced.test(surface.at(-1)!) ? `(?!${boundary})` : "";
+  const pattern = new RegExp(left + literal + right, "iu");
+  for (let index = word.contexts.length - 1; index >= 0; index--) {
+    const sentence = word.contexts[index].sentence.trim();
+    const parts = sentence.split(pattern);
+    if (parts.length > 1 && parts.some((part) => /[\p{L}\p{N}]/u.test(part))) {
+      return { sentence, parts };
+    }
+  }
+  return null;
+}
+
 export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
@@ -226,6 +248,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   };
 
   let destroyed = false;
+  let pendingGrade: LearningGrade | null = null;
   let chain: Promise<void> = Promise.resolve();
   let pendingReload = false;
   /** The scene's own effect instance; rebuilt with the lesson. */
@@ -242,13 +265,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return state.queue[0];
   }
 
-  /** No sentence is no line at all: an orphan `____` says nothing. */
-  function blankedSentence(word: LearningWord): string | null {
-    const sentence = word.contexts.at(-1)?.sentence?.trim();
-    if (!sentence) return null;
-    const escaped = word.surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return escaped ? sentence.replace(new RegExp(escaped, "gi"), "____") : sentence;
-  }
+  let draft = "";
 
   /** The library itself, not the debt; never clickable. */
   function renderShelf(): HTMLElement | null {
@@ -312,7 +329,11 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         sceneRequests.delete(word.id);
         // Turning the page while the model is still thinking must not pull
         // the next card back to the lesson it just left.
-        if (!destroyed && state.phase === "lesson" && current()?.id === word.id) render();
+        if (!destroyed && state.phase === "lesson" && current()?.id === word.id) {
+          const focusedNext = container.querySelector(".ilmt-review-next:focus") !== null;
+          render();
+          if (focusedNext) container.querySelector<HTMLButtonElement>(".ilmt-review-next")?.focus();
+        }
       });
   }
 
@@ -400,7 +421,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       button.type = "button";
       button.dataset.grade = grade;
       button.disabled = state.busy;
-      button.addEventListener("click", () => void pickGrade(grade));
+      button.addEventListener("click", () => {
+        if (container.contains(button)) pickGrade(grade);
+      });
       choices.appendChild(button);
     }
     actions.appendChild(choices);
@@ -412,17 +435,47 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   function renderLesson(word: LearningWord, card: HTMLElement): void {
     const lesson = node("div", "ilmt-review-lesson");
     renderMeaning(word, lesson);
-    renderScene(word, lesson);
+    if (pendingGrade === "again") renderScene(word, lesson);
 
     const actions = node("div", "ilmt-review-actions");
     const next = node("button", "ilmt-review-next", "下一张");
     next.type = "button";
     next.disabled = state.busy;
-    // The grade is already written; this only turns the page.
-    next.addEventListener("click", advance);
+    next.addEventListener("click", () => {
+      if (current()?.id === word.id) void advance();
+    });
+    if (state.error) actions.appendChild(node("p", "ilmt-review-error", state.error));
     actions.appendChild(next);
     lesson.appendChild(actions);
     card.appendChild(lesson);
+  }
+
+  function renderSpellingPrompt(word: LearningWord, card: HTMLElement): void {
+    const actions = node("form", "ilmt-review-actions");
+    const input = node("input", "ilmt-review-input");
+    input.setAttribute("aria-label", "填写原词");
+    input.placeholder = "填入原词，也可以默想";
+    input.autocomplete = "off";
+    input.autocapitalize = "off";
+    input.spellcheck = false;
+    input.lang = word.termLang;
+    input.value = draft;
+    input.addEventListener("input", () => {
+      draft = input.value;
+    });
+    actions.appendChild(input);
+    const reveal = node("button", "ilmt-review-reveal", "看答案");
+    reveal.type = "submit";
+    actions.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (state.phase !== "prompt" || current()?.id !== word.id) return;
+      state.phase = "revealed";
+      state.error = null;
+      render();
+      container.querySelector<HTMLButtonElement>(".ilmt-review-grade")?.focus();
+    });
+    actions.appendChild(reveal);
+    card.appendChild(actions);
   }
 
   function renderCard(): void {
@@ -432,16 +485,30 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (!word) return;
 
     const head = node("div", "ilmt-review-head");
-    const position = state.phase === "lesson" ? state.answered : state.answered + 1;
+    const position = state.answered + 1;
     const progress = node("span", "ilmt-review-progress", `${position} / ${state.total}`);
     const end = node("button", "ilmt-review-end", "结束");
     end.type = "button";
     end.addEventListener("click", () => void endRound());
-    head.append(progress, end);
-    card.appendChild(head);
+    const context = recallContext(word);
+    const meaning = primaryMeaning(word, deps.defaultGlossLang());
+    const recall = word.reviewsCount > 0 && context !== null;
+    const asking = recall && state.phase === "prompt";
+    const cue = meaning && !normalizeSurface(meaning).includes(normalizeSurface(word.surface))
+      ? meaning
+      : "回想空缺的原词";
+    const mode = node("span", "ilmt-review-mode", recall ? "原句找词" : "回想词义");
+    const meter = node("progress", "ilmt-review-meter");
+    meter.setAttribute("aria-label", "本轮已复习");
+    meter.max = state.total;
+    meter.value = state.answered;
+    head.append(mode, progress, end);
+    card.append(head, meter);
 
     const term = node("div", "ilmt-review-term");
-    term.appendChild(node("span", "ilmt-review-word", word.surface));
+    term.appendChild(asking
+      ? node("span", "ilmt-review-cue", cue)
+      : node("span", "ilmt-review-word", word.surface));
     if (word.pos) term.appendChild(node("span", "ilmt-review-pos", word.pos));
     // A language label only earns its space when the queue mixes targets.
     const langs = new Set((state.all?.words ?? []).map((item) => item.termLang));
@@ -450,10 +517,10 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
     card.appendChild(term);
 
-    const blanked = blankedSentence(word);
-    if (blanked) {
+    const parts = context?.parts ?? [word.contexts.at(-1)?.sentence.trim() ?? ""];
+    if (parts.length > 1 || parts[0]) {
       const sentence = node("p", "ilmt-review-sentence");
-      blanked.split("____").forEach((part, index) => {
+      (recall && !asking ? [context.sentence] : parts).forEach((part, index) => {
         if (index > 0) {
           const blank = node("span", "ilmt-review-blank", "____");
           blank.setAttribute("role", "img");
@@ -465,18 +532,19 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       card.appendChild(sentence);
     }
 
-    if (state.phase === "prompt") {
-      const actions = node("div", "ilmt-review-actions");
-      const reveal = node("button", "ilmt-review-reveal", "看答案");
-      reveal.type = "button";
-      reveal.addEventListener("click", () => {
-        state.phase = "revealed";
-        state.error = null;
-        render();
-      });
-      actions.appendChild(reveal);
-      card.appendChild(actions);
+    if (state.phase === "prompt" && !asking) {
+      renderChoices(card);
+    } else if (asking) {
+      renderSpellingPrompt(word, card);
     } else if (state.phase === "revealed") {
+      if (recall && draft.trim()) {
+        const typed = normalizeSurface(draft.normalize("NFKC"));
+        const match = typed === normalizeSurface(word.surface.normalize("NFKC"));
+        const feedback = node("p", "ilmt-review-feedback",
+          match ? "拼写一致" : `你写的是「${draft.trim()}」`);
+        feedback.setAttribute("role", "status");
+        card.appendChild(feedback);
+      }
       renderMeaning(word, card);
       renderChoices(card);
     } else {
@@ -680,13 +748,21 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     } catch {
       next = { version: 1, words: [], stats: { day: "", todayReviewed: 0 }, updatedAt: 0 };
     }
-    if (destroyed) return;
+    if (destroyed || state.ended) return;
+    // Reading storage is asynchronous. A card can open or start accepting IME
+    // input during the read. Preserve that interaction until the turn ends.
+    if (state.busy || state.phase !== "prompt" || container.querySelector(".ilmt-review-input:focus")) {
+      pendingReload = true;
+      return;
+    }
 
+    const previousId = current()?.id;
     state.all = next;
     // Words answered earlier in this round are no longer due, so the fresh
     // queue is exactly the remaining work; keep the round's score separate.
     state.queue = buildReviewQueue(next, { termLang: ALL, now: deps.now() });
     state.total = state.answered + state.queue.length;
+    if (current()?.id !== previousId) draft = "";
     render();
   }
 
@@ -695,13 +771,19 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return chain;
   }
 
-  /**
-   * Answer once, at the moment the honest answer is given. The card does not
-   * move until the write lands; 想起来了 turns the page, 没想起来 teaches.
-   */
-  async function pickGrade(grade: LearningGrade): Promise<void> {
+  function pickGrade(grade: LearningGrade): void {
+    if (state.phase === "lesson" || state.ended || state.busy || destroyed) return;
+    pendingGrade = grade;
+    state.phase = "lesson";
+    state.error = null;
+    render();
+    container.querySelector<HTMLButtonElement>(".ilmt-review-next")?.focus();
+  }
+
+  async function advance(): Promise<void> {
     const word = current();
-    if (!word || state.busy || destroyed) return;
+    const grade = pendingGrade;
+    if (!word || !grade || state.phase !== "lesson" || state.busy || destroyed) return;
     state.busy = true;
     state.error = null;
     render();
@@ -721,7 +803,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.busy = false;
 
     if (!response || response.ok !== true) {
-      // Fail closed: the card stays, both grades stay, and nothing advances.
+      // Keep the selected grade so 下一张 can retry the same write.
       state.error = "没写进去 · 再点一次";
       render();
       return;
@@ -740,6 +822,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       state.graduated.push(updated);
     }
 
+    draft = "";
     state.answered += 1;
     if (grade === "again") state.missed += 1;
 
@@ -760,24 +843,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       undoable: true,
     };
 
-    if (grade === "good") {
-      state.queue.shift();
-      state.phase = "prompt";
-      state.error = null;
-      render();
-      focusReveal();
-      flushPending();
-    } else {
-      // The word is written; this card now teaches, and 下一张 only turns it.
-      state.phase = "lesson";
-      render();
-    }
-  }
-
-  function advance(): void {
-    // Idempotent: only a written lesson may turn, and only once. A detached
-    // old 下一张 firing again must not eat the next card.
-    if (destroyed || state.busy || state.phase !== "lesson" || !current()) return;
+    pendingGrade = null;
     state.queue.shift();
     state.phase = "prompt";
     state.error = null;
@@ -789,7 +855,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   /** A turned card starts at its one action, not at the top of the panel. */
   function focusReveal(): void {
     if (destroyed) return;
-    container.querySelector<HTMLButtonElement>(".ilmt-review-reveal")?.focus();
+    container.querySelector<HTMLElement>(".ilmt-review-input, .ilmt-review-grade, .ilmt-review-reveal")?.focus();
   }
 
   /**
@@ -836,12 +902,13 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   /**
-   * End the round. Nothing is written here: an answer only lands when a grade
-   * is picked, so unwritten cards stay due and the finish page says so.
+   * Ending drops the pending grade. The card stays due until confirmed.
    */
   async function endRound(): Promise<void> {
     if (state.busy) return;
+    draft = "";
     state.ended = true;
+    pendingGrade = null;
     // One explicit local read so "还有 N 个到期" is not a stale snapshot.
     try {
       state.all = await deps.getState();

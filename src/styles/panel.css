@@ -1,5 +1,9 @@
 /* Side-panel chat UI (panel.html). Vanilla DOM; scoped under #root. */
 
+body {
+  margin: 0;
+}
+
 #root {
   display: flex;
   flex-direction: column;
@@ -365,24 +369,60 @@ button:focus-visible {
 .ilmt-review-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: 268px;
-  padding: 14px;
+  box-sizing: border-box;
+  gap: 16px;
+  min-height: 310px;
+  padding: 4px clamp(14px, 5vw, 24px) 20px;
   border: 1px solid var(--ilmt-border);
-  border-radius: var(--ilmt-radius);
-  background: var(--ilmt-glass);
+  border-radius: 16px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--ilmt-accent) 8%, var(--ilmt-panel)), var(--ilmt-panel) 65%);
+  box-shadow: var(--ilmt-sheet-shadow);
+  overflow-wrap: anywhere;
   text-align: left;
 }
 
 .ilmt-review-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 9px;
   color: var(--ilmt-muted);
-  font-size: 11px;
+  font-size: 12px;
+}
+
+.ilmt-review-mode {
+  color: var(--ilmt-text);
+  font-weight: 600;
+  letter-spacing: .05em;
+}
+
+.ilmt-review-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+.ilmt-review-meter {
+  width: 100%;
+  height: 3px;
+  margin: -18px 0 2px;
+  appearance: none;
+}
+
+.ilmt-review-meter::-webkit-progress-bar {
+  border-radius: 3px;
+  background: var(--ilmt-border-soft);
+}
+
+.ilmt-review-meter::-webkit-progress-value {
+  border-radius: inherit;
+  background: var(--ilmt-accent);
+}
+
+.ilmt-review :is(button, input):focus-visible {
+  outline: 2px solid var(--ilmt-accent-2);
+  outline-offset: 2px;
 }
 
 .ilmt-review-end {
+  margin-left: auto;
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -401,6 +441,7 @@ button:focus-visible {
 }
 
 .ilmt-review-term {
+  flex-wrap: wrap;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -408,7 +449,9 @@ button:focus-visible {
 
 /* The word is the question, not a link. */
 .ilmt-review-word {
-  font-size: 24px;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: clamp(26px, 8vw, 38px);
+  line-height: 1.16;
   font-weight: 600;
   color: var(--ilmt-text);
 }
@@ -428,6 +471,10 @@ button:focus-visible {
 
 .ilmt-review-sentence {
   margin: 0;
+  padding: 10px 12px;
+  border-inline-start: 2px solid var(--ilmt-accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--ilmt-surface-row);
   color: var(--ilmt-text);
   font-size: 15px;
   line-height: 1.65;
@@ -446,6 +493,34 @@ button:focus-visible {
   flex-direction: column;
   gap: 8px;
   margin-top: auto;
+}
+
+.ilmt-review-cue {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ilmt-review-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--ilmt-border);
+  border-radius: 8px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+  font: inherit;
+}
+
+.ilmt-review-input::placeholder {
+  color: var(--ilmt-muted);
+}
+
+.ilmt-review-feedback {
+  margin: 0;
+  color: var(--ilmt-accent);
+  font-size: 13px;
 }
 
 .ilmt-review-reveal {
@@ -716,4 +791,23 @@ button:focus-visible {
   .ilmt-review-scene-caption.is-pending {
     animation: none;
   }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ilmt-review :is(.ilmt-review-meaning, .ilmt-review-feedback) {
+    animation: ilmt-review-in 150ms ease-out;
+  }
+
+  .ilmt-review button {
+    transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+
+  .ilmt-review button:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+}
+
+@keyframes ilmt-review-in {
+  from { opacity: .4; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
 }

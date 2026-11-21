@@ -167,29 +167,12 @@ test.describe("learning loop", () => {
 
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-sentence")).toContainText("____");
-      await expect(panel.locator(".ilmt-review-reveal")).toHaveText("看答案");
-      // No options, no grades and no answer before the question is asked.
-      await expect(panel.locator(".ilmt-review-grade")).toHaveCount(0);
       await expect(panel.locator(".ilmt-review-meaning")).toHaveCount(0);
-      await expect(panel.locator(".ilmt-review-langs")).toHaveCount(0);
-
-      await panel.locator(".ilmt-review-reveal").click();
-
-      // The answer is on screen, but nothing is written until a grade is picked.
-      await expect(panel.locator(".ilmt-review-meaning")).toContainText("比……存在得更久");
-      await expect(panel.locator(".ilmt-review-grade")).toHaveCount(2);
-      await expect(panel.locator('[data-grade="hard"]')).toHaveCount(0);
-      await expect(panel.locator(".ilmt-review-grade-due")).toHaveCount(0);
-      await expect(panel.locator(".ilmt-review-next")).toHaveCount(0);
-      await expect
-        .poll(async () => (await readWords(ext.worker))[0]?.box)
-        .toBe(0);
-
       await panel.locator('[data-grade="good"]').click();
-
-      await expect
-        .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
-        .toBe(1);
+      await expect(panel.locator(".ilmt-review-meaning")).toContainText("比……存在得更久");
+      expect((await readWords(ext.worker))[0].box).toBe(0);
+      await panel.locator(".ilmt-review-next").click();
+      await expect.poll(async () => (await readWords(ext.worker))[0]?.box).toBe(1);
       // The remembered path never asks the model for a picture.
       const remembered = await readWords(ext.worker);
       expect(remembered[0].mnemonic).toBeUndefined();
@@ -249,8 +232,8 @@ test.describe("learning loop", () => {
       await panel.locator('.panel-tab[data-view="review"]').click();
 
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
-      await panel.locator(".ilmt-review-reveal").click();
       await panel.locator('[data-grade="good"]').click();
+      await panel.locator(".ilmt-review-next").click();
 
       await expect(panel.locator(".ilmt-review-done")).toContainText("1 个都过完了");
       await expect(panel.locator(".ilmt-review-receipt")).toContainText("已毕业");
@@ -331,8 +314,8 @@ test.describe("learning loop", () => {
       await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
       await panel.locator('.panel-tab[data-view="review"]').click();
 
-      await panel.locator(".ilmt-review-reveal").click();
       await panel.locator('[data-grade="good"]').click();
+      await panel.locator(".ilmt-review-next").click();
 
       await expect
         .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
@@ -356,7 +339,8 @@ test.describe("learning loop", () => {
       expect(undone[0].dueAt).toBe(beforeDueAt);
       await expect(panel.locator(".ilmt-review-receipt")).toHaveCount(0);
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
-      await expect(panel.locator(".ilmt-review-reveal")).toHaveText("看答案");
+      await expect(panel.getByRole("button", { name: "想起来了", exact: true })).toBeVisible();
+      await expect(panel.locator(".ilmt-review-meaning")).toHaveCount(0);
       await expect(panel.locator('.panel-tab[data-view="review"]')).toContainText("复习 (1)");
     } finally {
       await cleanup();
@@ -382,18 +366,12 @@ test.describe("learning loop", () => {
       await panel.goto(`chrome-extension://${extensionId}/panel.html`);
       await panel.locator('.panel-tab[data-view="review"]').click();
 
-      await panel.locator(".ilmt-review-reveal").click();
       const missedAt = Date.now();
       await panel.locator('[data-grade="again"]').click();
 
       await expect
         .poll(async () => (await readWords(ext.worker))[0]?.box, { timeout: 10_000 })
         .toBe(0);
-      const missed = (await readWords(ext.worker))[0];
-      expect(missed.dueAt).toBeGreaterThanOrEqual(missedAt + TEN_MINUTES - 5000);
-      expect(missed.dueAt).toBeLessThanOrEqual(Date.now() + TEN_MINUTES + 5000);
-
-      // The missed card stays for its one line of imagery, and 下一张 only turns the page.
       await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
       await expect(panel.locator(".ilmt-review-lesson")).toBeVisible();
       await expect(panel.locator(".ilmt-review-scene-caption")).toContainText(
@@ -406,6 +384,10 @@ test.describe("learning loop", () => {
       await expect(panel.locator(".ilmt-review-done")).toContainText("1 个都过完了");
       await expect(panel.locator(".ilmt-review-done")).toContainText("1 个没想起来");
       await expect.poll(async () => (await readWords(ext.worker))[0]?.box).toBe(0);
+
+      const missed = (await readWords(ext.worker))[0];
+      expect(missed.dueAt).toBeGreaterThanOrEqual(missedAt + TEN_MINUTES - 5000);
+      expect(missed.dueAt).toBeLessThanOrEqual(Date.now() + TEN_MINUTES + 5000);
 
       // The picture is cached on the word so the next review needs no model.
       await expect
@@ -502,6 +484,41 @@ test.describe("learning loop", () => {
         "known",
       );
       expect(await readWords(ext.worker)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("recalls a reviewed word from its original sentence and commits after confirmation", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      await claim(page.locator("[role=tooltip]"));
+      await ext.worker.evaluate(async () => {
+        const { learning } = await chrome.storage.local.get("learning") as {
+          learning: { words: Array<{ box: number; reviewsCount: number; dueAt: number }> };
+        };
+        Object.assign(learning.words[0], { box: 1, reviewsCount: 1, dueAt: Date.now() - 1000 });
+        await chrome.storage.local.set({ learning });
+      });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${new URL(ext.worker.url()).host}/panel.html`);
+      await panel.locator('.panel-tab[data-view="review"]').click();
+      const card = panel.locator(".ilmt-review-card");
+      await expect(card).toContainText("原句找词");
+      await expect(card).toContainText("比……存在得更久");
+      await expect(card).not.toContainText(/outlive/i);
+      await expect(card.locator(".ilmt-review-sentence")).toContainText("____");
+      const input = card.getByRole("textbox", { name: "填写原词" });
+      await input.fill("OUTLIVE");
+      await input.press("Enter");
+      await expect(card.getByRole("status")).toHaveText("拼写一致");
+      await expect(card.locator(".ilmt-review-sentence")).toContainText("outlive");
+      await card.getByRole("button", { name: "想起来了", exact: true }).click();
+      expect((await readWords(ext.worker))[0].box).toBe(1);
+      await card.getByRole("button", { name: "下一张" }).click();
+      await expect.poll(async () => (await readWords(ext.worker))[0].box).toBe(2);
+      await expect(panel.locator(".ilmt-review-done")).toContainText("1 个都过完了");
     } finally {
       await cleanup();
     }

@@ -121,12 +121,12 @@ function stageEffect(play = vi.fn()) {
   } as unknown as ClaimEffect;
 }
 
-function reveal(root: HTMLElement): void {
-  root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")!.click();
-}
-
 function pick(root: HTMLElement, grade: "good" | "again"): void {
   root.querySelector<HTMLButtonElement>(`[data-grade="${grade}"]`)!.click();
+}
+
+function nextCard(root: HTMLElement): void {
+  root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
 }
 
 beforeEach(() => {
@@ -155,7 +155,7 @@ describe("buildReviewQueue", () => {
 });
 
 describe("prompt", () => {
-  it("shows only the word, its part of speech, the blanked sentence and 看答案", async () => {
+  it("shows only the word, its part of speech, the blanked sentence and the two recall ratings", async () => {
     const { root, view } = mount([
       word(1, {
         surface: "outlive",
@@ -184,11 +184,10 @@ describe("prompt", () => {
     expect(blank?.textContent).toBe("____");
     expect(blank?.getAttribute("role")).toBe("img");
     expect(blank?.getAttribute("aria-label")).toBe("空");
-    expect(root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")?.textContent).toBe("看答案");
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
 
     for (const selector of [
       ".ilmt-review-option",
-      ".ilmt-review-choices",
       ".ilmt-review-grades",
       ".ilmt-review-meaning",
       ".ilmt-review-gloss",
@@ -207,7 +206,7 @@ describe("prompt", () => {
 
     expect(root.querySelector(".ilmt-review-sentence")).toBeNull();
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
-    expect(root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")?.textContent).toBe("看答案");
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
     view.destroy();
   });
 
@@ -231,9 +230,65 @@ describe("prompt", () => {
     await view.refresh();
 
     expect(answer).not.toHaveBeenCalled();
-    expect(root.querySelector(".ilmt-review-grade")).toBeNull();
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
     expect(root.querySelector(".ilmt-review-next")).toBeNull();
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
+    view.destroy();
+  });
+});
+
+describe("recalling the original word", () => {
+  it("uses an older matching context, hides every occurrence, and checks a typed answer locally", async () => {
+    const entry = word(1, {
+      surface: "déjà vu",
+      reviewsCount: 1,
+      contexts: [
+        { sentence: "Déjà vu is often called DÉJÀ VU.", pageUrl: "", at: NOW - 1 },
+        { sentence: "Unrelated context.", pageUrl: "", at: NOW },
+      ],
+    });
+    const { root, view, answer } = mount([entry]);
+    await view.refresh();
+    expect(root.textContent?.toLocaleLowerCase()).not.toContain("déjà vu");
+    expect(root.querySelectorAll(".ilmt-review-blank")).toHaveLength(2);
+    expect(root.querySelector(".ilmt-review-cue")?.textContent).toBe("词1");
+    const input = root.querySelector<HTMLInputElement>(".ilmt-review-input")!;
+    input.value = "  DÉJÀ   VU  ";
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+    await view.refresh();
+    expect((document.activeElement as HTMLInputElement).value).toBe("  DÉJÀ   VU  ");
+    root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")!.click();
+    expect(root.querySelector(".ilmt-review-feedback")?.textContent).toBe("拼写一致");
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe(entry.contexts[0].sentence);
+    expect(answer).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it("avoids partial matches and context-free blanks", async () => {
+    for (const sentence of ["A theater.", "THE!"]) {
+      const { root, view } = mount([word(1, {
+        surface: "the", reviewsCount: 2, contexts: [{ sentence, pageUrl: "", at: NOW }],
+      })]);
+      await view.refresh();
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("the");
+      expect(root.querySelector(".ilmt-review-input")).toBeNull();
+      view.destroy();
+    }
+  });
+
+  it("accepts adjacent Japanese text, allows a silent attempt and avoids a leaking gloss", async () => {
+    const { root, view, answer } = mount([word(1, {
+      surface: "猫", termLang: "ja", reviewsCount: 3,
+      glosses: [{ lang: "zh", meaning: "猫", source: "translation", at: NOW }],
+      contexts: [{ sentence: "白い猫がいる。", pageUrl: "", at: NOW }],
+    })]);
+    await view.refresh();
+    expect(root.textContent).not.toContain("猫");
+    root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")!.click();
+    expect(root.querySelector(".ilmt-review-feedback")).toBeNull();
+    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("猫");
+    expect(answer).not.toHaveBeenCalled();
     view.destroy();
   });
 });
@@ -245,29 +300,14 @@ describe("revealed", () => {
       glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
     });
 
-  it("opens the meaning and exactly two equal grades without writing", async () => {
+  it("reveals the meaning on a rating and waits for 下一张 before writing", async () => {
     const { root, view, answer } = mount([outlive(), word(2)]);
     await view.refresh();
-    reveal(root);
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
 
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("比……存在得更久");
-    const grades = [...root.querySelectorAll<HTMLButtonElement>(".ilmt-review-grade")];
-    expect(grades).toHaveLength(2);
-    expect(grades.map((button) => button.dataset.grade)).toEqual(["good", "again"]);
-    expect(grades.map((button) => button.textContent)).toEqual(["想起来了", "没想起来"]);
-    expect(root.querySelector('[data-grade="hard"]')).toBeNull();
+    expect(root.querySelector(".ilmt-review-next")?.textContent).toBe("下一张");
     expect(answer).not.toHaveBeenCalled();
-    view.destroy();
-  });
-
-  it("drops the interval preview, the explainer and 下一张", async () => {
-    const { root, view } = mount([outlive(), word(2)]);
-    await view.refresh();
-    reveal(root);
-
-    expect(root.querySelector(".ilmt-review-grade-due")).toBeNull();
-    expect(root.querySelector(".ilmt-review-grade-note")).toBeNull();
-    expect(root.querySelector(".ilmt-review-next")).toBeNull();
     view.destroy();
   });
 
@@ -282,7 +322,7 @@ describe("revealed", () => {
       }),
     ]);
     await view.refresh();
-    reveal(root);
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
 
     expect(root.querySelectorAll(".ilmt-review-meaning")).toHaveLength(1);
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("比……存在得更久");
@@ -305,7 +345,7 @@ describe("revealed", () => {
       { defaultGlossLang: () => "ja" },
     );
     await view.refresh();
-    reveal(root);
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
 
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("日语义");
     view.destroy();
@@ -325,7 +365,7 @@ describe("revealed", () => {
       { defaultGlossLang: () => "fr" },
     );
     await view.refresh();
-    reveal(root);
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("日语义");
     view.destroy();
 
@@ -342,26 +382,26 @@ describe("revealed", () => {
       { defaultGlossLang: () => "fr" },
     );
     await first.view.refresh();
-    reveal(first.root);
+    first.root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
     expect(first.root.querySelector(".ilmt-review-meaning")?.textContent).toBe("西语义");
     first.view.destroy();
   });
 
-  it("says when no meaning was generated and still offers both grades", async () => {
+  it("says when no meaning was generated and still allows continuing", async () => {
     const { root, view } = mount([word(1, { glosses: [] })]);
     await view.refresh();
-    reveal(root);
+    root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.click();
 
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("释义还没生成");
-    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
+    expect(root.querySelector(".ilmt-review-next")).not.toBeNull();
     view.destroy();
   });
 
-  it("writes 想起来了 once and moves straight to the next prompt", async () => {
+  it("commits 想起来了 once on confirmation and focuses the next prompt", async () => {
     const { root, view, answer } = mount([word(1), word(2)]);
     await view.refresh();
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
 
     await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     expect(answer).toHaveBeenCalledWith(
@@ -371,8 +411,8 @@ describe("revealed", () => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     });
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
-    expect(root.querySelector(".ilmt-review-reveal")?.textContent).toBe("看答案");
-    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-reveal"));
+    expect(root.querySelector('[data-grade="good"]')).toBeTruthy();
+    expect(document.activeElement).toBe(root.querySelector('[data-grade="good"]'));
     expect(root.querySelector(".ilmt-review-next")).toBeNull();
     const receipt = root.querySelector(".ilmt-review-receipt")!;
     expect(receipt.firstElementChild?.textContent).toBe("word1 · 词1 · 明天再见");
@@ -386,19 +426,16 @@ describe("revealed", () => {
     answer.mockImplementationOnce(
       async () => ({ ok: false }) as unknown as { ok: true; word: LearningWord },
     );
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
 
     await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     expect(root.querySelector(".ilmt-review-error")?.textContent).toBe("没写进去 · 再点一次");
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("词1");
-    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
-    expect(root.querySelector<HTMLButtonElement>('[data-grade="good"]')!.disabled).toBe(false);
+    expect(root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.disabled).toBe(false);
     expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 2");
-    expect(root.querySelector(".ilmt-review-next")).toBeNull();
-
-    pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
@@ -410,7 +447,7 @@ describe("revealed", () => {
   it("does not rebuild the card when a refresh lands while revealed", async () => {
     const { root, view, answer } = mount([word(1), word(2)]);
     await view.refresh();
-    reveal(root);
+    pick(root, "good");
 
     await view.refresh();
 
@@ -423,7 +460,7 @@ describe("revealed", () => {
   it("ends without writing from the revealed card", async () => {
     const { root, view, answer } = mount([word(1), word(2)]);
     await view.refresh();
-    reveal(root);
+    pick(root, "good");
     root.querySelector<HTMLButtonElement>(".ilmt-review-end")!.click();
 
     await vi.waitFor(() => {
@@ -443,7 +480,7 @@ describe("lesson", () => {
       glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
     });
 
-  it("keeps the missed word, writes once, and shows the picture and 下一张", async () => {
+  it("keeps the missed word uncommitted while showing its picture and 下一张", async () => {
     const mnemonic = vi.fn().mockResolvedValue({
       ok: true as const,
       mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
@@ -453,13 +490,9 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
 
-    await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "review-answer", id: "en:word1", grade: "again" }),
-    );
+    expect(answer).not.toHaveBeenCalled();
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("outlive");
     expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
     expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("比……存在得更久");
@@ -473,7 +506,7 @@ describe("lesson", () => {
     view.destroy();
   });
 
-  it("turns the page without writing again", async () => {
+  it("commits the missed word when turning the page", async () => {
     const { root, view, answer } = mountStored([word(1), word(2)], {
       mnemonic: vi.fn().mockResolvedValue({
         ok: true as const,
@@ -482,7 +515,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy());
 
@@ -493,7 +525,7 @@ describe("lesson", () => {
     });
     expect(answer).toHaveBeenCalledTimes(1);
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
-    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-reveal"));
+    expect(document.activeElement).toBe(root.querySelector('[data-grade="good"]'));
     expect(root.querySelector(".ilmt-review-receipt")?.firstElementChild?.textContent).toBe(
       "word1 · 词1 · 10 分钟后再见",
     );
@@ -509,7 +541,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-next")).toBeTruthy());
 
@@ -518,7 +549,7 @@ describe("lesson", () => {
     next.click();
     next.click();
 
-    expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2"));
     expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
     expect(answer).toHaveBeenCalledTimes(1);
     expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy();
@@ -532,8 +563,8 @@ describe("lesson", () => {
     });
     const { root, view } = mount([sceneWord(), word(2)], { mnemonic });
     await view.refresh();
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
 
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
     expect(mnemonic).not.toHaveBeenCalled();
@@ -549,7 +580,6 @@ describe("lesson", () => {
       { mnemonic, effect: () => stageEffect(play) },
     );
     await view.refresh();
-    reveal(root);
     pick(root, "again");
 
     await vi.waitFor(() =>
@@ -575,7 +605,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
 
     await vi.waitFor(() => {
@@ -599,7 +628,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
 
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy());
@@ -624,7 +652,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy());
 
@@ -632,7 +659,7 @@ describe("lesson", () => {
 
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
-    expect(answer).toHaveBeenCalledTimes(1);
+    expect(answer).not.toHaveBeenCalled();
     view.destroy();
   });
 
@@ -643,7 +670,6 @@ describe("lesson", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
 
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-scene-retry")).toBeTruthy());
@@ -729,8 +755,8 @@ describe("library shelf and the three endings", () => {
     });
     await view.refresh();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     });
@@ -780,17 +806,16 @@ describe("library shelf and the three endings", () => {
     });
     await view.refresh();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     });
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word3");
     });
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-next")).toBeTruthy());
     root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
@@ -809,13 +834,13 @@ describe("library shelf and the three endings", () => {
     const { root, view } = mountStored([word(1), word(2)]);
     await view.refresh();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     });
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
 
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("2 个都过完了");
@@ -828,8 +853,8 @@ describe("library shelf and the three endings", () => {
 
 describe("receipt and undo", () => {
   async function commitFirst(root: HTMLElement): Promise<void> {
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
   }
 
@@ -872,8 +897,8 @@ describe("receipt and undo", () => {
     expect(store().words[0].dueAt).toBe(NOW - HOUR);
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     expect(root.querySelector(".ilmt-review-meaning")).toBeNull();
-    expect(root.querySelector(".ilmt-review-reveal")?.textContent).toBe("看答案");
-    expect(root.querySelector(".ilmt-review-grade")).toBeNull();
+    expect(root.querySelector('[data-grade="good"]')).toBeTruthy();
+    expect(root.querySelectorAll(".ilmt-review-grade")).toHaveLength(2);
     expect(document.activeElement).toBe(root.querySelector(".ilmt-review-card"));
     expect(answer).toHaveBeenCalledTimes(1);
     view.destroy();
@@ -888,7 +913,6 @@ describe("receipt and undo", () => {
       effect: () => stageEffect(),
     });
     await view.refresh();
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-next")).toBeTruthy());
     root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
@@ -907,7 +931,7 @@ describe("receipt and undo", () => {
     });
     expect(store().words[0].box).toBe(0);
     expect(store().words[0].dueAt).toBe(NOW - HOUR);
-    expect(root.querySelector(".ilmt-review-reveal")?.textContent).toBe("看答案");
+    expect(root.querySelector('[data-grade="good"]')).toBeTruthy();
     view.destroy();
   });
 
@@ -990,7 +1014,7 @@ describe("receipt and undo", () => {
     expect(root.querySelector(".ilmt-review-receipt")).toBeNull();
     expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
     expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("1 / 3");
-    expect(root.querySelector(".ilmt-review-reveal")?.textContent).toBe("看答案");
+    expect(root.querySelector('[data-grade="good"]')).toBeTruthy();
     view.destroy();
   });
 });
@@ -1002,8 +1026,8 @@ describe("graduation send-off", () => {
     names: string[] = [],
   ): Promise<void> {
     for (let i = 0; i < clicks; i++) {
-      reveal(root);
       pick(root, "good");
+      nextCard(root);
       const next = names[i];
       if (next) {
         await vi.waitFor(() => {
@@ -1065,8 +1089,8 @@ describe("graduation send-off", () => {
     const { root, view } = mountStored(words);
     await view.refresh();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-progress")?.textContent).toBe("2 / 3");
     });
@@ -1307,8 +1331,8 @@ describe("today and coming back", () => {
     await view.refresh();
     expect(root.querySelector(".ilmt-review-return")).toBeTruthy();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy();
     });
@@ -1331,13 +1355,12 @@ describe("one write per card", () => {
     });
     await view.refresh();
 
-    reveal(root);
     pick(root, "good");
+    nextCard(root);
     await vi.waitFor(() => {
       expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
     });
 
-    reveal(root);
     pick(root, "again");
     await vi.waitFor(() => expect(root.querySelector(".ilmt-review-next")).toBeTruthy());
     root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
