@@ -75,8 +75,8 @@ async function hostWarning(): Promise<string | null> {
   try {
     const commands = await chrome.commands?.getAll?.();
     const translate = commands?.find((command) => command.name === "translate-page");
-    if (translate && !translate.shortcut) {
-      return "翻译快捷键未绑定：在 chrome://extensions/shortcuts 给「翻译当前页面」设置 Alt+A。";
+    if (!translate || !translate.shortcut) {
+      return "翻译快捷键未绑定：在 chrome://extensions/shortcuts 给「翻译当前页面」设置 Alt+A（macOS 为 ⌥A）。";
     }
   } catch {
     // Older hosts without the commands API: fall through to the page probe.
