@@ -114,7 +114,13 @@ function ensureMain(): Promise<void> {
   return loadPromise.then(dispatchPending);
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Popup host probe: answers only when this document really has the guard,
+  // so the popup can tell "no content script" apart from "feature removed".
+  if (message?.type === "ilmt-probe") {
+    if (sender?.id === chrome.runtime.id) sendResponse({ ok: true });
+    return;
+  }
   if (scope.__ilmtGuard) return;
   if (message?.type !== "activate" && message?.type !== "ask-selection") return;
   if (sender?.id !== chrome.runtime.id) return;

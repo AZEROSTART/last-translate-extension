@@ -42,13 +42,20 @@ function installChrome() {
   const sidePanelOpen = vi.fn(async () => undefined);
   const tabsQuery = vi.fn(async (): Promise<Array<{ id?: number }>> => []);
   const tabsCreate = vi.fn(async () => undefined);
+  const tabsSendMessage = vi.fn(async () => undefined);
+  const commandsGetAll = vi.fn(async () => [
+    { name: "translate-page", shortcut: "Alt+A" },
+    { name: "ask-selection", shortcut: "Alt+Q" },
+    { name: "toggle-side-panel", shortcut: "Alt+S" },
+  ]);
   const chrome = (globalThis as any).chrome;
   chrome.sidePanel = { open: sidePanelOpen };
   chrome.windows = { WINDOW_ID_CURRENT: -2 };
-  chrome.tabs = { query: tabsQuery, create: tabsCreate };
+  chrome.tabs = { query: tabsQuery, create: tabsCreate, sendMessage: tabsSendMessage };
+  chrome.commands = { getAll: commandsGetAll };
   (globalThis as any).chrome = chrome;
   vi.spyOn(window, "close").mockImplementation(() => {});
-  return { sidePanelOpen, tabsQuery, tabsCreate };
+  return { sidePanelOpen, tabsQuery, tabsCreate, tabsSendMessage, commandsGetAll };
 }
 
 const flush = async (): Promise<void> => {
@@ -170,5 +177,40 @@ describe("popup shell", () => {
 
     expect(sidePanelOpen).toHaveBeenCalledWith({ windowId: -2 });
     expect(window.close).not.toHaveBeenCalled();
+  });
+
+  it("warns when the translate shortcut is unassigned", async () => {
+    const { commandsGetAll } = installChrome();
+    commandsGetAll.mockResolvedValue([
+      { name: "translate-page", shortcut: "" },
+      { name: "ask-selection", shortcut: "Alt+Q" },
+      { name: "toggle-side-panel", shortcut: "Alt+S" },
+    ]);
+    await boot();
+    await flush();
+
+    expect(document.querySelector(".popup-host-warning")?.textContent).toContain("快捷键");
+    expect(document.querySelector(".popup-host-warning")?.textContent).toContain(
+      "chrome://extensions/shortcuts",
+    );
+  });
+
+  it("warns when the active page has no content script", async () => {
+    const { tabsQuery, tabsSendMessage } = installChrome();
+    tabsQuery.mockResolvedValue([{ id: 7 }]);
+    tabsSendMessage.mockRejectedValue(new Error("Could not establish connection"));
+    await boot();
+    await flush();
+
+    expect(document.querySelector(".popup-host-warning")?.textContent).toContain("没有注入");
+  });
+
+  it("stays quiet when the shortcut is bound and the page has a content script", async () => {
+    const { tabsQuery } = installChrome();
+    tabsQuery.mockResolvedValue([{ id: 7 }]);
+    await boot();
+    await flush();
+
+    expect(document.querySelector(".popup-host-warning")).toBeNull();
   });
 });

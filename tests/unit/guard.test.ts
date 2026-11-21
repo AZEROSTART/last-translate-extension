@@ -46,6 +46,24 @@ describe("content script guard", () => {
     expect(chrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
   });
 
+  it("answers the popup's host probe", async () => {
+    await import("../../src/content/guard");
+    const respond = vi.fn();
+
+    lastListener()({ type: "ilmt-probe" }, { id: chrome.runtime.id }, respond);
+
+    expect(respond).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("ignores a host probe from another extension", async () => {
+    await import("../../src/content/guard");
+    const respond = vi.fn();
+
+    lastListener()({ type: "ilmt-probe" }, { id: "someone-else" }, respond);
+
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("initializes the main bundle only once even if activated twice", async () => {
     await import("../../src/content/guard");
     const listener = lastListener();

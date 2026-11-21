@@ -51,7 +51,48 @@ async function start(): Promise<void> {
   injectStyles();
   view = await createSettingsView(scrollHost, { mode });
   void refreshReviewEntry();
+  void noteHostHealth();
   resolveReady();
+}
+
+/**
+ * Make a broken shortcut visible instead of silent: Chrome can leave a
+ * suggested key unassigned, and some hosts (Orca's embedded browser) do not
+ * inject content scripts at all. Both look exactly like "the feature vanished".
+ */
+async function noteHostHealth(): Promise<void> {
+  if (mode !== "popup") return;
+  const warning = await hostWarning();
+  if (!warning) return;
+  const node = el("p", "popup-host-warning", warning);
+  node.setAttribute("role", "status");
+  const header = root.querySelector(".popup-header");
+  if (header) header.after(node);
+  else root.prepend(node);
+}
+
+async function hostWarning(): Promise<string | null> {
+  try {
+    const commands = await chrome.commands?.getAll?.();
+    const translate = commands?.find((command) => command.name === "translate-page");
+    if (translate && !translate.shortcut) {
+      return "翻译快捷键未绑定：在 chrome://extensions/shortcuts 给「翻译当前页面」设置 Alt+A。";
+    }
+  } catch {
+    // Older hosts without the commands API: fall through to the page probe.
+  }
+
+  const send = chrome.tabs?.sendMessage;
+  if (typeof send !== "function") return null;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    // The popup opened as a tab is not a page the content script can live in.
+    if (tab?.url?.startsWith(chrome.runtime.getURL(""))) return null;
+    if (tab?.id !== undefined) await send(tab.id, { type: "ilmt-probe" });
+  } catch {
+    return "当前页面没有注入翻译脚本：请在 Chrome 中打开网页，或刷新本页后重试。";
+  }
+  return null;
 }
 
 /** Show "待复习 N · 打开复习" only when something is actually due. */
@@ -133,7 +174,7 @@ function buildShell(): void {
   const openSidepanel = el("button", "popup-open-sidepanel", "打开翻译侧栏");
   openSidepanel.type = "button";
   openSidepanel.addEventListener("click", openSidePanel);
-  footer.append(openSidepanel, el("span", "popup-hint", "Alt+S 也能打开侧栏"));
+  footer.append(openSidepanel, el("span", "popup-hint", "Alt+A 翻译 · Alt+Q 解释 · Alt+S 侧栏"));
   root.appendChild(footer);
 }
 

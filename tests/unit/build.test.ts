@@ -31,6 +31,15 @@ describe("build output", () => {
     }
   });
 
+  it("never loses the page-translation shortcuts", () => {
+    const m = JSON.parse(readFileSync("dist/manifest.json", "utf8"));
+    expect(m.commands).toMatchObject({
+      "translate-page": { suggested_key: { default: "Alt+A" } },
+      "ask-selection": { suggested_key: { default: "Alt+Q" } },
+      "toggle-side-panel": { suggested_key: { default: "Alt+S" } },
+    });
+  });
+
   it("inlines the cut-out cat so the page never requests an extension URL", () => {
     const bundles = readdirSync("dist", { recursive: true, encoding: "utf8" })
       .filter((file) => file.endsWith(".js"))

@@ -7,7 +7,7 @@
 
 > 2026-11-13 修订（用户明确要求）：P0 不再由 agent 用 `osascript` 注入 `⌥A`，也不再 `--window foreground`。快捷键绑定改由 Playwright 通过 `chrome.commands.getAll()` 断言，翻译/恢复/popup/复习由自动用例覆盖，避免抢用户焦点、避免按键打进别的应用。
 
-当前扩展：`dist/` 未打包扩展，ID `dnhebcbngmcmfccnelmimfnkponmaifa`。
+当前扩展：`dist/` 未打包扩展；ID 以 `chrome://extensions` 显示为准（不同宿主/加载路径会不同）。
 
 ## 0. 自动门禁（每次必跑）
 
@@ -72,7 +72,17 @@ npm run test:e2e
 
 通过：`shortcut` 非空且与上述一致。空字符串表示绑定被拒绝或被其它扩展占用——真实按键会静默失效，所以这一条比手动按键更可靠。
 
-> 真实按键从 Chrome 到扩展的派发属于浏览器内部行为，无法在页面里断言。我们验证的是「绑定已注册」+「命令处理函数正确」两段：前者由上面的用例覆盖，后者由 `tests/unit/background-index.test.ts` 与 2.2 的 activate 链路覆盖。
+另外三条锁住「快捷键翻译」这条链路，缺一不可：
+
+- `tests/unit/build.test.ts › never loses the page-translation shortcuts`：构建产物里的三个命令与默认键仍在。
+- `tests/unit/background-index.test.ts`：`chrome.commands.onCommand` 收到命令后确实向标签页发 `activate` / `ask-selection` / 打开侧栏。
+- `translate.spec.ts › translates on one activate and restores on the next`：只发一次 `activate`（与快捷键同一条路径）就翻译 10/10，第二次恢复。
+
+popup 打开时若快捷键未绑定、或当前页没有内容脚本，必须出现 `.popup-host-warning`；不允许静默失败。
+
+> 真实按键从 Chrome 到扩展的派发属于浏览器内部行为，无法在页面里断言。我们验证的是「绑定已注册」+「命令处理函数正确」+「activate 端到端生效」三段。
+
+> **宿主限制**：Orca 内置浏览器不注入 content scripts（`chrome.scripting` 未实现，`chrome.tabs.sendMessage` 返回 `Receiving end does not exist`），不能用它验证网页翻译，也不能据此判断快捷键失效。快捷键翻译必须在 Chrome / Chromium 里验证；Orca 只用于侧栏与复习。汇报时写明验证宿主。
 
 ### 2.2 翻译、双语位置与恢复（自动）
 

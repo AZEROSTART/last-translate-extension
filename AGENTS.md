@@ -1,5 +1,20 @@
 # AGENTS.md
 
+## 快捷键翻译（不可丢，每次推送前强制）
+
+这条链路任何一环断了，`⌥A` 就会静默失效。推送前逐项确认，任何一项不过就停下修复，不得推送：
+
+1. **源码**：`public/manifest.json` 仍有三个命令和默认键——`translate-page`=Alt+A、`ask-selection`=Alt+Q、`toggle-side-panel`=Alt+S。
+2. **构建**：`dist/manifest.json` 与源码一致，由 `tests/unit/build.test.ts › never loses the page-translation shortcuts` 锁住。
+3. **绑定**：`tests/e2e/translate.spec.ts › advertises the real shortcut bindings without an OS keystroke` 断言 Chrome 解析出 `⌥A / ⌥Q / ⌥S`。
+4. **命令处理**：`tests/unit/background-index.test.ts` 覆盖 `chrome.commands.onCommand` → `activate` / `ask-selection` / 打开侧栏。
+5. **端到端**：`tests/e2e/translate.spec.ts › translates on one activate and restores on the next` 只发一次 `activate`（与快捷键同一条路径）就翻译，第二次恢复。
+6. **可见性**：popup 打开时，若快捷键未绑定或当前页没有内容脚本，必须显示 `.popup-host-warning`；不允许静默失败。
+
+不得删除或改名：manifest 的 `commands`、`chrome.commands.onCommand`、content 的 `activate` 处理、右键「翻译当前页面」、popup 的快捷键提示。确需改动，先得到用户明确同意。
+
+**宿主限制**：Orca 内置浏览器不注入 content scripts（`chrome.scripting` 未实现，`chrome.tabs.sendMessage` 返回 `Receiving end does not exist`），因此不能用它验证网页翻译。快捷键翻译必须在 Chrome / Chromium 里验证；Orca 只用于侧栏与复习。汇报时必须写明是在哪个宿主验证的。
+
 ## 交付验证（强制）
 
 每次开发任务完成后、向用户汇报前，必须按 `docs/delivery-verification.md` 的 P0 主流程验证一遍。

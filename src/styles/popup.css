@@ -197,6 +197,20 @@ body.page-mode .popup-hero {
   background: linear-gradient(90deg, rgba(191, 74, 51, 0.55), rgba(191, 74, 51, 0));
 }
 
+/* A broken shortcut or a host without content scripts would otherwise look
+   exactly like a feature that disappeared. */
+.popup-host-warning {
+  margin: 0 2px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-left: 3px solid var(--ilmt-accent);
+  border-radius: 6px;
+  background: var(--ilmt-panel-2);
+  color: var(--ilmt-text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .popup-scroll {
   flex: 1 1 auto;
   min-height: 0;
