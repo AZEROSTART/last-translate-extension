@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGlossController, type GlossControllerDeps } from "../../src/content/glossary";
 import { getEffect } from "../../src/content/effects";
-import type { GlossaryNote } from "../../src/shared/types";
+import type { GlossaryNote, LearningState, LearningWord } from "../../src/shared/types";
 
 function stubHighlights(): Map<string, unknown> {
   const registry = new Map<string, unknown>();
@@ -621,6 +621,241 @@ describe("card inner scrolling (v6)", () => {
 
     window.dispatchEvent(new Event("scroll"));
 
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+});
+
+// --- cross-page known words and the ask bridge (v8) ---
+
+function storedWord(over: Partial<LearningWord> = {}): LearningWord {
+  return {
+    id: "en:outlive",
+    termLang: "en",
+    surface: "outlive",
+    glosses: [],
+    glossLang: "zh",
+    contexts: [],
+    status: "learning",
+    box: 0,
+    dueAt: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    lastSeenAt: 0,
+    reviews: [],
+    reviewsCount: 0,
+    correctCount: 0,
+    checksSinceSpot: 0,
+    ...over,
+  };
+}
+
+function learningState(words: LearningWord[]): LearningState {
+  return { version: 1, words, stats: { day: "", todayReviewed: 0 }, updatedAt: 0 };
+}
+
+function textNodesOf(root: Element): Node[] {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Node[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+  return nodes;
+}
+
+describe("cross-page known words and the ask bridge (v8)", () => {
+  interface OpenOptions {
+    html?: string;
+    surface?: string;
+    meaning?: string;
+    termLang?: string;
+  }
+
+  async function openWith(
+    depsOverrides: GlossControllerDeps,
+    options: OpenOptions = {},
+  ): Promise<{ controller: ReturnType<typeof createGlossController>; text: Text; card: HTMLElement }> {
+    stubFrame();
+    stubHighlights();
+    document.body.innerHTML = options.html ?? `<p>Small tools often outlive their makers.</p>`;
+    const paragraph = document.querySelector("p")!;
+    const text = paragraph.firstChild as Text;
+    const controller = createGlossController(document, depsOverrides);
+    controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    controller.setParagraph(
+      "p_1",
+      [text],
+      [{ surface: options.surface ?? "outlive", meaning: options.meaning ?? "比……存在得更久" }],
+      options.termLang ?? "en",
+    );
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    return { controller, text, card: document.querySelector("[role=tooltip]") as HTMLElement };
+  }
+
+  it("shows a stored word's mascot in the known pose without claiming again", async () => {
+    const sendLearn = vi.fn();
+    const { card } = await openWith({
+      sendLearn,
+      loadLearning: async () => learningState([storedWord({ mascotId: "cat-hoard" })]),
+    });
+
+    const effect = card.querySelector('[data-ilmt-effect="cat-hoard"]')!;
+    expect(effect).not.toBeNull();
+    expect(effect.getAttribute("data-ilmt-state")).toBe("known");
+
+    effect
+      .querySelector("button")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(700);
+    expect(sendLearn).not.toHaveBeenCalled();
+  });
+
+  it("shows an auto-claimed word without a mascot in the known pose", async () => {
+    const { card } = await openWith({
+      sendLearn: vi.fn(),
+      loadLearning: async () => learningState([storedWord()]),
+    });
+
+    const effect = card.querySelector("[data-ilmt-effect]")!;
+    expect(effect).not.toBeNull();
+    expect(effect.getAttribute("data-ilmt-state")).toBe("known");
+  });
+
+  it("syncs known words from live storage changes and stops listening on stop()", async () => {
+    const listeners: Array<(changes: unknown, area: string) => void> = [];
+    const removeListener = vi.fn();
+    const chromeStorage = chrome.storage as unknown as {
+      onChanged?: unknown;
+    };
+    const original = chromeStorage.onChanged;
+    chromeStorage.onChanged = {
+      addListener: (cb: (changes: unknown, area: string) => void) => listeners.push(cb),
+      removeListener,
+    };
+
+    try {
+      const { controller, text, card } = await openWith({
+        sendLearn: vi.fn(),
+        resolveEffect: () => getEffect("gopher-hole")!,
+      });
+      expect(listeners).toHaveLength(1);
+      expect(card.querySelector("[data-ilmt-effect]")!.getAttribute("data-ilmt-state")).toBe(
+        "idle",
+      );
+
+      // A claim from another page/tab turns the pose known.
+      listeners[0](
+        { learning: { newValue: learningState([storedWord({ mascotId: "cat-hoard" })]) } },
+        "local",
+      );
+      stubCaret(text, 0);
+      document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+      await vi.advanceTimersByTimeAsync(200);
+      stubCaret(text, 20);
+      document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+      await vi.advanceTimersByTimeAsync(150);
+      expect(
+        document
+          .querySelector("[role=tooltip] [data-ilmt-effect]")!
+          .getAttribute("data-ilmt-state"),
+      ).toBe("known");
+
+      // A remote deletion drops it again.
+      listeners[0]({ learning: { newValue: learningState([]) } }, "local");
+      stubCaret(text, 0);
+      document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+      await vi.advanceTimersByTimeAsync(200);
+      stubCaret(text, 20);
+      document.dispatchEvent(new MouseEvent("pointermove", { clientX: 30, clientY: 28 }));
+      await vi.advanceTimersByTimeAsync(150);
+      expect(
+        document
+          .querySelector("[role=tooltip] [data-ilmt-effect]")!
+          .getAttribute("data-ilmt-state"),
+      ).toBe("idle");
+
+      controller.stop();
+      expect(removeListener).toHaveBeenCalledWith(listeners[0]);
+    } finally {
+      if (original === undefined) delete chromeStorage.onChanged;
+      else chromeStorage.onChanged = original;
+    }
+  });
+
+  it("renders 问侧栏 inside the word header and hands the term to onAsk", async () => {
+    const onAsk = vi.fn();
+    const { card } = await openWith({
+      onAsk,
+      resolveEffect: () => getEffect("gopher-hole")!,
+    });
+
+    const word = card.querySelector(".ilmt-gloss-word")!;
+    const ask = word.querySelector(".ilmt-gloss-ask") as HTMLButtonElement;
+    expect(ask).not.toBeNull();
+    expect(ask.textContent).toBe("问侧栏");
+    // Exactly the two-layer card structure is preserved.
+    expect(card.querySelectorAll(".ilmt-gloss-word")).toHaveLength(1);
+    expect(card.querySelectorAll(".ilmt-gloss-meaning")).toHaveLength(1);
+
+    ask.click();
+
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    const [surface, range] = onAsk.mock.calls[0];
+    expect(surface).toBe("outlive");
+    expect(range.toString()).toBe("outlive");
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+
+  it("omits the ask button when no onAsk handler is configured", () => {
+    const card = openCard();
+    expect(card.querySelector(".ilmt-gloss-ask")).toBeNull();
+  });
+
+  it("opens and keeps the card for a term split across inline elements", async () => {
+    stubFrame();
+    const registry = stubHighlights();
+    document.body.innerHTML = `<p>We need to look <em>up</em> now.</p>`;
+    const paragraph = document.querySelector("p")!;
+    const controller = createGlossController(document, {
+      resolveEffect: () => getEffect("gopher-hole")!,
+    });
+    controller.start();
+    controller.setParagraph(
+      "p_1",
+      textNodesOf(paragraph),
+      [{ surface: "look up", meaning: "查阅" }],
+      "en",
+    );
+
+    expect(controller.count()).toBe(1);
+    const highlighted = [...(registry.get("ilmt-gloss") as Set<Range>)];
+    expect(highlighted[0].toString()).toBe("look up");
+
+    const lookText = paragraph.firstChild as Text;
+    const upText = paragraph.querySelector("em")!.firstChild as Text;
+    stubRangeRect();
+
+    stubCaret(lookText, 13);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(document.querySelector("[role=tooltip]")).not.toBeNull();
+
+    // Moving onto the second half of the term keeps the same card open.
+    stubCaret(upText, 1);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 40, clientY: 28, bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(document.querySelector("[role=tooltip]")).not.toBeNull();
+
+    stubCaret(lookText, 0);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
+    await vi.advanceTimersByTimeAsync(200);
     expect(document.querySelector("[role=tooltip]")).toBeNull();
   });
 });

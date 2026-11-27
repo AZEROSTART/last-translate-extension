@@ -803,3 +803,94 @@ it("keeps the banner plain when no learning language is configured", async () =>
     vi.resetModules();
   }
 });
+
+// --- hover-to-chat bridge (v8) ---
+
+it("forwards a hovered glossary term to the side panel from 问侧栏", async () => {
+  // Use the real glossary controller: this test verifies main.ts's onAsk wiring.
+  vi.doUnmock("../../src/content/glossary");
+  vi.resetModules();
+  vi.useFakeTimers();
+
+  const highlights = new Map<string, unknown>();
+  vi.stubGlobal(
+    "Highlight",
+    class extends Set<Range> {
+      constructor(...ranges: Range[]) {
+        super(ranges);
+      }
+    },
+  );
+  vi.stubGlobal("CSS", { highlights });
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    cb(0);
+    return 1;
+  });
+
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      left: 10,
+      top: 20,
+      right: 70,
+      bottom: 36,
+      width: 60,
+      height: 16,
+      x: 10,
+      y: 20,
+      toJSON: () => ({}),
+    }),
+  });
+
+  document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+  const text = document.querySelector("p")!.firstChild as Text;
+  Object.defineProperty(document, "caretPositionFromPoint", {
+    configurable: true,
+    value: () => ({ offsetNode: text, offset: 20 }),
+  });
+
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+  const sendMessage = vi.fn(async () => undefined);
+  (globalThis as any).chrome.runtime.sendMessage = sendMessage;
+
+  try {
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const request = sent.find((message) => message.type === "translate");
+    expect(request).toBeTruthy();
+    const id = request.items[0].id;
+    messageListeners[0]({
+      type: "result",
+      requestId: request.requestId,
+      items: [
+        {
+          id,
+          text: "小工具往往比制造者存在得更久。",
+          glossary: [{ surface: "outlive", meaning: "比……存在得更久" }],
+        },
+      ],
+    });
+
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    const ask = document.querySelector(".ilmt-gloss-ask") as HTMLButtonElement;
+    expect(ask).not.toBeNull();
+    ask.click();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "open-chat", text: "outlive", mode: "follow-up" }),
+    );
+  } finally {
+    vi.useRealTimers();
+    delete (Range.prototype as unknown as { getBoundingClientRect?: unknown })
+      .getBoundingClientRect;
+    delete (document as unknown as { caretPositionFromPoint?: unknown }).caretPositionFromPoint;
+    vi.unstubAllGlobals();
+  }
+});

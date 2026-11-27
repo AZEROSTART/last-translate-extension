@@ -103,6 +103,7 @@ let registry = new ParagraphRegistry();
 const gloss = createGlossController(document, {
   getEffectSettings: () => effectSettings,
   getGlossLang: () => targetLang,
+  onAsk: (surface, range) => sendOpenChat(surface, "follow-up", range),
 });
 let portClient: TranslatePortClient | null = null;
 /**

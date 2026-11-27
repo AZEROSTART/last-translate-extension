@@ -9,10 +9,12 @@ import type {
   GlossaryNote,
   LearnWordMessage,
   LearnWordResponse,
+  LearningState,
 } from "../shared/types";
+import { getLearning, parseLearningState, wordId } from "../shared/learning-storage";
 import { findSurfaceRange } from "./glossary-range";
 import { getEffect, getEffects, pickEffect } from "./effects";
-import type { ClaimEffect, ClaimHandle, ClaimPhase, ClaimResult } from "./effects/types";
+import type { ClaimEffect, ClaimHandle, ClaimResult } from "./effects/types";
 import "./effects/gopher-hole";
 import "./effects/magnet";
 import "./effects/cat-hoard";
@@ -27,11 +29,17 @@ const CARD_GAP = 8;
 const MAX_ENTRIES = 500;
 const EFFECT_HISTORY_KEY = "ilmt:effect-history";
 
-interface GlossEntry {
-  paragraphId: string;
+/** One `[start, end)` slice of a text node covered by a glossary entry. */
+interface GlossSlice {
   node: Text;
   start: number;
   end: number;
+}
+
+interface GlossEntry {
+  paragraphId: string;
+  /** A cross-inline term covers one slice per contributing text node. */
+  slices: GlossSlice[];
   range: Range;
   note: GlossaryNote;
   termLang?: string;
@@ -44,6 +52,43 @@ interface NodeHit {
   start: number;
   end: number;
   entry: GlossEntry;
+}
+
+/**
+ * Map a DOM Range back to per-text-node slices. Single-node ranges are the
+ * common case; cross-inline terms cover every text node between the endpoints.
+ */
+function rangeTextSlices(range: Range, textNodes: Node[]): GlossSlice[] {
+  const startContainer = range.startContainer;
+  const endContainer = range.endContainer;
+  if (
+    startContainer.nodeType !== Node.TEXT_NODE ||
+    endContainer.nodeType !== Node.TEXT_NODE
+  ) {
+    return [];
+  }
+
+  const startNode = startContainer as Text;
+  const endNode = endContainer as Text;
+  if (startNode === endNode) {
+    const start = range.startOffset;
+    const end = range.endOffset;
+    return start < end ? [{ node: startNode, start, end }] : [];
+  }
+
+  const ordered = textNodes.filter((node): node is Text => node.nodeType === Node.TEXT_NODE);
+  const startIndex = ordered.indexOf(startNode);
+  const endIndex = ordered.indexOf(endNode);
+  if (startIndex < 0 || endIndex < startIndex) return [];
+
+  const slices: GlossSlice[] = [];
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const node = ordered[index];
+    const start = index === startIndex ? range.startOffset : 0;
+    const end = index === endIndex ? range.endOffset : node.data.length;
+    if (start < end) slices.push({ node, start, end });
+  }
+  return slices;
 }
 
 /** Window of the source paragraph around a surface, capped for storage. */
@@ -80,6 +125,10 @@ export interface GlossControllerDeps {
   getEffectSettings?: () => EffectSettings | undefined;
   /** Current translation language, used as the card's answer language. */
   getGlossLang?: () => string;
+  /** Stored vocabulary for the "known" pose; defaults to `getLearning`. */
+  loadLearning?: () => Promise<LearningState>;
+  /** "问侧栏": hand a hovered term to the side panel. */
+  onAsk?: (surface: string, range: Range) => void;
 }
 
 type HighlightCtor = new (...ranges: Range[]) => unknown;
@@ -110,8 +159,10 @@ export function createGlossController(
   let started = false;
   let scheduled = false;
   let lastPoint: { x: number; y: number } | null = null;
-  /** Per-word outcome, so a reopened card never resends or forgets "known". */
-  const captured = new Map<string, ClaimPhase>();
+  /** Per-word outcome, so a reopened card never resends or remembers wrongly. */
+  const captured = new Map<string, { mascotId?: string }>();
+  /** Invalidates an in-flight hydration when the controller stops or restarts. */
+  let hydrateToken = 0;
 
   function highlightParts(): { css: HighlightCSS | undefined; ctor: HighlightCtor | undefined } {
     const win = (view ?? globalThis) as unknown as {
@@ -276,12 +327,55 @@ export function createGlossController(
   }
 
   function entryKey(entry: GlossEntry): string {
-    return `${entry.termLang ?? ""}:${entry.note.surface.trim().toLocaleLowerCase()}`;
+    return wordId(entry.termLang ?? fallbackTermLang(), entry.note.surface);
   }
 
   function fallbackTermLang(): string {
     const lang = doc.documentElement.getAttribute("lang") ?? "";
     return lang.trim().toLowerCase().split(/[-_]/)[0] || "en";
+  }
+
+  /** A stored word keeps its mascot; anything else follows normal rotation. */
+  function resolveEffectForEntry(known: { mascotId?: string } | undefined): ClaimEffect {
+    if (deps.resolveEffect) return deps.resolveEffect();
+    if (known?.mascotId) {
+      const remembered = getEffect(known.mascotId);
+      if (remembered) return remembered;
+    }
+    return nextEffect();
+  }
+
+  /** Merge stored words into the map without clobbering local claims. */
+  function mergeCaptured(state: LearningState): void {
+    for (const word of state.words) {
+      if (!captured.has(word.id)) captured.set(word.id, { mascotId: word.mascotId });
+    }
+  }
+
+  /** Replace the map so remote deletions drop the known pose immediately. */
+  function replaceCaptured(state: LearningState): void {
+    captured.clear();
+    for (const word of state.words) captured.set(word.id, { mascotId: word.mascotId });
+  }
+
+  async function hydrateCaptured(token: number): Promise<void> {
+    let state: LearningState;
+    try {
+      state = await (deps.loadLearning ?? getLearning)();
+    } catch {
+      return;
+    }
+    if (!started || token !== hydrateToken) return;
+    mergeCaptured(state);
+  }
+
+  function onStorageChanged(
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ): void {
+    if (areaName !== "local" || !changes.learning) return;
+    // A removal must survive too, so this replaces rather than merges.
+    replaceCaptured(parseLearningState(changes.learning.newValue));
   }
 
   async function defaultSendLearn(message: LearnWordMessage): Promise<LearnWordResponse | null> {
@@ -338,6 +432,19 @@ export function createGlossController(
       pos.textContent = entry.note.pos;
       word.appendChild(pos);
     }
+    if (deps.onAsk) {
+      const ask = doc.createElement("button");
+      ask.type = "button";
+      ask.className = "ilmt-gloss-ask";
+      ask.textContent = "问侧栏";
+      ask.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const range = entry.range.cloneRange();
+        hideCard();
+        deps.onAsk?.(entry.note.surface, range);
+      });
+      word.appendChild(ask);
+    }
 
     const meaning = doc.createElement("div");
     meaning.className = "ilmt-gloss-meaning";
@@ -349,8 +456,9 @@ export function createGlossController(
     // reads like a second copy of `meaning`. The field still drives that highlight.
     ensureEffectStyles();
 
-    const effect = nextEffect();
     const key = entryKey(entry);
+    const known = captured.get(key);
+    const effect = resolveEffectForEntry(known);
 
     // The effect paints "already captured" itself; this region is screen-reader only.
     const announce = doc.createElement("div");
@@ -384,7 +492,7 @@ export function createGlossController(
         if (!response?.ok) return { ok: false, created: false };
         // Remember only the quiet end state: reopening the card must not
         // replay the "+1" animation.
-        captured.set(key, "known");
+        captured.set(key, { mascotId: effect.id });
         return { ok: true, created: response.created };
       } finally {
         claiming = false;
@@ -418,8 +526,7 @@ export function createGlossController(
     if (effect.reserve.above > 0) word.style.paddingTop = `${effect.reserve.above}px`;
     if (effect.reserve.below > 0) word.style.marginBottom = `${effect.reserve.below}px`;
 
-    const stored = captured.get(key);
-    if (stored) cardEffect.setState(stored);
+    if (known !== undefined) cardEffect.setState("known");
 
     positionCard(element, entry.range);
     setPairHighlight(pairRange(entry));
@@ -531,11 +638,13 @@ export function createGlossController(
 
     entries = entries.filter((entry) => !predicate(entry));
     for (const entry of doomed) {
-      const hits = byNode.get(entry.node);
-      if (!hits) continue;
-      const remaining = hits.filter((hit) => hit.entry !== entry);
-      if (remaining.length === 0) byNode.delete(entry.node);
-      else byNode.set(entry.node, remaining);
+      for (const slice of entry.slices) {
+        const hits = byNode.get(slice.node);
+        if (!hits) continue;
+        const remaining = hits.filter((hit) => hit.entry !== entry);
+        if (remaining.length === 0) byNode.delete(slice.node);
+        else byNode.set(slice.node, remaining);
+      }
     }
 
     if (
@@ -562,19 +671,33 @@ export function createGlossController(
     start(): void {
       if (started) return;
       started = true;
+      hydrateToken += 1;
       doc.addEventListener("pointermove", onPointerMove, { passive: true });
       doc.addEventListener("selectionchange", onSelectionChange);
       view?.addEventListener("scroll", onScroll, true);
       view?.addEventListener("blur", onBlur);
+      try {
+        chrome.storage?.onChanged?.addListener?.(onStorageChanged);
+      } catch {
+        // No storage surface in this host; known poses just stay local.
+      }
+      void hydrateCaptured(hydrateToken);
     },
 
     stop(): void {
       if (!started) return;
       started = false;
+      hydrateToken += 1;
+      try {
+        chrome.storage?.onChanged?.removeListener?.(onStorageChanged);
+      } catch {
+        // Listener was never registered; nothing to remove.
+      }
       doc.removeEventListener("pointermove", onPointerMove);
       doc.removeEventListener("selectionchange", onSelectionChange);
       view?.removeEventListener("scroll", onScroll, true);
       view?.removeEventListener("blur", onBlur);
+      captured.clear();
       clear();
     },
 
@@ -598,15 +721,18 @@ export function createGlossController(
         if (entries.length >= MAX_ENTRIES) break;
         const range = findSurfaceRange(textNodes, note.surface);
         if (!range) continue;
-        const node = range.startContainer;
-        if (node.nodeType !== Node.TEXT_NODE) continue;
-        const start = range.startOffset;
-        const end = range.endOffset;
-        if (start >= end) continue;
+        const slices = rangeTextSlices(range, textNodes);
+        if (slices.length === 0) continue;
         if (
-          entries.some(
-            (entry) =>
-              entry.node === node && start < entry.end && end > entry.start,
+          entries.some((entry) =>
+            slices.some((slice) =>
+              entry.slices.some(
+                (existing) =>
+                  existing.node === slice.node &&
+                  slice.start < existing.end &&
+                  slice.end > existing.start,
+              ),
+            ),
           )
         ) {
           continue;
@@ -614,9 +740,7 @@ export function createGlossController(
 
         const entry: GlossEntry = {
           paragraphId: id,
-          node: node as Text,
-          start,
-          end,
+          slices,
           range,
           note,
           termLang,
@@ -625,9 +749,11 @@ export function createGlossController(
           ...(pageTitle ? { pageTitle } : {}),
         };
         entries.push(entry);
-        const hits = byNode.get(entry.node) ?? [];
-        hits.push({ start, end, entry });
-        byNode.set(entry.node, hits);
+        for (const slice of slices) {
+          const hits = byNode.get(slice.node) ?? [];
+          hits.push({ start: slice.start, end: slice.end, entry });
+          byNode.set(slice.node, hits);
+        }
       }
 
       rebuildHighlight();
