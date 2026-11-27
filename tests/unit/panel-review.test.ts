@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildReviewQueue, mountReview, type ReviewOptions } from "../../src/panel/review";
+import { buildReviewQueue, mountReview, safeHttpUrl, type ReviewOptions } from "../../src/panel/review";
 import type { ClaimContext, ClaimEffect } from "../../src/content/effects/types";
 import {
   applyReviewAnswer,
@@ -127,6 +127,22 @@ function pick(root: HTMLElement, grade: "good" | "again"): void {
 
 function nextCard(root: HTMLElement): void {
   root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.click();
+}
+
+/** Send one real DOM keydown so the document-level listener sees it. */
+function key(
+  target: EventTarget,
+  value: string,
+  init: KeyboardEventInit = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: value,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
 }
 
 beforeEach(() => {
@@ -1528,6 +1544,452 @@ describe("one write per card", () => {
 
     expect(answer.mock.calls.map(([message]) => message.grade)).toEqual(["good", "again"]);
     expect(answer).toHaveBeenCalledTimes(2);
+    view.destroy();
+  });
+});
+
+describe("safeHttpUrl", () => {
+  it("accepts only absolute http and https URLs", () => {
+    expect(safeHttpUrl(" https://example.com/a?b=1 ")).toBe("https://example.com/a?b=1");
+    expect(safeHttpUrl("http://example.com")).toBe("http://example.com/");
+
+    for (const bad of [
+      "javascript:alert(1)",
+      "data:text/html,<p>x</p>",
+      "file:///tmp/x",
+      "chrome://settings",
+      "chrome-extension://abc/panel.html",
+      "blob:https://example.com/x",
+      "",
+      "   ",
+      "/relative",
+      "example.com",
+    ]) {
+      expect(safeHttpUrl(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("keyboard review", () => {
+  const recall = () =>
+    word(1, {
+      surface: "outlive",
+      reviewsCount: 1,
+      glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
+      contexts: [
+        {
+          sentence: "Small tools often outlive their competitors.",
+          pageUrl: "https://x.test/a",
+          at: NOW,
+        },
+      ],
+    });
+
+  it("grades with 1/ArrowRight and 2/ArrowLeft", async () => {
+    const cases: Array<[string, "good" | "again"]> = [
+      ["1", "good"],
+      ["ArrowRight", "good"],
+      ["2", "again"],
+      ["ArrowLeft", "again"],
+    ];
+    for (const [value, grade] of cases) {
+      const { root, view } = mount([word(1)], {
+        effect: () => stageEffect(),
+        mnemonic: vi.fn().mockResolvedValue({
+          ok: true as const,
+          mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+        }),
+      });
+      await view.refresh();
+
+      const event = key(document, value);
+
+      expect(event.defaultPrevented, value).toBe(true);
+      expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
+      expect(root.querySelector(".ilmt-review-meaning")?.textContent).toBe("词1");
+      if (grade === "again") expect(root.querySelector(".ilmt-review-scene")).toBeTruthy();
+      view.destroy();
+    }
+  });
+
+  it("advances a lesson with Space and Enter", async () => {
+    for (const value of [" ", "Enter"]) {
+      const words = [word(1), word(2)];
+      const { root, view, answer } = mountStored(words, {
+        effect: () => stageEffect(),
+        mnemonic: vi.fn().mockResolvedValue({
+          ok: true as const,
+          mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+        }),
+      });
+      await view.refresh();
+      key(document, "1");
+
+      key(document, value);
+
+      await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+      });
+      view.destroy();
+    }
+  });
+
+  it("reveals a recall card with Space and Enter", async () => {
+    for (const value of [" ", "Enter"]) {
+      const { root, view, answer } = mount([recall()]);
+      await view.refresh();
+      expect(root.querySelector(".ilmt-review-input")).toBeTruthy();
+
+      const event = key(document, value);
+
+      expect(event.defaultPrevented, value).toBe(true);
+      expect(root.querySelector(".ilmt-review-input")).toBeNull();
+      expect(root.querySelector(".ilmt-review-meaning")).toBeTruthy();
+      expect(answer).not.toHaveBeenCalled();
+      view.destroy();
+    }
+  });
+
+  it("undoes from the finish page with z, Ctrl+Z and Meta+Z", async () => {
+    for (const init of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const { root, view, undo } = mountStored([word(1)]);
+      await view.refresh();
+      pick(root, "good");
+      nextCard(root);
+      await vi.waitFor(() => {
+        expect(root.querySelector(".ilmt-review-done-title")).toBeTruthy();
+      });
+      expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy();
+
+      key(document, "z", init);
+
+      await vi.waitFor(() => expect(undo).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word1");
+      });
+      expect(root.querySelector(".ilmt-review-receipt")).toBeNull();
+      view.destroy();
+    }
+  });
+
+  it("never undoes from a lesson or with Shift+Z", async () => {
+    const { root, view, undo } = mountStored([word(1), word(2)], {
+      effect: () => stageEffect(),
+      mnemonic: vi.fn().mockResolvedValue({
+        ok: true as const,
+        mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+      }),
+    });
+    await view.refresh();
+    pick(root, "good");
+    nextCard(root);
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
+
+    pick(root, "again");
+    expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
+    key(document, "z");
+    expect(undo).not.toHaveBeenCalled();
+
+    key(document, " ");
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")).toBeTruthy();
+    });
+    key(document, "Z", { shiftKey: true });
+    expect(undo).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it("ignores hidden reviews, editable targets, IME, Alt and destroyed views", async () => {
+    const hidden = mount([word(1)]);
+    await hidden.view.refresh();
+    hidden.root.hidden = true;
+    key(document, "1");
+    expect(hidden.root.querySelector(".ilmt-review-lesson")).toBeNull();
+    hidden.view.destroy();
+
+    const editing = mount([recall()]);
+    await editing.view.refresh();
+    const input = editing.root.querySelector<HTMLInputElement>(".ilmt-review-input")!;
+    expect(key(input, " ").defaultPrevented).toBe(false);
+    expect(editing.root.querySelector(".ilmt-review-grade")).toBeNull();
+
+    expect(key(document, "1", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(editing.root.querySelector(".ilmt-review-grade")).toBeNull();
+    expect(key(document, "1", { altKey: true }).defaultPrevented).toBe(false);
+    expect(editing.root.querySelector(".ilmt-review-grade")).toBeNull();
+    editing.view.destroy();
+
+    const destroyed = mount([word(1)]);
+    await destroyed.view.refresh();
+    destroyed.view.destroy();
+    key(document, "1");
+    expect(destroyed.root.querySelector(".ilmt-review-lesson")).toBeNull();
+  });
+
+  it("does not steal Space or Enter from buttons and links", async () => {
+    const words = [
+      word(1, {
+        surface: "outlive",
+        contexts: [
+          {
+            sentence: "Small tools often outlive their competitors.",
+            pageUrl: "https://example.com/a",
+            pageTitle: "Story",
+            at: NOW,
+          },
+        ],
+      }),
+    ];
+    const { root, view, answer } = mount(words);
+    await view.refresh();
+    key(document, "1");
+
+    const next = root.querySelector<HTMLButtonElement>(".ilmt-review-next")!;
+    expect(key(next, " ").defaultPrevented).toBe(false);
+    const link = root.querySelector<HTMLAnchorElement>(".ilmt-review-source-link")!;
+    expect(key(link, "Enter").defaultPrevented).toBe(false);
+    expect(answer).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it("does nothing while an answer is being written", async () => {
+    const words = [word(1), word(2)];
+    let resolveAnswer: ((value: ReviewAnswerResponse) => void) | undefined;
+    const answer = vi.fn(
+      () =>
+        new Promise<ReviewAnswerResponse>((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+    const { root, view } = mount(words, { answer });
+    await view.refresh();
+    key(document, "1");
+    key(document, " ");
+    await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+
+    key(document, " ");
+    key(document, "z");
+    key(document, "1");
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(root.querySelector<HTMLButtonElement>(".ilmt-review-next")!.disabled).toBe(true);
+
+    resolveAnswer?.({
+      ok: true,
+      word: { ...words[0], box: 1, dueAt: NOW + 24 * HOUR, updatedAt: NOW },
+    });
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    view.destroy();
+  });
+
+  it("exposes the shortcuts without changing any button label", async () => {
+    const { root, view } = mount([word(1), word(2)]);
+    await view.refresh();
+
+    expect(root.querySelector('[data-grade="good"]')?.getAttribute("aria-keyshortcuts")).toBe(
+      "1 ArrowRight",
+    );
+    expect(root.querySelector('[data-grade="again"]')?.getAttribute("aria-keyshortcuts")).toBe(
+      "2 ArrowLeft",
+    );
+    expect(root.querySelector('[data-grade="good"]')?.textContent).toBe("想起来了");
+    expect(root.querySelector('[data-grade="again"]')?.textContent).toBe("没想起来");
+    expect(root.querySelector(".ilmt-review-keys")?.textContent).toBe(
+      "1 想起来 · 2 没想起来 · Space 下一张 · Z 撤销",
+    );
+
+    key(document, "1");
+    expect(root.querySelector(".ilmt-review-next")?.getAttribute("aria-keyshortcuts")).toBe(
+      "Space Enter",
+    );
+    nextCard(root);
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
+    expect(
+      root.querySelector(".ilmt-review-receipt-undo")?.getAttribute("aria-keyshortcuts"),
+    ).toBe("z Control+z Meta+z");
+    expect(root.querySelector(".ilmt-review-receipt-undo")?.textContent).toBe("撤销");
+    view.destroy();
+  });
+});
+
+describe("source origin and context switching", () => {
+  function articleWord(over: Partial<LearningWord> = {}): LearningWord {
+    return word(1, {
+      surface: "outlive",
+      glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
+      contexts: [
+        {
+          sentence: "Small tools often outlive their competitors.",
+          pageUrl: "https://example.com/story",
+          pageTitle: "The Story",
+          at: NOW,
+        },
+      ],
+      ...over,
+    });
+  }
+
+  it("shows no origin in the prompt and a safe link after the answer", async () => {
+    const { root, view } = mount([articleWord()]);
+    await view.refresh();
+    expect(root.querySelector(".ilmt-review-meta")).toBeNull();
+    expect(root.querySelector(".ilmt-review-source")).toBeNull();
+
+    key(document, "1");
+    const link = root.querySelector<HTMLAnchorElement>(".ilmt-review-source-link")!;
+    expect(link.textContent).toBe("来自：The Story");
+    expect(link.getAttribute("href")).toBe("https://example.com/story");
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+    expect(link.title).toBe("The Story");
+    view.destroy();
+  });
+
+  it("falls back to the hostname, then to a plain label for unsafe URLs", async () => {
+    const host = mount([
+      articleWord({
+        contexts: [
+          {
+            sentence: "Small tools often outlive their competitors.",
+            pageUrl: "https://news.example.com/path",
+            pageTitle: "",
+            at: NOW,
+          },
+        ],
+      }),
+    ]);
+    await host.view.refresh();
+    key(document, "1");
+    expect(host.root.querySelector(".ilmt-review-source-link")?.textContent).toBe(
+      "来自：news.example.com",
+    );
+    host.view.destroy();
+
+    const unsafe = mount([
+      articleWord({
+        contexts: [
+          {
+            sentence: "Small tools often outlive their competitors.",
+            pageUrl: "javascript:alert(1)",
+            pageTitle: "Bad Source",
+            at: NOW,
+          },
+        ],
+      }),
+    ]);
+    await unsafe.view.refresh();
+    key(document, "1");
+    expect(unsafe.root.querySelector(".ilmt-review-source-link")).toBeNull();
+    expect(unsafe.root.querySelector(".ilmt-review-source-label")?.textContent).toBe(
+      "来自：Bad Source",
+    );
+    unsafe.view.destroy();
+
+    const bare = mount([
+      articleWord({
+        contexts: [
+          {
+            sentence: "Small tools often outlive their competitors.",
+            pageUrl: "data:text/html,x",
+            pageTitle: "   ",
+            at: NOW,
+          },
+        ],
+      }),
+    ]);
+    await bare.view.refresh();
+    key(document, "1");
+    expect(bare.root.querySelector(".ilmt-review-source")).toBeNull();
+    bare.view.destroy();
+  });
+
+  it("cycles sentences and origins, then wraps back with focus retained", async () => {
+    const older = {
+      sentence: "Old tools outlive many things.",
+      pageUrl: "https://older.example.com/a",
+      pageTitle: "Older",
+      at: NOW - HOUR,
+    };
+    const newer = {
+      sentence: "New tools outlive old ones.",
+      pageUrl: "https://newer.example.com/b",
+      pageTitle: "Newer",
+      at: NOW,
+    };
+    const { root, view } = mount([articleWord({ contexts: [older, newer] })]);
+    await view.refresh();
+    key(document, "1");
+
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe(
+      "New tools ____ old ones.",
+    );
+    expect(root.querySelector<HTMLAnchorElement>(".ilmt-review-source-link")?.href).toBe(
+      newer.pageUrl,
+    );
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (1/2)");
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-context-switch")!.click();
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe(
+      "Old tools ____ many things.",
+    );
+    expect(root.querySelector<HTMLAnchorElement>(".ilmt-review-source-link")?.href).toBe(
+      older.pageUrl,
+    );
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (2/2)");
+    expect(document.activeElement).toBe(root.querySelector(".ilmt-review-context-switch"));
+
+    root.querySelector<HTMLButtonElement>(".ilmt-review-context-switch")!.click();
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe(
+      "New tools ____ old ones.",
+    );
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (1/2)");
+    view.destroy();
+  });
+
+  it("resets the chosen sentence on advance and on undo", async () => {
+    const contextsFor = (surface: string, tag: string) => [
+      {
+        sentence: `Older ${surface} in ${tag}.`,
+        pageUrl: `https://older.example.com/${tag}`,
+        pageTitle: `Older ${tag}`,
+        at: NOW - HOUR,
+      },
+      {
+        sentence: `Newer ${surface} in ${tag}.`,
+        pageUrl: `https://newer.example.com/${tag}`,
+        pageTitle: `Newer ${tag}`,
+        at: NOW,
+      },
+    ];
+    const first = word(1, { surface: "word1", contexts: contextsFor("word1", "one") });
+    const second = word(2, { surface: "word2", contexts: contextsFor("word2", "two") });
+    const { root, view, undo } = mountStored([first, second]);
+    await view.refresh();
+
+    key(document, "1");
+    root.querySelector<HTMLButtonElement>(".ilmt-review-context-switch")!.click();
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (2/2)");
+
+    nextCard(root);
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    key(document, "1");
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (1/2)");
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe("Newer ____ in two.");
+
+    nextCard(root);
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-receipt")).toBeTruthy());
+    key(document, "z");
+    await vi.waitFor(() => expect(undo).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    key(document, "1");
+    expect(root.querySelector(".ilmt-review-context-switch")?.textContent).toBe("换一句 (1/2)");
+    expect(root.querySelector(".ilmt-review-sentence")?.textContent).toBe("Newer ____ in two.");
     view.destroy();
   });
 });

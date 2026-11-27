@@ -523,4 +523,77 @@ test.describe("learning loop", () => {
       await cleanup();
     }
   });
+
+  test("reviews by keyboard, cycles the source sentence, and undoes with z", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      await claim(page.locator("[role=tooltip]"));
+      const newerUrl = `${server!.origin}/newer-story`;
+      const olderUrl = `${server!.origin}/older-story`;
+
+      // Two real contexts, newest last: a cycle must switch both the sentence
+      // and the origin link, and the panel must never open a non-http URL.
+      await ext.worker.evaluate(async ({ newerUrl, olderUrl }) => {
+        const stored = (await chrome.storage.local.get("learning")).learning as {
+          words: Array<Record<string, unknown>>;
+        };
+        const entry = stored.words[0];
+        entry.reviewsCount = 0;
+        entry.box = 0;
+        entry.dueAt = Date.now() - 1000;
+        entry.contexts = [
+          {
+            sentence: "Older tools outlive many rivals.",
+            pageUrl: olderUrl,
+            pageTitle: "Older Story",
+            at: Date.now() - 1000,
+          },
+          {
+            sentence: "Small tools often outlive their larger competitors.",
+            pageUrl: newerUrl,
+            pageTitle: "Newer Story",
+            at: Date.now(),
+          },
+        ];
+        await chrome.storage.local.set({ learning: stored });
+      }, { newerUrl, olderUrl });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${new URL(ext.worker.url()).host}/panel.html`);
+      await panel.locator('.panel-tab[data-view="review"]').click();
+      await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
+      await expect(panel.locator(".ilmt-review-source")).toHaveCount(0);
+
+      await panel.keyboard.press("1");
+      const link = panel.locator(".ilmt-review-source-link");
+      await expect(link).toBeVisible();
+      await expect(link).toHaveAttribute("href", newerUrl);
+      await expect(link).toHaveAttribute("target", "_blank");
+      await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      await expect(panel.locator(".ilmt-review-context-switch")).toHaveText("换一句 (1/2)");
+
+      await panel.locator(".ilmt-review-context-switch").click();
+      await expect(panel.locator(".ilmt-review-context-switch")).toHaveText("换一句 (2/2)");
+      await expect(panel.locator(".ilmt-review-sentence")).toContainText("Older tools");
+      await expect(link).toHaveAttribute("href", olderUrl);
+
+      await panel.locator(".ilmt-review-context-switch").click();
+      await expect(panel.locator(".ilmt-review-context-switch")).toHaveText("换一句 (1/2)");
+      await expect(panel.locator(".ilmt-review-sentence")).toContainText("Small tools");
+
+      // Move focus off the buttons so Space belongs to the review, not to a
+      // native button activation.
+      await panel.locator(".ilmt-review-sentence").click();
+      await panel.keyboard.press("Space");
+      await expect(panel.locator(".ilmt-review-done")).toContainText("1 个都过完了");
+      await expect.poll(async () => (await readWords(ext.worker))[0].box).toBe(1);
+
+      await panel.keyboard.press("z");
+      await expect.poll(async () => (await readWords(ext.worker))[0].box).toBe(0);
+      await expect(panel.locator(".ilmt-review-word")).toHaveText("outlive");
+      await expect(panel.locator(".ilmt-review-source")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
+  });
 });

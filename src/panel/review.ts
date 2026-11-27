@@ -19,6 +19,7 @@ import type {
   ReviewUndoFailure,
   ReviewUndoMessage,
   ReviewUndoResponse,
+  WordContext,
 } from "../shared/types";
 import { getEffect, getEffects } from "../content/effects";
 import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
@@ -197,26 +198,101 @@ function primaryMeaning(word: LearningWord, preferred: string): string {
   return primary?.meaning.trim() ?? "";
 }
 
-/** Prefer the latest context with a complete, maskable occurrence. */
-function recallContext(word: LearningWord): { sentence: string; parts: string[] } | null {
-  const surface = word.surface.trim();
-  if (!surface) return null;
-  const literal = surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+/** Keep a link only when it is a real web address; never run or open anything else. */
+export function safeHttpUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The page label that needs no path: just the host. */
+export function urlHostname(safeUrl: string): string {
+  try {
+    return new URL(safeUrl).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Split one sentence around the surface, keeping the exact Unicode script
+ * boundaries used by recall. `null` means this sentence cannot be masked.
+ */
+export function maskSentence(surface: string, sentence: string): string[] | null {
+  const trimmedSurface = surface.trim();
+  const trimmedSentence = sentence.trim();
+  if (!trimmedSurface || !trimmedSentence) return null;
+  const literal = trimmedSurface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   // Script boundaries, unlike JavaScript's ASCII-only \b, allow adjacent CJK
   // characters while keeping e.g. “été” out of the middle of a French word.
   const spaced = /[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}\p{N}_]/u;
   const boundary = "[\\p{Script=Latin}\\p{Script=Cyrillic}\\p{Script=Greek}\\p{N}\\p{M}_]";
-  const left = spaced.test(surface[0]) ? `(?<!${boundary})` : "";
-  const right = spaced.test(surface.at(-1)!) ? `(?!${boundary})` : "";
+  const left = spaced.test(trimmedSurface[0]) ? `(?<!${boundary})` : "";
+  const right = spaced.test(trimmedSurface.at(-1)!) ? `(?!${boundary})` : "";
   const pattern = new RegExp(left + literal + right, "iu");
+  const parts = trimmedSentence.split(pattern);
+  if (parts.length > 1 && parts.some((part) => /[\p{L}\p{N}]/u.test(part))) return parts;
+  return null;
+}
+
+/**
+ * Contexts newest-first, without blank or repeated sentences. The first
+ * maskable sentence moves to index 0 so the existing recall card is unchanged.
+ */
+export function orderedContexts(word: LearningWord): WordContext[] {
+  const seen = new Set<string>();
+  const ordered: WordContext[] = [];
+  for (let index = word.contexts.length - 1; index >= 0; index--) {
+    const context = word.contexts[index];
+    const sentence = context.sentence.trim();
+    if (!sentence || seen.has(sentence)) continue;
+    seen.add(sentence);
+    ordered.push(context);
+  }
+  const firstMaskable = ordered.findIndex(
+    (context) => maskSentence(word.surface, context.sentence) !== null,
+  );
+  if (firstMaskable > 0) {
+    const [context] = ordered.splice(firstMaskable, 1);
+    ordered.unshift(context);
+  }
+  return ordered;
+}
+
+/** Prefer the latest context with a complete, maskable occurrence. */
+function recallContext(word: LearningWord): { sentence: string; parts: string[] } | null {
   for (let index = word.contexts.length - 1; index >= 0; index--) {
     const sentence = word.contexts[index].sentence.trim();
-    const parts = sentence.split(pattern);
-    if (parts.length > 1 && parts.some((part) => /[\p{L}\p{N}]/u.test(part))) {
-      return { sentence, parts };
-    }
+    const parts = maskSentence(word.surface, sentence);
+    if (parts) return { sentence, parts };
   }
   return null;
+}
+
+/** A recall card is one that has both a remembered attempt and a maskable sentence. */
+function isRecallCard(word: LearningWord): boolean {
+  return word.reviewsCount > 0 && recallContext(word) !== null;
+}
+
+/** Keyboard on a text field belongs to the field, not to the review. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  return Boolean(
+    target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]'),
+  );
+}
+
+/** A native button or link already answers Space/Enter itself. */
+export function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("button, a"));
 }
 
 export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
@@ -266,6 +342,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   let draft = "";
+  /** Which source sentence the revealed answer is quoting; resets per card. */
+  let activeContextIndex = 0;
 
   /** The library itself, not the debt; never clickable. */
   function renderShelf(): HTMLElement | null {
@@ -398,6 +476,56 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     parent.appendChild(box);
   }
 
+  /** Source origin and the way to cycle the other sentences it was seen in. */
+  function renderMeta(word: LearningWord, parent: HTMLElement): void {
+    const contexts = orderedContexts(word);
+    if (contexts.length === 0) return;
+    const index = activeContextIndex % contexts.length;
+    const context = contexts[index];
+    const safeUrl = safeHttpUrl(context.pageUrl ?? "");
+    const label = context.pageTitle?.trim() || (safeUrl ? urlHostname(safeUrl) : "");
+    const meta = node("div", "ilmt-review-meta");
+
+    if (safeUrl) {
+      const source = node("div", "ilmt-review-source");
+      const link = node("a", "ilmt-review-source-link", `来自：${label}`);
+      link.href = safeUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = label;
+      source.appendChild(link);
+      meta.appendChild(source);
+    } else if (label) {
+      const source = node("div", "ilmt-review-source");
+      const span = node("span", "ilmt-review-source-label", `来自：${label}`);
+      span.title = label;
+      source.appendChild(span);
+      meta.appendChild(source);
+    }
+
+    if (contexts.length >= 2) {
+      const switchButton = node(
+        "button",
+        "ilmt-review-context-switch",
+        `换一句 (${index + 1}/${contexts.length})`,
+      );
+      switchButton.type = "button";
+      switchButton.addEventListener("click", () => {
+        if (destroyed || state.busy) return;
+        const currentWord = current();
+        if (!currentWord || currentWord.id !== word.id) return;
+        const total = orderedContexts(currentWord).length;
+        if (total === 0) return;
+        activeContextIndex = (activeContextIndex + 1) % total;
+        render();
+        container.querySelector<HTMLButtonElement>(".ilmt-review-context-switch")?.focus();
+      });
+      meta.appendChild(switchButton);
+    }
+
+    if (meta.childElementCount > 0) parent.appendChild(meta);
+  }
+
   /** The answer, with the blank still open: the word above is enough. */
   function renderMeaning(word: LearningWord, parent: HTMLElement): void {
     const answer = node("div", "ilmt-review-answer");
@@ -411,6 +539,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       meaning.classList.add("is-placeholder");
     }
     answer.appendChild(meaning);
+    renderMeta(word, answer);
     parent.appendChild(answer);
   }
 
@@ -426,6 +555,10 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       const button = node("button", "ilmt-review-grade", label);
       button.type = "button";
       button.dataset.grade = grade;
+      button.setAttribute(
+        "aria-keyshortcuts",
+        grade === "good" ? "1 ArrowRight" : "2 ArrowLeft",
+      );
       button.disabled = state.busy;
       button.addEventListener("click", () => {
         if (container.contains(button)) pickGrade(grade);
@@ -446,6 +579,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     const actions = node("div", "ilmt-review-actions");
     const next = node("button", "ilmt-review-next", "下一张");
     next.type = "button";
+    next.setAttribute("aria-keyshortcuts", "Space Enter");
     next.disabled = state.busy;
     next.addEventListener("click", () => {
       if (current()?.id === word.id) void advance();
@@ -493,6 +627,18 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     parent.appendChild(feedback);
   }
 
+  /** Reveal the missed spelling on the same card; shared by the form and the keyboard. */
+  function revealRecall(expectedId?: string): void {
+    const word = current();
+    if (!word || state.phase !== "prompt" || state.busy || destroyed) return;
+    if (expectedId !== undefined && word.id !== expectedId) return;
+    if (!isRecallCard(word)) return;
+    state.phase = "revealed";
+    state.error = null;
+    render();
+    container.querySelector<HTMLButtonElement>(".ilmt-review-grade")?.focus();
+  }
+
   function renderSpellingPrompt(word: LearningWord, card: HTMLElement): void {
     const actions = node("form", "ilmt-review-actions");
     const input = node("input", "ilmt-review-input");
@@ -511,11 +657,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     reveal.type = "submit";
     actions.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (state.phase !== "prompt" || current()?.id !== word.id) return;
-      state.phase = "revealed";
-      state.error = null;
-      render();
-      container.querySelector<HTMLButtonElement>(".ilmt-review-grade")?.focus();
+      revealRecall(word.id);
     });
     actions.appendChild(reveal);
     card.appendChild(actions);
@@ -533,9 +675,15 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     const end = node("button", "ilmt-review-end", "结束");
     end.type = "button";
     end.addEventListener("click", () => void endRound());
-    const context = recallContext(word);
+    const contexts = orderedContexts(word);
+    const contextIndex = state.phase === "prompt" || contexts.length === 0
+      ? 0
+      : activeContextIndex % contexts.length;
+    const activeContext = contexts[contextIndex];
+    const maskedParts = activeContext ? maskSentence(word.surface, activeContext.sentence) : null;
+    const sentenceText = activeContext?.sentence.trim() ?? "";
     const meaning = primaryMeaning(word, deps.defaultGlossLang());
-    const recall = word.reviewsCount > 0 && context !== null;
+    const recall = isRecallCard(word);
     const asking = recall && state.phase === "prompt";
     const cue = meaning && !normalizeSurface(meaning).includes(normalizeSurface(word.surface))
       ? meaning
@@ -560,10 +708,10 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
     card.appendChild(term);
 
-    const parts = context?.parts ?? [word.contexts.at(-1)?.sentence.trim() ?? ""];
-    if (parts.length > 1 || parts[0]) {
+    const parts = maskedParts ?? [sentenceText];
+    if (maskedParts || sentenceText) {
       const sentence = node("p", "ilmt-review-sentence");
-      (recall && !asking ? [context.sentence] : parts).forEach((part, index) => {
+      (recall && !asking ? [sentenceText] : parts).forEach((part, index) => {
         if (index > 0) {
           const blank = node("span", "ilmt-review-blank", "____");
           blank.setAttribute("role", "img");
@@ -587,6 +735,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       if (recall && draft.trim()) renderSpellingFeedback(word, card);
       renderLesson(word, card);
     }
+    card.appendChild(
+      node("p", "ilmt-review-keys", "1 想起来 · 2 没想起来 · Space 下一张 · Z 撤销"),
+    );
     container.appendChild(card);
   }
 
@@ -682,6 +833,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
         state.receipt = null;
         state.phase = "prompt";
         state.error = null;
+        activeContextIndex = 0;
         void refresh();
       });
       card.appendChild(again);
@@ -731,6 +883,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (receipt.undoable) {
       const undo = node("button", "ilmt-review-receipt-undo", "撤销");
       undo.type = "button";
+      undo.setAttribute("aria-keyshortcuts", "z Control+z Meta+z");
       undo.disabled = state.busy;
       undo.addEventListener("click", () => void undoLast());
       row.appendChild(undo);
@@ -799,7 +952,10 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // queue is exactly the remaining work; keep the round's score separate.
     state.queue = buildReviewQueue(next, { termLang: ALL, now: deps.now() });
     state.total = state.answered + state.queue.length;
-    if (current()?.id !== previousId) draft = "";
+    if (current()?.id !== previousId) {
+      draft = "";
+      activeContextIndex = 0;
+    }
     render();
   }
 
@@ -889,6 +1045,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
 
     pendingGrade = null;
     state.queue.shift();
+    activeContextIndex = 0;
     state.phase = "prompt";
     state.error = null;
     render();
@@ -900,6 +1057,58 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   function focusReveal(): void {
     if (destroyed) return;
     container.querySelector<HTMLElement>(".ilmt-review-input, .ilmt-review-grade, .ilmt-review-reveal")?.focus();
+  }
+
+  /**
+   * One keyboard map for the whole review: grades, reveal, commit and undo.
+   * It never runs while typing, while a modifier belongs to the browser, or
+   * while the review is hidden behind the chat tab.
+   */
+  function onKeydown(event: KeyboardEvent): void {
+    if (destroyed || state.busy || event.defaultPrevented || event.repeat) return;
+    if (!container.isConnected || Boolean(container.closest("[hidden]"))) return;
+    if (event.isComposing || event.key === "Process") return;
+    if (isEditableTarget(event.target)) return;
+    if (event.altKey) return;
+
+    if (!event.shiftKey && (event.key === "z" || event.key === "Z")) {
+      if (state.receipt?.undoable && state.phase !== "lesson") {
+        event.preventDefault();
+        void undoLast();
+      }
+      return;
+    }
+
+    const word = current();
+    if (!word) return;
+    const choicesVisible =
+      (state.phase === "prompt" && !isRecallCard(word)) || state.phase === "revealed";
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+
+    if (plain && (event.key === "1" || event.key === "ArrowRight")) {
+      if (choicesVisible) {
+        event.preventDefault();
+        pickGrade("good");
+      }
+      return;
+    }
+    if (plain && (event.key === "2" || event.key === "ArrowLeft")) {
+      if (choicesVisible) {
+        event.preventDefault();
+        pickGrade("again");
+      }
+      return;
+    }
+    if (plain && (event.key === " " || event.key === "Enter")) {
+      if (isInteractiveTarget(event.target)) return;
+      if (state.phase === "lesson") {
+        event.preventDefault();
+        void advance();
+      } else if (isRecallCard(word) && state.phase === "prompt") {
+        event.preventDefault();
+        revealRecall(word.id);
+      }
+    }
   }
 
   /**
@@ -940,6 +1149,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     state.ended = false;
     state.phase = "prompt";
     state.error = null;
+    activeContextIndex = 0;
     render();
     await refresh();
     if (!destroyed) container.querySelector<HTMLElement>(".ilmt-review-card")?.focus();
@@ -961,6 +1171,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     }
     if (destroyed) return;
     state.queue = [];
+    activeContextIndex = 0;
     state.phase = "prompt";
     state.error = null;
     render();
@@ -972,12 +1183,14 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     void refresh();
   }
 
+  document.addEventListener("keydown", onKeydown);
   void refresh();
 
   return {
     refresh,
     destroy() {
       destroyed = true;
+      document.removeEventListener("keydown", onKeydown);
       sceneEffect?.destroy();
       sceneEffect = null;
       destroyGraduated();
