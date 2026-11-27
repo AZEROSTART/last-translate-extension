@@ -14,6 +14,7 @@ function installChrome() {
   const onMessage: Listener[] = [];
   const onCommand: Listener[] = [];
   const onInstalled: Listener[] = [];
+  const onStartup: Listener[] = [];
   const onContextMenuClicked: Listener[] = [];
   const sidePanelOpen = vi.fn(async () => {});
   const setPanelBehavior = vi.fn(async () => {});
@@ -23,6 +24,8 @@ function installChrome() {
   const openPopup = vi.fn(async () => {});
   const tabsCreate = vi.fn(async () => ({}));
   const contextMenusCreate = vi.fn();
+  const setBadgeText = vi.fn(async () => {});
+  const setBadgeBackgroundColor = vi.fn(async () => {});
   const contextMenusRemoveAll = vi.fn((callback?: () => void) => {
     callback?.();
   });
@@ -43,9 +46,10 @@ function installChrome() {
       onConnect: { addListener: (cb: Listener) => onConnect.push(cb) },
       onMessage: { addListener: (cb: Listener) => onMessage.push(cb) },
       onInstalled: { addListener: (cb: Listener) => onInstalled.push(cb) },
+      onStartup: { addListener: (cb: Listener) => onStartup.push(cb) },
       getURL: (path: string) => `chrome-extension://test-extension-id/${path}`,
     },
-    action: { openPopup },
+    action: { openPopup, setBadgeText, setBadgeBackgroundColor },
     commands: { onCommand: { addListener: (cb: Listener) => onCommand.push(cb) } },
     contextMenus: {
       create: contextMenusCreate,
@@ -67,6 +71,7 @@ function installChrome() {
     onMessage,
     onCommand,
     onInstalled,
+    onStartup,
     onContextMenuClicked,
     sidePanelOpen,
     setPanelBehavior,
@@ -77,6 +82,8 @@ function installChrome() {
     tabsCreate,
     contextMenusCreate,
     contextMenusRemoveAll,
+    setBadgeText,
+    setBadgeBackgroundColor,
     setLastError: (value: unknown) => {
       lastErrorValue = value;
     },
@@ -86,6 +93,7 @@ function installChrome() {
 
 function fakePort(name: string, tabId: number | undefined, frameId?: number) {
   const disconnectListeners: Listener[] = [];
+  const messageListeners: Listener[] = [];
   return {
     name,
     sender:
@@ -94,8 +102,9 @@ function fakePort(name: string, tabId: number | undefined, frameId?: number) {
         : { id: "test-extension-id", tab: { id: tabId }, ...(frameId === undefined ? {} : { frameId }) },
     postMessage: vi.fn(),
     disconnect: vi.fn(),
-    onMessage: { addListener: vi.fn() },
+    onMessage: { addListener: vi.fn((cb: Listener) => messageListeners.push(cb)) },
     onDisconnect: { addListener: (cb: Listener) => disconnectListeners.push(cb) },
+    messageListeners,
     disconnectListeners,
   };
 }
@@ -470,4 +479,108 @@ it("falls back to the active tab when a menu click has no tab", async () => {
 
   expect(tabsQuery).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
   expect(tabsSendMessage).toHaveBeenCalledWith(42, { type: "activate" });
+});
+
+it("refreshes the learning badge immediately on install", async () => {
+  const { onInstalled, setBadgeText } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  onInstalled[0]({ reason: "install" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(setBadgeText).toHaveBeenCalled();
+});
+
+it("refreshes the learning badge immediately on browser startup", async () => {
+  const { onStartup, setBadgeText } = installChrome();
+  await importIndexAndSpyOnQueue();
+
+  expect(onStartup).toHaveLength(1);
+  onStartup[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(setBadgeText).toHaveBeenCalled();
+});
+
+it("cancels a side-panel chat port's unique negative key on disconnect", async () => {
+  const { onConnect } = installChrome();
+  const cancelTab = await importIndexAndSpyOnQueue();
+
+  const port = fakePort("ilmt-chat", undefined);
+  onConnect[0](port);
+  port.disconnectListeners[0]();
+
+  expect(cancelTab).toHaveBeenCalledTimes(1);
+  const key = cancelTab.mock.calls[0][0];
+  // Side panels have no tab id; they must never cancel tab 0 or a real tab.
+  expect(key).toBeLessThanOrEqual(-2);
+});
+
+it("gives concurrent side-panel chat ports distinct keys and abort cancels only its own", async () => {
+  const { onConnect } = installChrome();
+  const cancelTab = await importIndexAndSpyOnQueue();
+
+  const a = fakePort("ilmt-chat", undefined);
+  const b = fakePort("ilmt-chat", undefined);
+  onConnect[0](a);
+  onConnect[0](b);
+
+  const chat = (requestId: string) => ({
+    type: "chat",
+    requestId,
+    sessionId: "s1",
+    messages: [{ role: "user", content: "你好" }],
+    context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+  });
+
+  // Both chats are started synchronously so their entries are still mapped
+  // when A is aborted (the entry is cleaned up when handleChat settles).
+  a.messageListeners[0](chat("ra"));
+  b.messageListeners[0](chat("rb"));
+  a.messageListeners[0]({ type: "abort", requestId: "ra" });
+
+  expect(cancelTab).toHaveBeenCalledTimes(1);
+  const aKey = cancelTab.mock.calls[0][0];
+  expect(aKey).toBeLessThanOrEqual(-2);
+  expect(aKey).not.toBe(0);
+
+  b.disconnectListeners[0]();
+  const bKey = cancelTab.mock.calls.at(-1)![0];
+  expect(bKey).toBeLessThanOrEqual(-2);
+  expect(bKey).not.toBe(0);
+  expect(bKey).not.toBe(aKey);
+  // Aborting A must never have cancelled B's key.
+  expect(cancelTab).not.toHaveBeenCalledWith(bKey, expect.anything());
+});
+
+it("does not throw when a disconnected port is written to mid-stream", async () => {
+  const { onConnect } = installChrome();
+  const cancelTab = await importIndexAndSpyOnQueue();
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const port = fakePort("ilmt-chat", 7);
+  port.postMessage = vi.fn(() => {
+    throw new Error("Attempting to use a disconnected port object");
+  });
+  onConnect[0](port);
+
+  const chat = (requestId: string) => ({
+    type: "chat",
+    requestId,
+    sessionId: "s1",
+    messages: [{ role: "user", content: "你好" }],
+    context: { pageUrl: "https://x", title: "T", quotes: [], recentParagraphs: [] },
+  });
+
+  port.messageListeners[0](chat("stream-1"));
+  port.disconnectListeners[0]();
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // A late post after the disconnect is skipped, not surfaced as a rejection.
+  expect(() => port.messageListeners[0](chat("stream-2"))).not.toThrow();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(cancelTab).toHaveBeenCalledWith(7);
+  expect(errorSpy).not.toHaveBeenCalled();
 });

@@ -104,6 +104,12 @@ const gloss = createGlossController(document, {
   getGlossLang: () => targetLang,
 });
 let portClient: TranslatePortClient | null = null;
+/**
+ * Set when the translate port exhausted its reconnect backoff. While set,
+ * `pump` stays idle so scroll/viewport callbacks cannot reopen the dead
+ * connection in a loop; the manual Retry button clears it.
+ */
+let portDegraded = false;
 let currentRequestId: string | null = null;
 /** Lets a late `result` for a request that errored first still render. */
 let lastCompletedRequestId: string | null = null;
@@ -273,6 +279,19 @@ async function rescan(): Promise<void> {
   // generation then would strand the activation's pending scan; wait instead.
   await whenBodyReady();
   if (!active) return;
+  // The previous route's request belongs to a page that no longer exists.
+  // Abort it so the background stops streaming into stale ids, then drop every
+  // transport/rate-limit hold so the new route translates immediately.
+  if (currentRequestId !== null) {
+    send({ type: "abort", requestId: currentRequestId });
+    currentRequestId = null;
+  }
+  lastCompletedRequestId = null;
+  deltaBuffers.clear();
+  clearRateLimitTimer();
+  resetRateLimitAttempts();
+  portDegraded = false;
+  removeErrorBanner();
   // Invalidate the previous scan first, then rebuild marks and run a fresh
   // full scan; the coordinator queues it behind any still-running scan.
   const generation = ++scanGeneration;
@@ -479,8 +498,9 @@ function pruneOrphanTranslations(): void {
  */
 function pump(): void {
   // Single-flight: a mutation/rescan during streaming must not overwrite the
-  // in-flight request and strand its records.
-  if (!active || currentRequestId !== null || rateLimitHold) return;
+  // in-flight request and strand its records. A degraded transport also stops
+  // pumping until the user retries.
+  if (!active || currentRequestId !== null || rateLimitHold || portDegraded) return;
   registry.prune();
   pruneOrphanTranslations();
   const batch = takeNearestQueued(BATCH_SIZE);
@@ -573,6 +593,7 @@ function restore(): void {
   removeErrorBanner();
   clearRateLimitTimer();
   resetRateLimitAttempts();
+  portDegraded = false;
   // A fresh activation gets a clean observer and dynamic rate budget.
   observerPaused = false;
   dynamicCount = 0;
@@ -690,16 +711,35 @@ function registerGlossary(
     gloss.setParagraph(id, textNodes, notes, termLang);
   };
 
-  const cached = langCache.get(sourceText);
+  const hasCached = langCache.has(sourceText);
+  const cached = hasCached ? (langCache.get(sourceText) ?? null) : undefined;
   const cachedPrefix = cached ? languagePrefix(cached.language) : undefined;
   apply(cachedPrefix);
 
-  if (!cached) {
+  // A cached `null` (detection failed during collection) still counts as a
+  // verdict: re-detecting it would repeat the same failing call.
+  if (!hasCached) {
+    // Pin the scan generation before the async hop. A restore/rescan in the
+    // meantime means these text nodes and this paragraph id are stale, so the
+    // late verdict must not resurrect a highlight on the restored page.
+    const generation = scanGeneration;
     void detectLang(sourceText).then((detected) => {
-      if (!detected) return;
+      if (!detected || !active || generation !== scanGeneration) return;
+      // Re-read the record and its live nodes: the DOM may have been edited
+      // (or the paragraph dropped) while detection was in flight.
+      const liveRec = registry.get(id);
+      if (!liveRec) return;
+      const liveNodes = liveRec.textNodes
+        .map((ref) => ref.deref())
+        .filter((node): node is Node => node !== undefined && node.isConnected);
+      if (liveNodes.length === 0) {
+        gloss.removeParagraph(id);
+        return;
+      }
       const prefix = languagePrefix(detected.language);
       if (!learningLangs.includes(prefix)) gloss.removeParagraph(id);
-      else gloss.setParagraph(id, textNodes, notes, prefix);
+      else gloss.setParagraph(id, liveNodes, notes, prefix);
+      updateActiveBannerHint();
     });
   }
 }
@@ -733,13 +773,21 @@ function handleResult(msg: Extract<BackgroundToClient, { type: "result" }>): voi
 
 function handleError(msg: PortError): void {
   if (msg.type === "connection-error") {
-    // Transport died: requeue and resume. The port client queues the send and
-    // reconnects, so a fresh `translate` is not lost.
-    registry.requeueInflight();
+    // The transport exhausted its reconnect budget. Freeze translation: fail
+    // the paragraphs already showing a skeleton, drop every retry/rate-limit
+    // timer, and surface one banner with an explicit Retry. Pumping here would
+    // immediately reopen the dead port on every scroll tick.
+    portDegraded = true;
+    const inflightIds = registry
+      .all()
+      .filter((record) => record.status === "inflight")
+      .map((record) => record.id);
+    failIds(inflightIds);
     deltaBuffers.clear();
     currentRequestId = null;
     lastCompletedRequestId = null;
-    pump();
+    clearRateLimitTimer();
+    if (active) showErrorBanner("connection-error", msg.message);
     return;
   }
   if (msg.requestId !== currentRequestId) return;
@@ -815,6 +863,9 @@ function handleFinish(msg: Extract<BackgroundToClient, { type: "finish" }>): voi
 }
 
 function handleDisconnect(): void {
+  // A disconnect arriving after restore() belongs to the old page: acting on
+  // it would pump a restored page back to life.
+  if (!active) return;
   registry.requeueInflight();
   deltaBuffers.clear();
   currentRequestId = null;
@@ -889,7 +940,7 @@ function askSelection(): void {
 }
 
 function handleVisibilityChange(): void {
-  if (document.visibilityState === "visible" && active) {
+  if (document.visibilityState === "visible" && active && !portDegraded) {
     send({ type: "ping" });
   }
 }
@@ -1046,6 +1097,8 @@ function describeError(
     case "network":
     case "unknown":
       return { text: "翻译失败，可重试", settings: false, retry: true };
+    case "connection-error":
+      return { text: "连接扩展后台失败，请重试或刷新页面", settings: false, retry: true };
     case "bad_response":
       return message === NO_PROVIDER_MESSAGE || message.includes("未选择模型配置")
         ? { text: "尚未配置模型", settings: true, retry: false }
@@ -1158,6 +1211,8 @@ function retryFailedRequests(): void {
   removeErrorBanner();
   clearRateLimitTimer();
   resetRateLimitAttempts();
+  // A manual retry is the user's signal to reopen a degraded transport.
+  portDegraded = false;
   for (const record of registry.all()) {
     if (record.status === "failed") registry.setStatus(record.id, "queued");
   }

@@ -31,6 +31,16 @@ function recordBytes(record: Pick<CacheRecord, "text" | "glossary">): number {
   return textBytes(record.text) + textBytes(JSON.stringify(record.glossary ?? []));
 }
 
+/**
+ * Bytes recorded when the entry was written. Legacy records predate the
+ * `bytes` field, so fall back to recomputing from their text.
+ */
+function storedRecordBytes(record: CacheRecord): number {
+  return typeof record.bytes === "number" && Number.isFinite(record.bytes) && record.bytes >= 0
+    ? record.bytes
+    : recordBytes(record);
+}
+
 export interface CacheKeyInput {
   sourceText: string;
   targetLang: string;
@@ -53,6 +63,15 @@ interface CacheRecord {
   modelId: string;
   createdAt: number;
   lastUsedAt: number;
+  /** Stored byte size; absent on legacy records written before this field. */
+  bytes?: number;
+}
+
+/** One write for `putMany`; `meta.modelId` travels with the entry for stats. */
+export interface CachePutEntry {
+  key: string;
+  value: CachedTranslation;
+  meta: { modelId: string };
 }
 
 /** NUL cannot appear in the joined fields, so the digest stays unambiguous. */
@@ -108,6 +127,18 @@ export class TranslationCache {
   private dbPromise: Promise<IDBDatabase> | undefined;
 
   /**
+   * In-memory LRU index: key → stored bytes, iteration order LRU front → MRU
+   * back. Hydrated lazily from IndexedDB the first time a write needs it, so
+   * the O(n) `getAll` scan happens once per page/session instead of once per
+   * put. `null` means "not hydrated".
+   */
+  private index: Map<string, number> | null = null;
+  private totalBytes = 0;
+  private indexPromise: Promise<void> | undefined;
+  /** Serializes writes (and clears) so the index cannot drift under itself. */
+  private writeChain: Promise<void> = Promise.resolve();
+
+  /**
    * Logical clock for `lastUsedAt`. Real time alone can tie two accesses in
    * the same millisecond, which would make LRU eviction pick arbitrarily.
    */
@@ -120,63 +151,66 @@ export class TranslationCache {
   }
 
   async get(key: string): Promise<CachedTranslation | undefined> {
+    // Always read through to IndexedDB: another context may have cleared or
+    // expired the entry, and the in-memory index must never serve stale text.
     const db = await this.open();
     const record = await withStore(db, "readonly", store => request<CacheRecord | undefined>(store.get(key)));
-    if (!record) return undefined;
+    if (!record) {
+      this.removeFromIndex(key);
+      return undefined;
+    }
 
     if (Date.now() - record.createdAt >= TTL_MS) {
       await withStore(db, "readwrite", store => request(store.delete(key)));
+      this.removeFromIndex(key);
       return undefined;
     }
 
     record.lastUsedAt = this.nextLastUse();
+    record.bytes = storedRecordBytes(record);
     await withStore(db, "readwrite", store => request(store.put(record)));
+    this.touchIndex(key, record.bytes);
     return { text: record.text, glossary: record.glossary ?? [] };
   }
 
   async put(key: string, value: CachedTranslation, meta: { modelId: string }): Promise<void> {
-    const now = Date.now();
-    const record: CacheRecord = {
-      key,
-      text: value.text,
-      glossary: value.glossary ?? [],
-      modelId: meta.modelId,
-      createdAt: now,
-      lastUsedAt: this.nextLastUse(),
-    };
+    return this.putMany([{ key, value, meta }]);
+  }
 
-    const db = await this.open();
-    await withStore(db, "readwrite", store => request(store.put(record)));
-
-    const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
-    let remainingBytes = records.reduce((total, entry) => total + recordBytes(entry), 0);
-    if (records.length <= this.maxEntries && remainingBytes <= this.maxBytes) return;
-
-    records.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.key.localeCompare(b.key));
-    const doomed: string[] = [];
-    let remainingCount = records.length;
-    for (const entry of records) {
-      if (remainingCount <= this.maxEntries && remainingBytes <= this.maxBytes) break;
-      doomed.push(entry.key);
-      remainingCount--;
-      remainingBytes -= recordBytes(entry);
-    }
-
-    await withStore(db, "readwrite", store => {
-      for (const doomedKey of doomed) store.delete(doomedKey);
-      return Promise.resolve();
-    });
+  /**
+   * Write a whole batch in one transaction. The caller-facing promise reflects
+   * its own outcome, while `writeChain` stays resolved so one failed batch
+   * cannot poison later writes.
+   */
+  async putMany(entries: CachePutEntry[]): Promise<void> {
+    if (entries.length === 0) return;
+    const task = this.writeChain.then(() => this.writeMany(entries));
+    this.writeChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
   async clear(): Promise<void> {
-    const db = await this.open();
-    await withStore(db, "readwrite", store => request(store.clear()));
+    const task = this.writeChain.then(async () => {
+      const db = await this.open();
+      await withStore(db, "readwrite", store => request(store.clear()));
+      this.index = new Map();
+      this.totalBytes = 0;
+      this.indexPromise = undefined;
+    });
+    this.writeChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
   async stats(): Promise<{ count: number; bytes: number }> {
     const db = await this.open();
     const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
-    const bytes = records.reduce((total, record) => total + recordBytes(record), 0);
+    const bytes = records.reduce((total, record) => total + storedRecordBytes(record), 0);
     return { count: records.length, bytes };
   }
 
@@ -190,6 +224,116 @@ export class TranslationCache {
     if (!record) return;
     record.createdAt = createdAt;
     await withStore(db, "readwrite", store => request(store.put(record)));
+  }
+
+  private async writeMany(entries: CachePutEntry[]): Promise<void> {
+    const db = await this.open();
+    await this.ensureIndex(db);
+    const index = this.index;
+    if (!index) throw new Error("translation cache index unavailable");
+
+    const now = Date.now();
+    try {
+      await withStore(db, "readwrite", store => {
+        for (const entry of entries) {
+          const record: CacheRecord = {
+            key: entry.key,
+            text: entry.value.text,
+            glossary: entry.value.glossary ?? [],
+            modelId: entry.meta.modelId,
+            createdAt: now,
+            lastUsedAt: this.nextLastUse(),
+          };
+          const bytes = recordBytes(record);
+          record.bytes = bytes;
+
+          // Overwriting (including a duplicate key inside this same batch)
+          // must first retire the previous size, or `totalBytes` drifts.
+          const previous = index.get(entry.key);
+          if (previous !== undefined) {
+            this.totalBytes -= previous;
+            index.delete(entry.key);
+          }
+          store.put(record);
+          index.set(entry.key, bytes);
+          this.totalBytes += bytes;
+        }
+
+        // Map iteration order is insertion order, so the front is always the
+        // least-recently-used key. Eviction is O(1) per key.
+        while (
+          index.size > 0 &&
+          (index.size > this.maxEntries || this.totalBytes > this.maxBytes)
+        ) {
+          const oldest = index.keys().next();
+          if (oldest.done) break;
+          const key = oldest.value;
+          const bytes = index.get(key) ?? 0;
+          index.delete(key);
+          this.totalBytes -= bytes;
+          store.delete(key);
+        }
+        return Promise.resolve();
+      });
+    } catch (error) {
+      // The transaction rolled back; the in-memory mirror is now untrustworthy.
+      this.invalidateIndex();
+      throw error;
+    }
+  }
+
+  /**
+   * Hydrate the index once. Existing records are ordered by `lastUsedAt ASC,
+   * key ASC` so the Map's insertion order is a valid LRU order. Concurrent
+   * callers share one `getAll` scan.
+   */
+  private ensureIndex(db: IDBDatabase): Promise<void> {
+    if (this.index) return Promise.resolve();
+    if (this.indexPromise) return this.indexPromise;
+
+    let promise: Promise<void>;
+    promise = this.hydrateIndex(db).finally(() => {
+      if (this.indexPromise === promise) this.indexPromise = undefined;
+    });
+    this.indexPromise = promise;
+    return promise;
+  }
+
+  private async hydrateIndex(db: IDBDatabase): Promise<void> {
+    const records = await withStore(db, "readonly", store => request<CacheRecord[]>(store.getAll()));
+    records.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.key.localeCompare(b.key));
+
+    const index = new Map<string, number>();
+    let total = 0;
+    for (const record of records) {
+      const bytes = storedRecordBytes(record);
+      index.set(record.key, bytes);
+      total += bytes;
+    }
+    this.index = index;
+    this.totalBytes = total;
+  }
+
+  private touchIndex(key: string, bytes: number): void {
+    if (!this.index) return;
+    const previous = this.index.get(key);
+    this.index.delete(key);
+    this.index.set(key, bytes);
+    this.totalBytes += previous === undefined ? bytes : bytes - previous;
+  }
+
+  private removeFromIndex(key: string): void {
+    if (!this.index) return;
+    const bytes = this.index.get(key);
+    if (bytes === undefined) return;
+    this.index.delete(key);
+    this.totalBytes -= bytes;
+  }
+
+  private invalidateIndex(): void {
+    this.index = null;
+    this.totalBytes = 0;
+    this.indexPromise = undefined;
   }
 
   private nextLastUse(): number {
@@ -215,8 +359,10 @@ export class TranslationCache {
     promise.then(
       db => {
         // `deleteDatabase` (tests, "clear cache" in another tab) emits this;
-        // without closing, the delete would stay blocked forever.
+        // without closing, the delete would stay blocked forever. The index
+        // belongs to the closed connection and must be recomputed next time.
         db.onversionchange = () => {
+          this.invalidateIndex();
           db.close();
           if (this.dbPromise === promise) this.dbPromise = undefined;
         };

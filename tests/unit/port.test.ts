@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTranslatePort } from "../../src/content/port";
-import type { TranslatePort } from "../../src/content/port";
+import type { TranslatePort, TranslatePortClient } from "../../src/content/port";
 
 function fakePort(): TranslatePort {
   return {
@@ -417,6 +417,69 @@ describe("createTranslatePort send during reconnecting", () => {
     // …and the normal backoff reconnect still works.
     await vi.advanceTimersByTimeAsync(500);
     expect(connect).toHaveBeenCalledTimes(3);
+    expect(p.state).toBe("healthy");
+  });
+});
+
+describe("createTranslatePort port identity guards", () => {
+  it("does not arm a spurious reconnect when onDisconnect recovers via a send", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValue(second.port);
+    let p!: TranslatePortClient;
+    const onDisconnect = vi.fn(() => {
+      p.send({ type: "ping" });
+    });
+    p = createTranslatePort({ connect, onDisconnect, ...callbacks() });
+
+    p.send({ type: "ping" });
+    expect(p.state).toBe("healthy");
+
+    first.disconnectListeners[0]();
+
+    // The send from onDisconnect reopened the connection synchronously, so the
+    // disconnect must not leave a backoff timer that opens a third port.
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("healthy");
+    expect(connect).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(second.port.postMessage).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("healthy");
+  });
+
+  it("ignores a late message and disconnect from an abandoned port", async () => {
+    const first = capturePort();
+    const second = capturePort();
+    const connect = vi.fn<() => TranslatePort>()
+      .mockReturnValueOnce(first.port)
+      .mockReturnValue(second.port);
+    const cb = callbacks();
+    const onDisconnect = vi.fn();
+    const p = createTranslatePort({ connect, onDisconnect, ...cb });
+    p.send({ type: "ping" });
+
+    // Drop connection #1, then recover on #2 before the backoff fires.
+    first.disconnectListeners[0]();
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    p.send({ type: "ping" });
+    expect(p.state).toBe("healthy");
+    expect(connect).toHaveBeenCalledTimes(2);
+
+    // Messages from the abandoned port must not be routed to the live page.
+    first.messageListeners[0]({ type: "delta", requestId: "r1", id: "p_1", text: "旧" });
+    expect(cb.onDelta).not.toHaveBeenCalled();
+
+    // A second (late) disconnect from the dead port is a no-op.
+    first.disconnectListeners[0]();
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(p.state).toBe("healthy");
+
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(connect).toHaveBeenCalledTimes(2);
     expect(p.state).toBe("healthy");
   });
 });

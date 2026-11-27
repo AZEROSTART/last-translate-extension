@@ -34,7 +34,7 @@ import {
 import { buildPreferencePrompt, wrapProviderOverride } from "../shared/preferences";
 import { ProviderError } from "../shared/errors";
 import { buildCacheKey, TranslationCache } from "./cache";
-import type { CachedTranslation } from "./cache";
+import type { CachedTranslation, CachePutEntry } from "./cache";
 import { RequestQueue } from "./queue";
 import { getAdapter, type ProviderAdapter } from "../providers";
 
@@ -83,7 +83,7 @@ const CHAT_SYSTEM_MESSAGE =
 /** Everything the dispatcher needs, all injectable for tests. */
 export interface Deps {
   getSettings(): Promise<Settings>;
-  cache: Pick<TranslationCache, "get" | "put">;
+  cache: Pick<TranslationCache, "get" | "put"> & Partial<Pick<TranslationCache, "putMany">>;
   queue: RequestQueue;
   adapter: ProviderAdapter;
   isTrustedSender(sender: { id?: string }): boolean;
@@ -430,17 +430,12 @@ export async function handleTranslate(
   }
 
   let aborted = false;
+  const toCache: CachePutEntry[] = [];
   for (const outcome of outcomes) {
     if (outcome.ok) {
       for (const [id, output] of outcome.map) {
         const key = keyById.get(id);
-        if (key) {
-          try {
-            await deps.cache.put(key, output, { modelId: provider.model });
-          } catch {
-            // A cache write failure is non-fatal: still deliver the result.
-          }
-        }
+        if (key) toCache.push({ key, value: output, meta: { modelId: provider.model } });
         resultMap.set(id, output);
       }
     } else if (isAborted(outcome.err)) {
@@ -449,6 +444,22 @@ export async function handleTranslate(
       const info = toErrorInfo(outcome.err);
       if (info.code === "rate_limit") penalizeRate(deps);
       send({ type: "error", requestId, code: info.code, message: info.message, retryable: info.retryable, ids: outcome.ids });
+    }
+  }
+
+  // Batch every successful write into one IndexedDB transaction. A cache
+  // failure is still non-fatal: the translated text must reach the page.
+  if (toCache.length > 0) {
+    try {
+      if (typeof deps.cache.putMany === "function") {
+        await deps.cache.putMany(toCache);
+      } else {
+        for (const entry of toCache) {
+          await deps.cache.put(entry.key, entry.value, entry.meta);
+        }
+      }
+    } catch {
+      // A cache write failure is non-fatal: still deliver the result.
     }
   }
 

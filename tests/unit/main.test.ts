@@ -15,6 +15,8 @@ afterEach(() => {
   // Undo chrome-surface stubs so they cannot leak into the next test.
   (globalThis as any).chrome.runtime.onMessage.addListener = originalOnMessageAddListener;
   (globalThis as any).chrome.runtime.connect = undefined;
+  delete (globalThis as any).chrome.i18n;
+  vi.unstubAllGlobals();
 });
 
 /** Independent djb2 reference so the hash test asserts a real algorithm, not a mirror. */
@@ -554,5 +556,178 @@ it("unobserves detached piece roots on the prune timer", async () => {
   } finally {
     vi.useRealTimers();
     restoreIo();
+  }
+});
+
+it("stops reconnecting and drops skeletons once the translate port degrades", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+  const connect = vi.fn(() => {
+    throw new Error("Extension context invalidated");
+  });
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  vi.useFakeTimers();
+  try {
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+    expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+
+    // Exhaust the whole reconnect backoff: 500+1000+2000+4000+5000.
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000 + 4000 + 5000);
+
+    const attempts = connect.mock.calls.length;
+    expect(attempts).toBeGreaterThan(1);
+    expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+    expect(document.querySelector(".ilmt-error-message")?.textContent).toBe(
+      "连接扩展后台失败，请重试或刷新页面",
+    );
+    expect(document.querySelector(".ilmt-error-retry")).not.toBeNull();
+
+    // Neither scrolling nor a visibility change may restart the dead port.
+    window.dispatchEvent(new Event("scroll"));
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(connect.mock.calls.length).toBe(attempts);
+    expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("recovers from a degraded port and translates the failed paragraphs on Retry", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, connect: okConnect } = captureConnectPort();
+  const connect = vi.fn((): any => {
+    throw new Error("Extension context invalidated");
+  });
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  vi.useFakeTimers();
+  try {
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+    await vi.advanceTimersByTimeAsync(500 + 1000 + 2000 + 4000 + 5000);
+    expect(document.querySelector(".ilmt-error-retry")).not.toBeNull();
+    expect(sent.filter((m) => m.type === "translate")).toHaveLength(0);
+
+    // The background comes back; the manual retry must reopen one connection.
+    connect.mockImplementation(() => okConnect());
+    document.querySelector<HTMLButtonElement>(".ilmt-error-retry")!.click();
+
+    const translates = sent.filter((m) => m.type === "translate");
+    expect(translates).toHaveLength(1);
+    expect(translates[0].items.map((item: any) => item.text)).toEqual(["First paragraph here."]);
+    expect(document.querySelector(".ilmt-error-banner")).toBeNull();
+    expect(document.querySelectorAll('.ilmt-tr[data-loading="1"]')).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("aborts an in-flight request and clears the rate-limit hold on an SPA rescan", async () => {
+  document.body.innerHTML = `<p>First paragraph here.</p>`;
+  const { runContentMain } = await import("../../src/content/main");
+
+  const navListeners: Array<(message: unknown, sender: { id?: string }) => void> = [];
+  (globalThis as any).chrome.runtime.onMessage.addListener = (cb: any) => navListeners.push(cb);
+  const { sent, messageListeners, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+  const first = sent.find((m) => m.type === "translate");
+  expect(first).toBeTruthy();
+
+  // The old route hit a 429; its retry timer is armed but not yet fired.
+  messageListeners[0]({
+    type: "error",
+    requestId: first.requestId,
+    code: "rate_limit",
+    message: "429",
+    retryable: true,
+    ids: first.items.map((item: any) => item.id),
+  });
+  expect(sent.some((m) => m.type === "abort")).toBe(false);
+
+  navListeners[0]({ type: "page-navigated" }, { id: (globalThis as any).chrome.runtime.id });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(
+    sent.some((m) => m.type === "abort" && m.requestId === first.requestId),
+  ).toBe(true);
+  const translates = sent.filter((m) => m.type === "translate");
+  expect(translates).toHaveLength(2);
+  expect(translates[1].items[0].text).toBe("First paragraph here.");
+  expect(document.querySelector(".ilmt-error-banner")).toBeNull();
+});
+
+it("drops a late glossary detection after restore instead of re-highlighting the page", async () => {
+  // More than LANG_CACHE_LIMIT distinct texts evicts the first paragraph's
+  // verdict from the detection cache, so its result re-triggers detection.
+  document.body.innerHTML = Array.from(
+    { length: 501 },
+    (_, i) => `<p>Paragraph number ${i} here.</p>`,
+  ).join("");
+
+  const pending: Array<(result: unknown) => void> = [];
+  let hold = false;
+  (chrome as any).i18n = {
+    detectLanguage: vi.fn((_text: string, callback: (result: unknown) => void) => {
+      if (hold) return new Promise<unknown>((resolve) => pending.push(resolve));
+      callback({ languages: [{ language: "en", percentage: 100 }] });
+      return undefined;
+    }),
+  };
+
+  const highlights = new Map<string, unknown>();
+  vi.stubGlobal(
+    "Highlight",
+    class extends Set<Range> {
+      constructor(...ranges: Range[]) {
+        super(ranges);
+      }
+    },
+  );
+  vi.stubGlobal("CSS", { highlights });
+
+  try {
+    const { runContentMain } = await import("../../src/content/main");
+    const { sent, messageListeners, connect } = captureConnectPort();
+    (globalThis as any).chrome.runtime.connect = connect;
+    runContentMain();
+    await (globalThis as any).__ilmtMain.translatePage();
+
+    const first = sent.find((m) => m.type === "translate");
+    const item = first.items[0];
+    hold = true;
+    messageListeners[0]({
+      type: "result",
+      requestId: first.requestId,
+      items: [
+        {
+          id: item.id,
+          text: "译文",
+          glossary: [{ surface: "Paragraph", meaning: "段落" }],
+        },
+      ],
+    });
+    expect(highlights.get("ilmt-gloss")).toBeDefined();
+    expect(pending).toHaveLength(1);
+
+    (globalThis as any).__ilmtMain.restore();
+    expect(highlights.get("ilmt-gloss")).toBeUndefined();
+
+    // The detection verdict lands after the page was restored: it must be
+    // discarded rather than painting a highlight over the restored paragraph.
+    pending[0]({ languages: [{ language: "en", percentage: 100 }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(highlights.get("ilmt-gloss")).toBeUndefined();
+  } finally {
+    vi.unstubAllGlobals();
   }
 });

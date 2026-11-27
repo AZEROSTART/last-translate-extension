@@ -22,6 +22,13 @@ const deps = createDeps();
 /** Storage key where a pending selection quote waits for the panel to read it. */
 const PENDING_QUOTE_KEY = "chat.pendingQuote";
 
+/**
+ * Synthetic, always-negative cancel key for side-panel chat ports. Side panels
+ * have no `sender.tab`, so each port needs its own tab-key namespace entry to
+ * cancel only its own queue work (never another panel's, never tab `0`).
+ */
+let nextChatPortKey = -1;
+
 /** Only the window the user last interacted with has a meaningful active tab. */
 const ACTIVE_TAB_QUERY: chrome.tabs.QueryInfo = { active: true, lastFocusedWindow: true };
 
@@ -117,9 +124,15 @@ function ensureLearningAlarm(): void {
 chrome.runtime.onInstalled.addListener(() => {
   registerTranslateContextMenu();
   ensureLearningAlarm();
+  // The badge must reflect the restored learning state right after an
+  // install/update, before the first alarm or storage change fires.
+  void refreshBadge();
 });
 
-chrome.runtime.onStartup?.addListener?.(ensureLearningAlarm);
+chrome.runtime.onStartup?.addListener?.(() => {
+  ensureLearningAlarm();
+  void refreshBadge();
+});
 
 chrome.alarms?.onAlarm?.addListener?.((alarm) => {
   if (alarm.name === LEARNING_ALARM) void refreshBadge();
@@ -283,6 +296,31 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
   }
 });
 
+/**
+ * A per-port poster that stops silently once the port is gone. Posting to a
+ * closed port throws in Chrome, and a streaming reply can easily outlive the
+ * panel (or tab) that started it.
+ */
+function createSafePoster<T>(port: chrome.runtime.Port): {
+  post(message: T): void;
+  markDisconnected(): void;
+} {
+  let disconnected = false;
+  return {
+    post(message: T): void {
+      if (disconnected) return;
+      try {
+        port.postMessage(message);
+      } catch {
+        disconnected = true;
+      }
+    },
+    markDisconnected(): void {
+      disconnected = true;
+    },
+  };
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   // Reject any connection not from this extension's top frame (spec §12).
   if (!isTrustedSender(port.sender)) {
@@ -294,6 +332,7 @@ chrome.runtime.onConnect.addListener((port) => {
     // requestId → owning tab, so an `abort` can cancel the whole tab.
     const tabByRequest = new Map<string, number>();
     const senderTabId = port.sender?.tab?.id;
+    const poster = createSafePoster<BackgroundToClient>(port);
 
     port.onMessage.addListener((raw: ClientToBackground) => {
       if (!isTrustedSender(port.sender)) return;
@@ -303,14 +342,19 @@ chrome.runtime.onConnect.addListener((port) => {
         // fallback, so the queue task and the abort mapping share one id.
         const tabId = port.sender?.tab?.id ?? raw.tabId;
         tabByRequest.set(raw.requestId, tabId);
-        void handleTranslate(deps, { ...raw, tabId }, (m: BackgroundToClient) => port.postMessage(m)).catch(
-          logUnexpected,
-        );
+        void handleTranslate(deps, { ...raw, tabId }, poster.post)
+          .catch(logUnexpected)
+          .finally(() => {
+            tabByRequest.delete(raw.requestId);
+          });
       } else if (raw.type === "abort") {
         const tabId = tabByRequest.get(raw.requestId);
-        if (tabId !== undefined) deps.queue.cancelTab(tabId);
+        if (tabId !== undefined) {
+          deps.queue.cancelTab(tabId);
+          tabByRequest.delete(raw.requestId);
+        }
       } else if (raw.type === "ping") {
-        port.postMessage({ type: "pong" } satisfies BackgroundToClient);
+        poster.post({ type: "pong" });
       }
     });
 
@@ -318,29 +362,43 @@ chrome.runtime.onConnect.addListener((port) => {
     // `abort` never arrived (tab close, reload, service-worker teardown). The
     // content side also defers `close()` one macrotask so `abort` wins first.
     port.onDisconnect.addListener(() => {
+      poster.markDisconnected();
       consumePortLastError();
+      tabByRequest.clear();
       if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
     });
   } else if (port.name === "ilmt-chat") {
     const tabByRequest = new Map<string, number>();
     const senderTabId = port.sender?.tab?.id;
+    // Side panels have no `sender.tab`; give every such port a distinct
+    // negative key so cancelling one panel never touches another (or tab 0).
+    const cancelKey = senderTabId ?? --nextChatPortKey;
+    const poster = createSafePoster<ChatBackgroundToClient>(port);
 
     port.onMessage.addListener((raw: ChatClientToBackground) => {
       if (!isTrustedSender(port.sender)) return;
 
       if (raw.type === "chat") {
-        const tabId = port.sender?.tab?.id ?? 0;
-        tabByRequest.set(raw.requestId, tabId);
-        void handleChat(deps, raw, (m: ChatBackgroundToClient) => port.postMessage(m), tabId).catch(logUnexpected);
+        tabByRequest.set(raw.requestId, cancelKey);
+        void handleChat(deps, raw, poster.post, cancelKey)
+          .catch(logUnexpected)
+          .finally(() => {
+            tabByRequest.delete(raw.requestId);
+          });
       } else if (raw.type === "abort") {
-        const tabId = tabByRequest.get(raw.requestId);
-        if (tabId !== undefined) deps.queue.cancelTab(tabId);
+        const key = tabByRequest.get(raw.requestId);
+        if (key !== undefined) {
+          deps.queue.cancelTab(key);
+          tabByRequest.delete(raw.requestId);
+        }
       }
     });
 
     port.onDisconnect.addListener(() => {
+      poster.markDisconnected();
       consumePortLastError();
-      if (senderTabId !== undefined) deps.queue.cancelTab(senderTabId);
+      tabByRequest.clear();
+      deps.queue.cancelTab(cancelKey);
     });
   }
 });

@@ -130,8 +130,13 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
       return false;
     }
     port = next;
-    next.onMessage.addListener(route);
-    next.onDisconnect.addListener(handleDisconnect);
+    // Guard both listeners by port identity: a port abandoned by a later
+    // `establish()` (or a failed send) must never route messages, or signal a
+    // disconnect, for the connection that replaced it.
+    next.onMessage.addListener((raw) => {
+      if (next === port) route(raw);
+    });
+    next.onDisconnect.addListener(() => handleDisconnect(next));
     markHealthy();
     return true;
   }
@@ -210,10 +215,11 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     scheduleReconnect();
   }
 
-  function handleDisconnect(): void {
+  function handleDisconnect(source: TranslatePort): void {
     // `closed` is set before `port.disconnect()` in close(), so a
-    // caller-initiated close never reaches onDisconnect.
-    if (closed) return;
+    // caller-initiated close never reaches onDisconnect. A late disconnect
+    // from a port that has already been replaced is equally irrelevant.
+    if (closed || source !== port) return;
     // A bfcache-evicted page closes the port and sets runtime.lastError.
     // Read it so Chrome does not log an unchecked-error entry for an expected
     // disconnect. The extension context may already be invalidated.
@@ -226,7 +232,10 @@ export function createTranslatePort(options: CreateTranslatePortOptions): Transl
     if (state === "degraded") return;
     state = "reconnecting";
     options.onDisconnect?.();
-    scheduleReconnect();
+    // The caller may have recovered the connection synchronously (a send from
+    // onDisconnect establishes a fresh, healthy port); only a still-reconnecting
+    // client owns the backoff timer.
+    if (state === "reconnecting") scheduleReconnect();
   }
 
   function send(message: ClientToBackground): void {

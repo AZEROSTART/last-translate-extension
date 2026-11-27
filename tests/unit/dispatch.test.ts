@@ -1030,3 +1030,61 @@ it("penalizedRps halves rates without ever dropping below 1", () => {
   expect(penalizedRps(1, true)).toBe(1);
   expect(penalizedRps(0, true)).toBe(1);
 });
+
+it("writes a whole multi-paragraph result with one putMany call", async () => {
+  const putMany = vi.fn(async (_entries: unknown[]) => {});
+  const put = vi.fn(async () => {});
+  const complete = vi.fn(async () => ({ text: "[1] 甲\n[2] 乙" }));
+  const { d, sent, send } = deps({
+    adapter: fakeAdapter({ complete }),
+    cache: { get: vi.fn(async () => undefined), put, putMany },
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "rb1", tabId: 1, items: items(2) }, send);
+
+  expect(putMany).toHaveBeenCalledTimes(1);
+  const entries = putMany.mock.calls[0][0] as Array<{
+    key: string;
+    value: { text: string };
+    meta: { modelId: string };
+  }>;
+  expect(entries).toHaveLength(2);
+  expect(entries.map((entry) => entry.value.text)).toEqual(["甲", "乙"]);
+  expect(entries.every((entry) => entry.key.length > 0)).toBe(true);
+  expect(entries.every((entry) => entry.meta.modelId === "m")).toBe(true);
+  // The batch path replaces per-item writes entirely.
+  expect(put).not.toHaveBeenCalled();
+  expect(sent).toContainEqual({
+    type: "result",
+    requestId: "rb1",
+    items: [
+      { id: "p_1", text: "甲" },
+      { id: "p_2", text: "乙" },
+    ],
+  });
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rb1" });
+});
+
+it("treats a throwing putMany as non-fatal and still delivers the result", async () => {
+  const putMany = vi.fn(async (_entries: unknown[]) => {
+    throw new Error("IndexedDB write failed");
+  });
+  const complete = vi.fn(async () => ({ text: "[1] 甲\n[2] 乙" }));
+  const { d, sent, send } = deps({
+    adapter: fakeAdapter({ complete }),
+    cache: { get: vi.fn(async () => undefined), put: vi.fn(async () => {}), putMany },
+  });
+
+  await handleTranslate(d, { type: "translate", requestId: "rb2", tabId: 1, items: items(2) }, send);
+
+  expect(putMany).toHaveBeenCalledTimes(1);
+  expect(sent).toContainEqual({
+    type: "result",
+    requestId: "rb2",
+    items: [
+      { id: "p_1", text: "甲" },
+      { id: "p_2", text: "乙" },
+    ],
+  });
+  expect(sent.at(-1)).toEqual({ type: "finish", requestId: "rb2" });
+});
