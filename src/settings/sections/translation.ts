@@ -135,6 +135,85 @@ export function createTranslationSection(ctx: SettingsContext): SectionHandle {
   triggerField.appendChild(triggerRow);
   element.appendChild(triggerField);
 
+  const currentHost = ctx.currentHost?.trim() ?? "";
+  const siteRulesField = el("fieldset", "field-group site-rules-field");
+  siteRulesField.appendChild(el("legend", undefined, "站点规则"));
+  let currentSiteSelect: HTMLSelectElement | null = null;
+
+  if (currentHost) {
+    const currentRow = el("div", "site-rule-current");
+    const select = el("select", "site-rule-select");
+    for (const [value, label] of [
+      ["default", "默认"],
+      ["auto", "自动翻译此站"],
+      ["never", "永不翻译此站"],
+    ] as const) {
+      const option = el("option");
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+    select.value = settings.siteRules[currentHost] ?? "default";
+    select.addEventListener("change", () => {
+      void (async () => {
+        const current = ctx.getSettings();
+        const previous = current.siteRules[currentHost];
+        const siteRules = { ...current.siteRules };
+        if (select.value === "default") delete siteRules[currentHost];
+        else siteRules[currentHost] = select.value as "auto" | "never";
+        try {
+          await ctx.savePatch({ siteRules });
+        } catch {
+          select.value = previous ?? "default";
+        }
+      })();
+    });
+    currentRow.append(
+      el("span", "field-label", "当前站点："),
+      el("code", "site-rule-host", currentHost),
+      select,
+    );
+    siteRulesField.appendChild(currentRow);
+    currentSiteSelect = select;
+  }
+
+  const siteRulesList = el("div", "site-rules-list");
+  siteRulesField.appendChild(siteRulesList);
+
+  function renderSiteRules(next: Settings): void {
+    const hosts = Object.keys(next.siteRules).sort((a, b) => a.localeCompare(b));
+    siteRulesList.replaceChildren();
+    for (const host of hosts) {
+      const rule = next.siteRules[host];
+      const row = el("div", "site-rule-row");
+      row.dataset.host = host;
+      const remove = makeButton("移除", "site-rule-remove");
+      remove.addEventListener("click", () => {
+        void (async () => {
+          const current = ctx.getSettings();
+          const siteRules = { ...current.siteRules };
+          delete siteRules[host];
+          try {
+            await ctx.savePatch({ siteRules });
+          } catch {
+            renderSiteRules(ctx.getSettings());
+          }
+        })();
+      });
+      row.append(
+        el("span", "site-rule-row-host", host),
+        el("span", "site-rule-row-mode", rule === "auto" ? "自动" : "永不"),
+        remove,
+      );
+      siteRulesList.appendChild(row);
+    }
+    siteRulesField.hidden =
+      !currentHost && Object.keys(next.siteRules).length === 0;
+  }
+
+  renderSiteRules(settings);
+  element.appendChild(siteRulesField);
+
   const saved = el("span", "global-saved translation-saved", "已保存");
   saved.hidden = true;
   const saveButton = makeButton("保存翻译设置", "global-save translation-save");
@@ -200,6 +279,10 @@ export function createTranslationSection(ctx: SettingsContext): SectionHandle {
       for (const radio of triggerRadios) {
         radio.checked = radio.value === next.triggerMode;
       }
+      if (currentSiteSelect) {
+        currentSiteSelect.value = next.siteRules[currentHost] ?? "default";
+      }
+      renderSiteRules(next);
     },
   };
 }

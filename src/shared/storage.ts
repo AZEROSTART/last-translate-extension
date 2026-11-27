@@ -93,6 +93,18 @@ export function normalizeEffectSettings(value: unknown): EffectSettings {
   };
 }
 
+/** Keep only real hostnames mapped to a meaningful rule. */
+export function normalizeSiteRules(value: unknown): Settings["siteRules"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const rules: Settings["siteRules"] = {};
+  for (const [host, rule] of Object.entries(value as Record<string, unknown>)) {
+    const trimmed = host.trim();
+    if (!trimmed || (rule !== "auto" && rule !== "never")) continue;
+    rules[trimmed] = rule;
+  }
+  return rules;
+}
+
 /**
  * Defaults mirror the spec. `systemPrompt` keeps the literal
  * `{{targetLang}}` placeholder; the prompt builder substitutes it later.
@@ -179,6 +191,9 @@ export async function getSettings(): Promise<Settings> {
     (stored as { systemPrompt?: unknown } | undefined)?.systemPrompt,
   );
   merged.mascot = normalizeEffectSettings((stored as { mascot?: unknown } | undefined)?.mascot);
+  merged.siteRules = normalizeSiteRules(
+    (stored as { siteRules?: unknown } | undefined)?.siteRules,
+  );
   if (typeof merged.reviewAnswerLang !== "string") merged.reviewAnswerLang = "";
 
   // Auto-claim is on by default; only an explicit false turns it off.

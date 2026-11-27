@@ -83,7 +83,7 @@ export function mountProviderManager(
   let settings = initialSettings;
   let currentForm: ProviderFormControls | null = null;
   let pendingAfterDiscard: (() => void) | null = null;
-  let armedDeleteId = "";
+  let armedDeleteButton: HTMLButtonElement | null = null;
 
   const element = el("div", "settings-subview provider-manager");
   const head = el("div", "subview-head");
@@ -150,6 +150,7 @@ export function mountProviderManager(
   }
 
   function renderList(): void {
+    resetArmedDelete();
     list.replaceChildren();
     if (settings.providers.length === 0) {
       list.appendChild(el("p", "empty", "还没有模型配置。点击「新增配置」开始。"));
@@ -158,6 +159,13 @@ export function mountProviderManager(
     for (const provider of settings.providers) {
       list.appendChild(renderProviderCard(provider));
     }
+  }
+
+  function resetArmedDelete(): void {
+    if (!armedDeleteButton) return;
+    armedDeleteButton.textContent = "删除";
+    armedDeleteButton.classList.remove("danger");
+    armedDeleteButton = null;
   }
 
   function renderProviderCard(provider: ProviderConfig): HTMLElement {
@@ -195,8 +203,9 @@ export function mountProviderManager(
     copyButton.addEventListener("click", () => guardDiscard(() => void copyProvider(provider)));
     const deleteButton = makeButton("删除", "provider-delete");
     deleteButton.addEventListener("click", () => {
-      if (armedDeleteId !== provider.id) {
-        armedDeleteId = provider.id;
+      if (armedDeleteButton !== deleteButton) {
+        resetArmedDelete();
+        armedDeleteButton = deleteButton;
         deleteButton.textContent = "确认删除";
         deleteButton.classList.add("danger");
         return;
@@ -538,7 +547,8 @@ export function mountProviderManager(
     currentForm = controls;
     formHost.replaceChildren(form);
     form.scrollIntoView?.({ block: "nearest" });
-    nameInput.focus();
+    if (nameField.hidden) apiKeyInput.focus();
+    else nameInput.focus();
   }
 
   function readForm(controls: ProviderFormControls): ProviderFormState {

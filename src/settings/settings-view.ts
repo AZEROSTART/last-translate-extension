@@ -17,6 +17,8 @@ import type { SectionHandle, SettingsContext } from "./sections/types";
 
 export interface SettingsViewOptions {
   mode: "popup" | "page";
+  /** http(s) hostname of the active tab; omitted on Chrome/extension pages. */
+  currentHost?: string;
 }
 
 export interface SettingsViewHandle {
@@ -35,7 +37,7 @@ export async function createSettingsView(
     settings = null;
   }
 
-  const state = settings ? mount(host, settings, options.mode) : null;
+  const state = settings ? mount(host, settings, options) : null;
   if (!state) {
     host.replaceChildren(
       el("p", "settings-read-error", "读取设置失败，请关闭后重试。"),
@@ -53,7 +55,7 @@ export async function createSettingsView(
 function mount(
   host: HTMLElement,
   initialSettings: Settings,
-  mode: "popup" | "page",
+  options: SettingsViewOptions,
 ): { readonly settings: Settings } {
   let settings = initialSettings;
   let providerManager: ProviderManagerHandle | null = null;
@@ -67,6 +69,7 @@ function mount(
     getSettings: () => settings,
     savePatch,
     openModels,
+    currentHost: options.currentHost,
   };
 
   const handles: SectionHandle[] = [
@@ -76,9 +79,7 @@ function mount(
     createAdvancedSection(ctx),
     createMaintenanceSection(ctx),
   ];
-  const modelHandle = handles[0];
   const metaById = new Map<string, HTMLElement>();
-
   const titles: Record<string, string> = {
     model: "模型设置",
     translation: "翻译设置",
@@ -113,7 +114,7 @@ function mount(
   }
 
   function refreshAll(): void {
-    modelHandle.update(settings);
+    for (const handle of handles) handle.update(settings);
     updateSummaries();
   }
 
@@ -121,7 +122,7 @@ function mount(
     const next: Settings = { ...settings, ...patch };
     await saveSettings(next);
     settings = await getSettings();
-    if (patch.activeProviderId !== undefined) modelHandle.update(settings);
+    for (const handle of handles) handle.update(settings);
     updateSummaries();
   }
 
@@ -146,7 +147,7 @@ function mount(
     refreshAll();
   }
 
-  void mode;
+  void options.mode;
   return {
     get settings() {
       return settings;

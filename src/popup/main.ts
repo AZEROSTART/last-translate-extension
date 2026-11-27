@@ -26,6 +26,30 @@ let view: SettingsViewHandle | null = null;
 let mode: Mode = "popup";
 let root: HTMLElement;
 let scrollHost: HTMLElement;
+let hintNode: HTMLElement | null = null;
+let translateButton: HTMLButtonElement | null = null;
+let activeTab: { id?: number; url?: string } | undefined;
+
+/** Only a real web page has a hostname the site-rules UI can edit. */
+export function extractHttpHost(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return parsed.hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The footer always tells the truth Chrome currently has, with stable fallbacks. */
+export function formatShortcutHint(
+  commands?: ReadonlyArray<{ name?: string; shortcut?: string }>,
+): string {
+  const shortcut = (name: string, fallback: string): string =>
+    commands?.find((command) => command.name === name)?.shortcut || fallback;
+  return `${shortcut("translate-page", "Alt+A")} 翻译 · ${shortcut("ask-selection", "Alt+Q")} 解释 · ${shortcut("toggle-side-panel", "Alt+S")} 侧栏`;
+}
 
 let resolveReady!: () => void;
 const ready = new Promise<void>((resolve) => (resolveReady = resolve));
@@ -49,10 +73,23 @@ async function start(): Promise<void> {
   if (mode === "page") document.body.classList.add("page-mode");
   buildShell();
   injectStyles();
-  view = await createSettingsView(scrollHost, { mode });
+  activeTab = mode === "popup" ? await queryActiveTab() : undefined;
+  view = await createSettingsView(scrollHost, {
+    mode,
+    currentHost: extractHttpHost(activeTab?.url),
+  });
   void refreshReviewEntry();
-  void noteHostHealth();
+  void noteHostHealth(activeTab);
   resolveReady();
+}
+
+async function queryActiveTab(): Promise<{ id?: number; url?: string } | undefined> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return tab;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -60,39 +97,55 @@ async function start(): Promise<void> {
  * suggested key unassigned, and some hosts (Orca's embedded browser) do not
  * inject content scripts at all. Both look exactly like "the feature vanished".
  */
-async function noteHostHealth(): Promise<void> {
+async function noteHostHealth(tab: { id?: number; url?: string } | undefined): Promise<void> {
   if (mode !== "popup") return;
-  const warning = await hostWarning();
+
+  let shortcutWarning: string | null = null;
+  try {
+    const commands = await chrome.commands?.getAll?.();
+    if (hintNode) hintNode.textContent = formatShortcutHint(commands);
+    const translate = commands?.find((command) => command.name === "translate-page");
+    if (!translate || !translate.shortcut) {
+      shortcutWarning =
+        "翻译快捷键未绑定：在 chrome://extensions/shortcuts 给「翻译当前页面」设置 Alt+A（macOS 为 ⌥A）。";
+    }
+  } catch {
+    if (hintNode) hintNode.textContent = formatShortcutHint();
+    // Older hosts without the commands API: fall through to the page probe.
+  }
+
+  let probeWarning: string | null = null;
+  const send = chrome.tabs?.sendMessage;
+  const extensionUrl = chrome.runtime.getURL("");
+  const canProbe =
+    typeof send === "function" &&
+    tab?.id !== undefined &&
+    !(tab.url ?? "").startsWith(extensionUrl);
+  if (canProbe) {
+    try {
+      const response = (await send(tab!.id!, { type: "ilmt-probe" })) as
+        | { ok?: boolean; active?: boolean }
+        | undefined;
+      if (translateButton) {
+        const active = Boolean(response?.active);
+        translateButton.hidden = false;
+        translateButton.disabled = false;
+        translateButton.dataset.active = active ? "1" : "0";
+        translateButton.textContent = active ? "还原当前页" : "翻译当前页";
+      }
+    } catch {
+      if (translateButton) translateButton.hidden = true;
+      probeWarning = "当前页面没有注入翻译脚本：请在 Chrome 中打开网页，或刷新本页后重试。";
+    }
+  }
+
+  const warning = shortcutWarning ?? probeWarning;
   if (!warning) return;
   const node = el("p", "popup-host-warning", warning);
   node.setAttribute("role", "status");
   const header = root.querySelector(".popup-header");
   if (header) header.after(node);
   else root.prepend(node);
-}
-
-async function hostWarning(): Promise<string | null> {
-  try {
-    const commands = await chrome.commands?.getAll?.();
-    const translate = commands?.find((command) => command.name === "translate-page");
-    if (!translate || !translate.shortcut) {
-      return "翻译快捷键未绑定：在 chrome://extensions/shortcuts 给「翻译当前页面」设置 Alt+A（macOS 为 ⌥A）。";
-    }
-  } catch {
-    // Older hosts without the commands API: fall through to the page probe.
-  }
-
-  const send = chrome.tabs?.sendMessage;
-  if (typeof send !== "function") return null;
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    // The popup opened as a tab is not a page the content script can live in.
-    if (tab?.url?.startsWith(chrome.runtime.getURL(""))) return null;
-    if (tab?.id !== undefined) await send(tab.id, { type: "ilmt-probe" });
-  } catch {
-    return "当前页面没有注入翻译脚本：请在 Chrome 中打开网页，或刷新本页后重试。";
-  }
-  return null;
 }
 
 /** Show "待复习 N · 打开复习" only when something is actually due. */
@@ -171,11 +224,34 @@ function buildShell(): void {
   root.appendChild(scrollHost);
 
   const footer = el("footer", "popup-footer");
+  const actions = el("div", "popup-actions");
+  translateButton = el("button", "popup-translate-btn", "翻译当前页");
+  translateButton.type = "button";
+  translateButton.hidden = true;
+  translateButton.addEventListener("click", () => void translateCurrentPage());
   const openSidepanel = el("button", "popup-open-sidepanel", "打开翻译侧栏");
   openSidepanel.type = "button";
   openSidepanel.addEventListener("click", openSidePanel);
-  footer.append(openSidepanel, el("span", "popup-hint", "Alt+A 翻译 · Alt+Q 解释 · Alt+S 侧栏"));
+  actions.append(translateButton, openSidepanel);
+  hintNode = el("span", "popup-hint", formatShortcutHint());
+  footer.append(actions, hintNode);
   root.appendChild(footer);
+}
+
+/** One click on the primary control is exactly the keyboard path. */
+async function translateCurrentPage(): Promise<void> {
+  if (!translateButton || activeTab?.id === undefined) return;
+  translateButton.disabled = true;
+  try {
+    await chrome.tabs.sendMessage(activeTab.id, { type: "activate" });
+    if (mode === "popup") {
+      window.close();
+      return;
+    }
+    translateButton.disabled = false;
+  } catch {
+    translateButton.disabled = false;
+  }
 }
 
 /**

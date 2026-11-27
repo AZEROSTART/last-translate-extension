@@ -40,9 +40,9 @@ async function seed(partial: Partial<Settings> = {}): Promise<void> {
 
 function installChrome() {
   const sidePanelOpen = vi.fn(async () => undefined);
-  const tabsQuery = vi.fn(async (): Promise<Array<{ id?: number }>> => []);
+  const tabsQuery = vi.fn(async (): Promise<Array<{ id?: number; url?: string }>> => []);
   const tabsCreate = vi.fn(async () => undefined);
-  const tabsSendMessage = vi.fn(async () => undefined);
+  const tabsSendMessage = vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined);
   const commandsGetAll = vi.fn(async () => [
     { name: "translate-page", shortcut: "Alt+A" },
     { name: "ask-selection", shortcut: "Alt+Q" },
@@ -212,5 +212,94 @@ describe("popup shell", () => {
     await flush();
 
     expect(document.querySelector(".popup-host-warning")).toBeNull();
+  });
+
+  it("reveals the primary translate button and sends the activate message", async () => {
+    const { tabsQuery, tabsSendMessage } = installChrome();
+    tabsQuery.mockResolvedValue([{ id: 7, url: "https://example.test/article" }]);
+    tabsSendMessage
+      .mockResolvedValueOnce({ ok: true, active: false })
+      .mockResolvedValueOnce(undefined);
+    await boot();
+    await flush();
+
+    const button = document.querySelector<HTMLButtonElement>(".popup-translate-btn")!;
+    expect(button.hidden).toBe(false);
+    expect(button.disabled).toBe(false);
+    expect(button.dataset.active).toBe("0");
+    expect(button.textContent).toBe("翻译当前页");
+
+    button.click();
+    await flush();
+
+    expect(tabsSendMessage).toHaveBeenLastCalledWith(7, { type: "activate" });
+    expect(window.close).toHaveBeenCalled();
+  });
+
+  it("labels an active page as 还原当前页", async () => {
+    const { tabsQuery, tabsSendMessage } = installChrome();
+    tabsQuery.mockResolvedValue([{ id: 7, url: "https://example.test/article" }]);
+    tabsSendMessage.mockResolvedValueOnce({ ok: true, active: true });
+    await boot();
+    await flush();
+
+    const button = document.querySelector<HTMLButtonElement>(".popup-translate-btn")!;
+    expect(button.hidden).toBe(false);
+    expect(button.dataset.active).toBe("1");
+    expect(button.textContent).toBe("还原当前页");
+  });
+
+  it("hides the translate button and warns when the probe fails", async () => {
+    const { tabsQuery, tabsSendMessage } = installChrome();
+    tabsQuery.mockResolvedValue([{ id: 7, url: "https://example.test/article" }]);
+    tabsSendMessage.mockRejectedValue(new Error("Could not establish connection"));
+    await boot();
+    await flush();
+
+    expect(document.querySelector<HTMLButtonElement>(".popup-translate-btn")!.hidden).toBe(true);
+    expect(document.querySelector(".popup-host-warning")?.textContent).toContain("没有注入");
+  });
+
+  it("fills the hint from the real shortcut bindings", async () => {
+    const { commandsGetAll } = installChrome();
+    commandsGetAll.mockResolvedValue([
+      { name: "translate-page", shortcut: "⌥A" },
+      { name: "ask-selection", shortcut: "⌥Q" },
+      { name: "toggle-side-panel", shortcut: "⌥S" },
+    ]);
+    await boot();
+    await flush();
+
+    expect(document.querySelector(".popup-hint")?.textContent).toBe("⌥A 翻译 · ⌥Q 解释 · ⌥S 侧栏");
+  });
+
+  it("falls back per command when a binding or the API is missing", async () => {
+    const { commandsGetAll } = installChrome();
+    commandsGetAll.mockResolvedValue([{ name: "ask-selection", shortcut: "Ctrl+Q" }]);
+    await boot();
+    await flush();
+
+    expect(document.querySelector(".popup-hint")?.textContent).toBe(
+      "Alt+A 翻译 · Ctrl+Q 解释 · Alt+S 侧栏",
+    );
+  });
+
+  it("passes an http host to the site-rules UI and omits non-web hosts", async () => {
+    const web = installChrome();
+    web.tabsQuery.mockResolvedValue([{ id: 7, url: "https://news.example.test/a" }]);
+    await boot();
+    await flush();
+    expect(document.querySelector(".site-rule-host")?.textContent).toBe("news.example.test");
+    expect(document.body.textContent).toContain("当前站点");
+
+    vi.resetModules();
+    document.body.innerHTML = `<div id="root"></div>`;
+    delete (globalThis as any).__ilmtPopup;
+    web.tabsQuery.mockResolvedValue([{ id: 7, url: "chrome://settings" }]);
+    web.tabsSendMessage.mockResolvedValue(undefined);
+    await boot();
+    await flush();
+    expect(document.querySelector(".site-rule-current")).toBeNull();
+    expect(document.body.textContent).not.toContain("当前站点：");
   });
 });

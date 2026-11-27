@@ -258,7 +258,10 @@ export function createLearningSection(ctx: SettingsContext): SectionHandle {
   direction.checked = true;
   direction.disabled = true;
   directionRow.append(direction, document.createTextNode("认词 → 释义"));
-  directionField.append(directionRow, el("span", "field-hint", "反向复习即将支持。"));
+  directionField.append(
+    directionRow,
+    el("span", "field-hint", "首次回想词义，复习过且带原句的词自动切换原句找词。"),
+  );
   element.appendChild(directionField);
 
   const saved = el("span", "global-saved learning-saved", "已保存");

@@ -663,6 +663,137 @@ describe("model manager navigation", () => {
   });
 });
 
+describe("review direction hint", () => {
+  it("explains the automatic sentence-recall direction", async () => {
+    await seed();
+    await boot();
+
+    expect(document.body.textContent).toContain(
+      "首次回想词义，复习过且带原句的词自动切换原句找词。",
+    );
+    expect(document.body.textContent).not.toContain("反向复习即将支持。");
+  });
+});
+
+describe("per-site rules", () => {
+  async function bootSettings(currentHost?: string): Promise<HTMLElement> {
+    const { createSettingsView } = await import("../../src/settings/settings-view");
+    const host = document.getElementById("root")!;
+    await createSettingsView(host, { mode: "page", currentHost });
+    return host;
+  }
+
+  function selectRule(value: string): void {
+    const select = document.querySelector<HTMLSelectElement>(".site-rule-select")!;
+    select.value = value;
+    select.dispatchEvent(new Event("change"));
+  }
+
+  it("persists the current host rule and keeps the list in sync", async () => {
+    await seed();
+    await bootSettings("news.example.test");
+
+    expect(document.querySelector(".site-rule-host")?.textContent).toBe("news.example.test");
+    expect(document.querySelector<HTMLSelectElement>(".site-rule-select")?.value).toBe("default");
+
+    selectRule("auto");
+    await vi.waitFor(async () => {
+      expect((await getSettings()).siteRules["news.example.test"]).toBe("auto");
+    });
+    expect(document.querySelector(".site-rule-row-host")?.textContent).toBe("news.example.test");
+    expect(document.querySelector(".site-rule-row-mode")?.textContent).toBe("自动");
+
+    selectRule("never");
+    await vi.waitFor(async () => {
+      expect((await getSettings()).siteRules["news.example.test"]).toBe("never");
+    });
+    expect(document.querySelector(".site-rule-row-mode")?.textContent).toBe("永不");
+
+    selectRule("default");
+    await vi.waitFor(async () => {
+      expect((await getSettings()).siteRules["news.example.test"]).toBeUndefined();
+    });
+    expect(document.querySelector(".site-rule-row")).toBeNull();
+  });
+
+  it("sorts the saved hosts and removes one rule at a time", async () => {
+    await seed({
+      siteRules: { "z.example.test": "never", "a.example.test": "auto" },
+    });
+    await bootSettings("a.example.test");
+
+    const rows = [...document.querySelectorAll<HTMLElement>(".site-rule-row")];
+    expect(rows.map((row) => row.dataset.host)).toEqual([
+      "a.example.test",
+      "z.example.test",
+    ]);
+    expect(rows.map((row) => row.querySelector(".site-rule-row-mode")?.textContent)).toEqual([
+      "自动",
+      "永不",
+    ]);
+
+    (rows[0].querySelector(".site-rule-remove") as HTMLButtonElement).click();
+    await vi.waitFor(async () => {
+      expect((await getSettings()).siteRules["a.example.test"]).toBeUndefined();
+    });
+    expect(document.querySelector<HTMLSelectElement>(".site-rule-select")?.value).toBe("default");
+    expect(document.querySelectorAll(".site-rule-row")).toHaveLength(1);
+  });
+
+  it("hides the field entirely when there is no host and no saved rule", async () => {
+    await seed();
+    await bootSettings(undefined);
+
+    expect((document.querySelector(".site-rules-field") as HTMLElement).hidden).toBe(true);
+  });
+});
+
+describe("settings refresh fixes", () => {
+  it("re-checks the last learning language after normalization", async () => {
+    await seed();
+    await boot();
+
+    const en = document.querySelector<HTMLInputElement>('.global-learningLang[value="en"]')!;
+    expect(en.checked).toBe(true);
+    en.checked = false;
+    click(".learning-save");
+
+    await vi.waitFor(async () => {
+      expect((await getSettings()).learningLangs).toEqual(["en"]);
+    });
+    await vi.waitFor(() => expect(en.checked).toBe(true));
+  });
+
+  it("resets provider A's armed delete when provider B is armed", async () => {
+    await seed({ providers: [p1, p2], activeProviderId: p2.id });
+    await boot();
+
+    const first = document.querySelector<HTMLElement>(`[data-provider-id="${p1.id}"]`)!;
+    const second = document.querySelector<HTMLElement>(`[data-provider-id="${p2.id}"]`)!;
+    const firstDelete = first.querySelector<HTMLButtonElement>(".provider-delete")!;
+    const secondDelete = second.querySelector<HTMLButtonElement>(".provider-delete")!;
+
+    firstDelete.click();
+    expect(firstDelete.textContent).toBe("确认删除");
+    expect(firstDelete.classList.contains("danger")).toBe(true);
+
+    secondDelete.click();
+    expect(firstDelete.textContent).toBe("删除");
+    expect(firstDelete.classList.contains("danger")).toBe(false);
+    expect(secondDelete.textContent).toBe("确认删除");
+    expect(secondDelete.classList.contains("danger")).toBe(true);
+  });
+
+  it("focuses the API key when the DeepSeek name field is hidden", async () => {
+    await seed();
+    await boot();
+    click(".provider-add");
+
+    expect((document.querySelector(".pf-name-field") as HTMLElement).hidden).toBe(true);
+    expect(document.activeElement).toBe(document.querySelector(".pf-apiKey"));
+  });
+});
+
 describe("translation style and learning settings", () => {
   it("saves a translation style and instructions", async () => {
     await seed();

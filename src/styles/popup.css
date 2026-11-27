@@ -322,7 +322,51 @@ button:focus-visible {
   border-top: 1px dashed rgba(126, 86, 56, 0.22);
 }
 
+.popup-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.popup-translate-btn {
+  flex: 1 1 0;
+  min-height: 38px;
+  border-color: transparent;
+  border-radius: 11px;
+  background: linear-gradient(180deg, #c9563e, #b2422d);
+  color: #fff8ec;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 10px 20px -14px rgba(154, 74, 43, 0.85);
+}
+
+.popup-translate-btn[hidden] {
+  display: none;
+}
+
+.popup-translate-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: linear-gradient(180deg, #bd4b34, #a53a26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 12px 22px -14px rgba(154, 74, 43, 0.9);
+}
+
+.popup-translate-btn[data-active="1"] {
+  border-color: rgba(191, 74, 51, 0.42);
+  background: linear-gradient(180deg, #f6dfb9, #efd09f);
+  color: #6b3a24;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.popup-translate-btn[data-active="1"]:hover:not(:disabled) {
+  border-color: rgba(191, 74, 51, 0.55);
+  background: linear-gradient(180deg, #f3d6a8, #eac489);
+}
+
 .popup-open-sidepanel {
+  flex: 1 1 0;
   width: 100%;
   min-height: 38px;
   border-color: transparent;
@@ -336,12 +380,26 @@ button:focus-visible {
     0 10px 20px -14px rgba(154, 74, 43, 0.85);
 }
 
+.popup-translate-btn:not([hidden]) ~ .popup-open-sidepanel {
+  border-color: rgba(126, 86, 56, 0.28);
+  background: var(--ilmt-panel);
+  color: var(--ilmt-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
 .popup-open-sidepanel:hover:not(:disabled) {
   border-color: transparent;
   background: linear-gradient(180deg, #bd4b34, #a53a26);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
     0 12px 22px -14px rgba(154, 74, 43, 0.9);
+}
+
+.popup-translate-btn:not([hidden]) ~ .popup-open-sidepanel:hover:not(:disabled) {
+  border-color: rgba(191, 74, 51, 0.42);
+  background: #fff5e4;
+  color: var(--ilmt-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .popup-hint {

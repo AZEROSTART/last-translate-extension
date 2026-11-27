@@ -251,6 +251,88 @@ test.describe("loaded extension", () => {
     }
   });
 
+  test("reports real probe state, shortcuts and per-site auto rules", async () => {
+    try {
+      server = await startMockServer();
+      extension = await launchExtension();
+      const ext = extension;
+      await seedSettings(ext.worker, server.origin);
+      const host = new URL(server.origin).hostname;
+
+      const page = await ext.context.newPage();
+      await page.goto(`${server.origin}/${ARTICLES.english}`);
+      const tabId = await activeTabId(ext.worker, page.url());
+
+      const probe = () =>
+        ext.worker.evaluate(
+          (id) => chrome.tabs.sendMessage(id, { type: "ilmt-probe" }),
+          tabId,
+        ) as Promise<{ ok?: boolean; active?: boolean } | undefined>;
+
+      await expect.poll(async () => (await probe())?.active).toBe(false);
+      await activate(ext.worker, tabId);
+      await expect(page.locator(".ilmt-tr")).toHaveCount(10);
+      await expect.poll(async () => (await probe())?.active).toBe(true);
+      await activate(ext.worker, tabId);
+      await expect(page.locator(".ilmt-tr")).toHaveCount(0);
+      await expect.poll(async () => (await probe())?.active).toBe(false);
+
+      // The footer mirrors whatever Chrome actually bound, with the same
+      // per-command fallback the unit test covers.
+      const shortcuts = await ext.worker.evaluate(async () => {
+        const commands = await chrome.commands.getAll();
+        return Object.fromEntries(commands.map((command) => [command.name, command.shortcut ?? ""]));
+      });
+      const expectedHint = `${shortcuts["translate-page"] || "Alt+A"} 翻译 · ${
+        shortcuts["ask-selection"] || "Alt+Q"
+      } 解释 · ${shortcuts["toggle-side-panel"] || "Alt+S"} 侧栏`;
+      const popup = await ext.context.newPage();
+      await popup.goto(`chrome-extension://${new URL(ext.worker.url()).host}/popup.html`);
+      await expect(popup.locator(".popup-hint")).toHaveText(expectedHint);
+
+      // A host rule can opt in under the global shortcut mode.
+      await ext.worker.evaluate(async ({ hostname }) => {
+        const stored = (await chrome.storage.local.get("settings")).settings as Record<
+          string,
+          unknown
+        >;
+        await chrome.storage.local.set({
+          settings: {
+            ...stored,
+            triggerMode: "shortcut",
+            siteRules: { [hostname]: "auto" },
+          },
+        });
+      }, { hostname: host });
+      const autoPage = await ext.context.newPage();
+      await autoPage.goto(`${server.origin}/${ARTICLES.english}`);
+      await expect(autoPage.locator(".ilmt-tr")).toHaveCount(10);
+
+      // ...and the same rule can suppress the global auto mode entirely.
+      await ext.worker.evaluate(async ({ hostname }) => {
+        const stored = (await chrome.storage.local.get("settings")).settings as Record<
+          string,
+          unknown
+        >;
+        await chrome.storage.local.set({
+          settings: {
+            ...stored,
+            triggerMode: "auto-current-site",
+            siteRules: { [hostname]: "never" },
+          },
+        });
+      }, { hostname: host });
+      const neverPage = await ext.context.newPage();
+      const requestsBefore = server.requests.length;
+      await neverPage.goto(`${server.origin}/${ARTICLES.english}`);
+      await neverPage.waitForTimeout(700);
+      await expect(neverPage.locator(".ilmt-tr")).toHaveCount(0);
+      expect(server.requests.length).toBe(requestsBefore);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("translates an English article and restores it", async () => {
     try {
       server = await startMockServer();

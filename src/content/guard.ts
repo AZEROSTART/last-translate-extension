@@ -16,6 +16,7 @@ interface MainHook {
   askSelection?(): void;
   translatePage?(): Promise<void>;
   showSelectionBubble?(): void;
+  isActive?(): boolean;
 }
 
 interface GuardGlobal {
@@ -118,7 +119,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Popup host probe: answers only when this document really has the guard,
   // so the popup can tell "no content script" apart from "feature removed".
   if (message?.type === "ilmt-probe") {
-    if (sender?.id === chrome.runtime.id) sendResponse({ ok: true });
+    if (sender?.id === chrome.runtime.id) {
+      let active = false;
+      try {
+        active = Boolean(scope.__ilmtMain?.isActive?.());
+      } catch {
+        active = false;
+      }
+      sendResponse({ ok: true, active });
+    }
     return;
   }
   if (scope.__ilmtGuard) return;
@@ -164,9 +173,17 @@ function startAuto(): void {
     void Promise.resolve(stored)
       .then((items) => {
         const settings = (items as { settings?: Record<string, unknown> })?.settings;
-        if (settings?.triggerMode !== "auto-current-site") return;
-        const rules = settings.siteRules as Record<string, string> | undefined;
-        if (rules?.[location.hostname] === "never") return;
+        const host = location.hostname;
+        const rules = settings?.siteRules as Record<string, string> | undefined;
+        // A blanket rule beats the global mode in both directions; an empty
+        // hostname is not a site and can never match an empty stored key.
+        const rule = host ? rules?.[host] : undefined;
+        if (rule === "never") return;
+        const auto =
+          rule === "auto" ||
+          settings?.triggerMode === "auto-current-site" ||
+          settings?.triggerMode === "auto";
+        if (!auto) return;
         if (document.readyState === "loading") {
           document.addEventListener(
             "DOMContentLoaded",

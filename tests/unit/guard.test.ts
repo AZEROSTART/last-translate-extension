@@ -52,7 +52,17 @@ describe("content script guard", () => {
 
     lastListener()({ type: "ilmt-probe" }, { id: chrome.runtime.id }, respond);
 
-    expect(respond).toHaveBeenCalledWith({ ok: true });
+    expect(respond).toHaveBeenCalledWith({ ok: true, active: false });
+  });
+
+  it("reports an active page through the host probe", async () => {
+    (globalThis as { __ilmtMain?: unknown }).__ilmtMain = { isActive: () => true };
+    await import("../../src/content/guard");
+    const respond = vi.fn();
+
+    lastListener()({ type: "ilmt-probe" }, { id: chrome.runtime.id }, respond);
+
+    expect(respond).toHaveBeenCalledWith({ ok: true, active: true });
   });
 
   it("ignores a host probe from another extension", async () => {
@@ -282,6 +292,33 @@ describe("content script guard", () => {
 
     it("stays shortcut-only for triggerMode shortcut", async () => {
       await importWith({ triggerMode: "shortcut", siteRules: {} });
+
+      expect(loadMain).not.toHaveBeenCalled();
+    });
+
+    it("lets a host rule opt in even when the global mode is shortcut-only", async () => {
+      const translatePage = vi.fn(async () => {});
+      loadMain.mockImplementationOnce(async () => {
+        (globalThis as { __ilmtMain?: unknown }).__ilmtMain = { translatePage };
+        return { runContentMain };
+      });
+
+      await importWith({
+        triggerMode: "shortcut",
+        siteRules: { [location.hostname]: "auto" },
+      });
+
+      expect(loadMain).toHaveBeenCalledTimes(1);
+      expect(translatePage).toHaveBeenCalledTimes(1);
+    });
+
+    it("never matches an empty rule key when the hostname is empty", async () => {
+      vi.stubGlobal("location", { hostname: "" });
+      try {
+        await importWith({ triggerMode: "shortcut", siteRules: { "": "auto" } });
+      } finally {
+        vi.unstubAllGlobals();
+      }
 
       expect(loadMain).not.toHaveBeenCalled();
     });
