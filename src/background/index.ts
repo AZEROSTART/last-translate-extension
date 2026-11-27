@@ -254,7 +254,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.M
   // Learning writes are serialized in the background; answer asynchronously.
   if (isLearningMessageType(msg.type)) {
     if (!isTrustedSender(sender)) return;
-    void handleLearningMessage(message)
+    void handleLearningMessage(message, { queue: deps.queue })
       .then((result) => sendResponse(result ?? undefined))
       .catch(() => sendResponse({ ok: false }));
     return true;

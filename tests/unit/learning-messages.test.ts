@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleLearningMessage, isLearningMessageType } from "../../src/background/learning";
+import type { RequestQueue } from "../../src/background/queue";
 import { getLearning } from "../../src/shared/learning-storage";
 
 beforeEach(() => chrome.storage.local.clear());
@@ -69,6 +70,57 @@ describe("handleLearningMessage", () => {
     expect(await handleLearningMessage({ type: "review-answer", id: "en:none", grade: "good" })).toEqual({
       ok: false,
     });
+  });
+
+  it("returns the day's review stats with every answer", async () => {
+    await handleLearningMessage(learn);
+
+    const first = (await handleLearningMessage({
+      type: "review-answer",
+      id: "en:outlive",
+      grade: "good",
+    })) as { stats: { day: string; todayReviewed: number } };
+    expect(first.stats.todayReviewed).toBe(1);
+
+    const second = (await handleLearningMessage({
+      type: "review-answer",
+      id: "en:outlive",
+      grade: "good",
+    })) as { stats: { day: string; todayReviewed: number } };
+    expect(second.stats).toEqual({ day: first.stats.day, todayReviewed: 2 });
+  });
+
+  it("routes mnemonic generation through the shared queue when one is supplied", async () => {
+    await handleLearningMessage(learn);
+    await chrome.storage.local.set({
+      settings: {
+        providers: [
+          {
+            id: "p1",
+            name: "P1",
+            kind: "custom",
+            baseURL: "http://127.0.0.1:9",
+            apiKey: "k",
+            model: "m",
+            createdAt: 1,
+          },
+        ],
+        activeProviderId: "p1",
+      },
+    });
+    const enqueue = vi.fn().mockRejectedValue(new Error("queue unavailable"));
+    const queue = { enqueue } as unknown as RequestQueue;
+
+    const response = await handleLearningMessage(
+      { type: "mnemonic", id: "en:outlive" },
+      { queue },
+    );
+
+    expect(response).toEqual({ ok: false, reason: "failed" });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: -1, priority: "chat", run: expect.any(Function) }),
+    );
   });
 
   it("undoes the last review through the background and persists the rollback", async () => {

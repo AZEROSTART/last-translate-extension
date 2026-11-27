@@ -389,6 +389,8 @@ export interface ReviewAnswerMessage {
 export interface ReviewAnswerResponse {
   ok: true;
   word: LearningWord;
+  /** The persisted stats after this answer; lets the panel tell the truth now. */
+  stats?: LearningStats;
 }
 
 /** Side panel → background: undo the most recent review, at most once. */

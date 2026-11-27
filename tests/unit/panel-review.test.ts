@@ -677,6 +677,111 @@ describe("lesson", () => {
     expect(root.querySelector(".ilmt-review-next")).toBeTruthy();
     view.destroy();
   });
+
+  it("lets a remembered card be corrected to a miss before the one write", async () => {
+    const mnemonic = vi.fn().mockResolvedValue({
+      ok: true as const,
+      mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+    });
+    const { root, view, answer } = mountStored([word(1), word(2)], {
+      mnemonic,
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+    pick(root, "good");
+
+    const regrade = root.querySelector<HTMLButtonElement>(".ilmt-review-regrade")!;
+    expect(regrade.textContent).toBe("其实没想起来");
+    regrade.click();
+
+    expect(answer).not.toHaveBeenCalled();
+    expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-scene")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-regrade")?.textContent).toBe("其实想起来了");
+    nextCard(root);
+
+    await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "review-answer", id: "en:word1", grade: "again" }),
+    );
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    view.destroy();
+  });
+
+  it("lets a missed card be corrected to remembered before the one write", async () => {
+    const mnemonic = vi.fn().mockResolvedValue({
+      ok: true as const,
+      mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+    });
+    const { root, view, answer } = mountStored([word(1), word(2)], {
+      mnemonic,
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+    pick(root, "again");
+    await vi.waitFor(() => expect(mnemonic).toHaveBeenCalledTimes(1));
+
+    const regrade = root.querySelector<HTMLButtonElement>(".ilmt-review-regrade")!;
+    expect(regrade.textContent).toBe("其实想起来了");
+    regrade.click();
+
+    expect(answer).not.toHaveBeenCalled();
+    expect(root.querySelector(".ilmt-review-scene")).toBeNull();
+    expect(root.querySelector(".ilmt-review-regrade")?.textContent).toBe("其实没想起来");
+    await vi.waitFor(() => expect(root.querySelector(".ilmt-review-scene")).toBeNull());
+    nextCard(root);
+
+    await vi.waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "review-answer", id: "en:word1", grade: "good" }),
+    );
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    view.destroy();
+  });
+
+  it("keeps the spelling feedback through the lesson and clears it on the next card", async () => {
+    const entry = word(1, {
+      surface: "outlive",
+      reviewsCount: 1,
+      glosses: [{ lang: "zh", meaning: "比……存在得更久", source: "translation", at: NOW }],
+      contexts: [
+        {
+          sentence: "Small tools often outlive their competitors.",
+          pageUrl: "https://x.test/a",
+          at: NOW,
+        },
+      ],
+    });
+    const { root, view } = mount([entry, word(2)], {
+      mnemonic: vi.fn().mockResolvedValue({
+        ok: true as const,
+        mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+      }),
+      effect: () => stageEffect(),
+    });
+    await view.refresh();
+
+    const input = root.querySelector<HTMLInputElement>(".ilmt-review-input")!;
+    input.value = "outliv";
+    input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLButtonElement>(".ilmt-review-reveal")!.click();
+    expect(root.querySelector(".ilmt-review-feedback")?.textContent).toBe("你写的是「outliv」");
+
+    pick(root, "good");
+    expect(root.querySelector(".ilmt-review-lesson")).toBeTruthy();
+    expect(root.querySelector(".ilmt-review-feedback")?.textContent).toBe("你写的是「outliv」");
+
+    nextCard(root);
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-word")?.textContent).toBe("word2");
+    });
+    expect(root.querySelector(".ilmt-review-feedback")).toBeNull();
+    view.destroy();
+  });
 });
 
 describe("library shelf and the three endings", () => {
@@ -826,7 +931,7 @@ describe("library shelf and the three endings", () => {
     expect(root.querySelector(".ilmt-review-done-summary")?.textContent).toBe("1 个没想起来");
     expect(root.textContent).not.toContain("认识");
     expect(root.textContent).not.toContain("明日还有");
-    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 0 个");
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 3 个");
     view.destroy();
   });
 
@@ -1340,6 +1445,62 @@ describe("today and coming back", () => {
     await view.refresh();
     expect(root.querySelector(".ilmt-review-return")).toBeNull();
     expect(root.querySelector(".ilmt-review-shelf")?.textContent).toBe("已收录 1 个");
+    view.destroy();
+  });
+  it("takes the answer's stats and drops the comeback line on the same frame", async () => {
+    const words = [word(1)];
+    const current = state(words, { day: daysAgo(5), todayReviewed: 4 });
+    const getState = vi.fn(async () => current);
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState,
+      answer: async () => ({
+        ok: true as const,
+        word: { ...words[0], dueAt: NOW + 24 * HOUR, updatedAt: NOW },
+        stats: { day: today, todayReviewed: 9 },
+      }),
+      now: () => NOW,
+    });
+    await view.refresh();
+    expect(root.querySelector(".ilmt-review-return")).toBeTruthy();
+    const readsBefore = getState.mock.calls.length;
+
+    pick(root, "good");
+    nextCard(root);
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("1 个都过完了");
+    });
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 9 个");
+    expect(root.querySelector(".ilmt-review-return")).toBeNull();
+    // No second read: the frame itself has to be honest.
+    expect(getState).toHaveBeenCalledTimes(readsBefore);
+    view.destroy();
+  });
+
+  it("adds today's answer itself when the response omits stats", async () => {
+    const words = [word(1)];
+    const current = state(words, { day: today, todayReviewed: 2 });
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const view = mountReview(root, {
+      getState: async () => current,
+      answer: async () => ({
+        ok: true as const,
+        word: { ...words[0], dueAt: NOW + 24 * HOUR, updatedAt: NOW },
+      }),
+      now: () => NOW,
+    });
+    await view.refresh();
+
+    pick(root, "good");
+    nextCard(root);
+
+    await vi.waitFor(() => {
+      expect(root.querySelector(".ilmt-review-done-title")?.textContent).toBe("1 个都过完了");
+    });
+    expect(root.querySelector(".ilmt-review-done-today")?.textContent).toBe("今天已复习 3 个");
     view.destroy();
   });
 });

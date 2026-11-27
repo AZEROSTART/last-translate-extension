@@ -20,6 +20,13 @@ import type {
   WordMnemonic,
 } from "../shared/types";
 import { runLearningUpdate } from "./storage-queue";
+import type { RequestQueue } from "./queue";
+
+/**
+ * Mnemonic work belongs to no tab: a negative key keeps it clear of real tab
+ * ids and of the chat port keys (-2, -3, ...) so tab cancellation cannot drop it.
+ */
+const MNEMONIC_QUEUE_KEY = -1;
 
 export interface MnemonicDeps {
   getLearning(): Promise<LearningState>;
@@ -27,6 +34,8 @@ export interface MnemonicDeps {
   complete(cfg: ProviderConfig, req: CompletionRequest): Promise<CompletionResult>;
   save(id: string, mnemonic: WordMnemonic): Promise<void>;
   now(): number;
+  /** When present, the completion waits behind the shared global caps. */
+  queue?: Pick<RequestQueue, "enqueue">;
 }
 
 /** Real deps; tests inject their own so nothing touches chrome.storage. */
@@ -68,24 +77,35 @@ export async function generateMnemonic(
   const provider = activeProvider(settings);
   if (!provider) return { ok: false, reason: "no-provider" };
 
+  const preferred = settings.reviewAnswerLang?.trim() || "";
+  const lang = preferred || word.glossLang || settings.targetLang || "zh-CN";
   const primary =
-    word.glosses.find((gloss) => gloss.lang === word.glossLang) ?? word.glosses[0];
-  const lang = word.glossLang || settings.targetLang || "zh-CN";
+    (preferred ? word.glosses.find((gloss) => gloss.lang === preferred) : undefined) ??
+    word.glosses.find((gloss) => gloss.lang === word.glossLang) ??
+    word.glosses[0];
 
   let caption = "";
   try {
-    const result = await deps.complete(provider, {
-      messages: buildMnemonicPrompt({
-        surface: word.surface,
-        termLang: word.termLang,
-        pos: word.pos,
-        meaning: primary?.meaning ?? "",
-        sentence: word.contexts[0]?.sentence ?? "",
-        lang,
-      }),
+    const messages = buildMnemonicPrompt({
+      surface: word.surface,
+      termLang: word.termLang,
+      pos: word.pos,
+      meaning: primary?.meaning ?? "",
+      sentence: word.contexts[0]?.sentence ?? "",
+      lang,
+    });
+    const request: CompletionRequest = {
+      messages,
       temperature: 0.8,
       maxTokens: 120,
-    });
+    };
+    const result = deps.queue
+      ? await deps.queue.enqueue({
+          tabId: MNEMONIC_QUEUE_KEY,
+          priority: "chat",
+          run: (signal) => deps.complete(provider, { ...request, signal }),
+        })
+      : await deps.complete(provider, request);
     caption = sanitizeCaption(result.text);
   } catch {
     return { ok: false, reason: "failed" };

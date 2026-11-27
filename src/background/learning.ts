@@ -18,8 +18,14 @@ import type {
   ReviewUndoResponse,
 } from "../shared/types";
 import { createMnemonicDeps, generateMnemonic } from "./mnemonic";
+import type { RequestQueue } from "./queue";
 import { runLearningUpdate } from "./storage-queue";
 import { refreshBadge } from "./badge";
+
+export interface LearningDeps {
+  /** Shared scheduler; keeps mnemonic work behind the same global caps. */
+  queue?: RequestQueue;
+}
 
 const LEARNING_TYPES = new Set([
   "learn-word",
@@ -39,7 +45,10 @@ export function isLearningMessageType(type: unknown): boolean {
  * Handle one learning runtime message. Writes are serialized; reads may race.
  * Unknown types return null so the caller can fall through to other handlers.
  */
-export async function handleLearningMessage(message: unknown): Promise<unknown> {
+export async function handleLearningMessage(
+  message: unknown,
+  deps: LearningDeps = {},
+): Promise<unknown> {
   if (!message || typeof message !== "object") return null;
   const msg = message as { type?: unknown };
 
@@ -78,12 +87,16 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
     case "review-answer": {
       const input = msg as ReviewAnswerMessage;
       const now = Date.now();
-      const word = await runLearningUpdate((state) => {
+      const answered = await runLearningUpdate((state) => {
         const next = applyReviewAnswer(state, input, now);
-        return { state: next.state, result: next.word };
+        return { state: next.state, result: { word: next.word, stats: next.state.stats } };
       });
-      if (!word) return { ok: false };
-      const response: ReviewAnswerResponse = { ok: true, word };
+      if (!answered.word) return { ok: false };
+      const response: ReviewAnswerResponse = {
+        ok: true,
+        word: answered.word,
+        stats: answered.stats,
+      };
       void refreshBadge();
       return response;
     }
@@ -111,7 +124,10 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
       if (typeof input.id !== "string" || input.id.length === 0) {
         return { ok: false, reason: "unknown-word" };
       }
-      return generateMnemonic(input.id, createMnemonicDeps());
+      return generateMnemonic(
+        input.id,
+        createMnemonicDeps(deps.queue ? { queue: deps.queue } : {}),
+      );
     }
     default:
       return null;

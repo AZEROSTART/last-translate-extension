@@ -328,8 +328,14 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
       .finally(() => {
         sceneRequests.delete(word.id);
         // Turning the page while the model is still thinking must not pull
-        // the next card back to the lesson it just left.
-        if (!destroyed && state.phase === "lesson" && current()?.id === word.id) {
+        // the next card back to the lesson it just left. A late answer also
+        // must not re-render a lesson the user already graded "good".
+        if (
+          !destroyed &&
+          state.phase === "lesson" &&
+          pendingGrade === "again" &&
+          current()?.id === word.id
+        ) {
           const focusedNext = container.querySelector(".ilmt-review-next:focus") !== null;
           render();
           if (focusedNext) container.querySelector<HTMLButtonElement>(".ilmt-review-next")?.focus();
@@ -444,10 +450,47 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     next.addEventListener("click", () => {
       if (current()?.id === word.id) void advance();
     });
+    // A quiet correction, below the one commit button: the grade is a guess,
+    // and saying so after seeing the answer is the point of the lesson.
+    const regrade = node(
+      "button",
+      "ilmt-review-regrade",
+      pendingGrade === "good" ? "其实没想起来" : "其实想起来了",
+    );
+    regrade.type = "button";
+    regrade.disabled = state.busy;
+    regrade.addEventListener("click", () => {
+      if (
+        state.phase !== "lesson" ||
+        state.busy ||
+        destroyed ||
+        current()?.id !== word.id
+      ) {
+        return;
+      }
+      pendingGrade = pendingGrade === "good" ? "again" : "good";
+      state.error = null;
+      render();
+      container.querySelector<HTMLButtonElement>(".ilmt-review-next")?.focus();
+    });
     if (state.error) actions.appendChild(node("p", "ilmt-review-error", state.error));
-    actions.appendChild(next);
+    actions.append(next, regrade);
     lesson.appendChild(actions);
     card.appendChild(lesson);
+  }
+
+  /** The typed spelling, shown next to the answer it was checked against. */
+  function renderSpellingFeedback(word: LearningWord, parent: HTMLElement): void {
+    if (!draft.trim()) return;
+    const typed = normalizeSurface(draft.normalize("NFKC"));
+    const match = typed === normalizeSurface(word.surface.normalize("NFKC"));
+    const feedback = node(
+      "p",
+      "ilmt-review-feedback",
+      match ? "拼写一致" : `你写的是「${draft.trim()}」`,
+    );
+    feedback.setAttribute("role", "status");
+    parent.appendChild(feedback);
   }
 
   function renderSpellingPrompt(word: LearningWord, card: HTMLElement): void {
@@ -537,17 +580,11 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     } else if (asking) {
       renderSpellingPrompt(word, card);
     } else if (state.phase === "revealed") {
-      if (recall && draft.trim()) {
-        const typed = normalizeSurface(draft.normalize("NFKC"));
-        const match = typed === normalizeSurface(word.surface.normalize("NFKC"));
-        const feedback = node("p", "ilmt-review-feedback",
-          match ? "拼写一致" : `你写的是「${draft.trim()}」`);
-        feedback.setAttribute("role", "status");
-        card.appendChild(feedback);
-      }
+      if (recall && draft.trim()) renderSpellingFeedback(word, card);
       renderMeaning(word, card);
       renderChoices(card);
     } else {
+      if (recall && draft.trim()) renderSpellingFeedback(word, card);
       renderLesson(word, card);
     }
     container.appendChild(card);
@@ -813,9 +850,16 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // without waiting for the storage change listener.
     const updated = response.word ?? word;
     if (state.all) {
+      const day = localDay(deps.now());
+      const stats =
+        response.stats ??
+        (state.all.stats.day === day
+          ? { day, todayReviewed: state.all.stats.todayReviewed + 1 }
+          : { day, todayReviewed: 1 });
       state.all = {
         ...state.all,
         words: state.all.words.map((item) => (item.id === updated.id ? updated : item)),
+        stats,
       };
     }
     if (updated.status === "mastered" && !state.graduated.some((item) => item.id === updated.id)) {

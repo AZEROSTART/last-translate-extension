@@ -868,6 +868,31 @@ button:focus-visible {
   cursor: pointer;
 }
 
+/* Correcting the grade is quiet: a text button under the one commit button. */
+.ilmt-review-regrade {
+  appearance: none;
+  align-self: center;
+  min-height: 32px;
+  border: 0;
+  padding: 0 4px;
+  background: none;
+  color: var(--ilmt-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-review-regrade:hover:not(:disabled) {
+  color: var(--ilmt-text);
+}
+
+.ilmt-review-regrade:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* --- lesson: the one screen that teaches, after 没想起来 --- */
 .ilmt-review-lesson {
   display: flex;

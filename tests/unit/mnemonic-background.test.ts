@@ -138,4 +138,86 @@ describe("generateMnemonic", () => {
     const system = req.messages.find((m: { role: string }) => m.role === "system").content as string;
     expect(system).toContain("日语");
   });
+
+  it("prefers settings.reviewAnswerLang for the caption and its meaning", async () => {
+    const d = deps({
+      getLearning: vi.fn().mockResolvedValue(
+        stateWith(
+          word({
+            glossLang: "zh-CN",
+            glosses: [
+              { lang: "zh-CN", meaning: "比……存在得更久", source: "translation", at: 1 },
+              { lang: "ja", meaning: "生き残る", source: "translation", at: 1 },
+            ],
+          }),
+        ),
+      ),
+      getSettings: vi
+        .fn()
+        .mockResolvedValue(settings({ reviewAnswerLang: "ja", targetLang: "zh-CN" })),
+    });
+
+    await generateMnemonic("en:outlive", d);
+
+    const req = (d.complete as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    const system = req.messages.find((m: { role: string }) => m.role === "system").content as string;
+    const user = req.messages.find((m: { role: string }) => m.role === "user").content as string;
+    expect(system).toContain("日语");
+    expect(user).toContain("生き残る");
+    expect(user).not.toContain("比……存在得更久");
+  });
+
+  it("falls back to the word's gloss when the preferred language has no gloss", async () => {
+    const d = deps({
+      getLearning: vi.fn().mockResolvedValue(
+        stateWith(
+          word({
+            glossLang: "zh-CN",
+            glosses: [
+              { lang: "zh-CN", meaning: "比……存在得更久", source: "translation", at: 1 },
+              { lang: "ja", meaning: "生き残る", source: "translation", at: 1 },
+            ],
+          }),
+        ),
+      ),
+      getSettings: vi
+        .fn()
+        .mockResolvedValue(settings({ reviewAnswerLang: "fr", targetLang: "zh-CN" })),
+    });
+
+    await generateMnemonic("en:outlive", d);
+
+    const req = (d.complete as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    const system = req.messages.find((m: { role: string }) => m.role === "system").content as string;
+    const user = req.messages.find((m: { role: string }) => m.role === "user").content as string;
+    expect(system).toContain("法语");
+    expect(user).toContain("比……存在得更久");
+  });
+
+  it("waits in the shared queue and forwards its abort signal", async () => {
+    const controller = new AbortController();
+    const complete = vi.fn(
+      async (_cfg: unknown, req: { signal?: AbortSignal }) => {
+        expect(req.signal).toBe(controller.signal);
+        return { text: "小工具活过了大公司，猫把它抱进怀里" };
+      },
+    );
+    const enqueue = vi.fn(
+      async (task: { run(signal: AbortSignal): Promise<unknown> }) =>
+        task.run(controller.signal),
+    );
+    const d = deps({
+      complete,
+      queue: { enqueue } as unknown as NonNullable<MnemonicDeps["queue"]>,
+    });
+
+    const res = await generateMnemonic("en:outlive", d);
+
+    expect(res.ok).toBe(true);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: -1, priority: "chat" }),
+    );
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
 });
