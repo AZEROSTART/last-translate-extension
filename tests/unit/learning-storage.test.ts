@@ -4,6 +4,7 @@ import {
   UNDO_WINDOW_MS,
   applyReviewAnswer,
   daysSinceDay,
+  deleteWord,
   emptyLearningState,
   getLearning,
   localDay,
@@ -379,5 +380,35 @@ describe("storage", () => {
 
     await chrome.storage.local.set({ learning: { words: "broken" } });
     expect((await getLearning()).words).toEqual([]);
+  });
+});
+
+describe("deleteWord", () => {
+  it("removes only the matched word and preserves version, stats and the rest", () => {
+    const state: LearningState = {
+      version: 1,
+      words: [makeWord(1), makeWord(2)],
+      stats: { day: "2026-01-01", todayReviewed: 3 },
+      updatedAt: NOW,
+    };
+
+    const result = deleteWord(state, "en:word1", NOW + 100);
+
+    expect(result.deleted).toBe(true);
+    expect(result.state.version).toBe(1);
+    expect(result.state.stats).toEqual(state.stats);
+    expect(result.state.updatedAt).toBe(NOW + 100);
+    expect(result.state.words.map((word) => word.id)).toEqual(["en:word2"]);
+    // The input state is not mutated.
+    expect(state.words).toHaveLength(2);
+  });
+
+  it("returns the unchanged state reference for an unknown id", () => {
+    const state: LearningState = { ...emptyLearningState(), words: [makeWord(1)] };
+
+    const result = deleteWord(state, "en:missing", NOW);
+
+    expect(result.deleted).toBe(false);
+    expect(result.state).toBe(state);
   });
 });

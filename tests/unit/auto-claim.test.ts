@@ -96,3 +96,73 @@ describe("autoClaimRequest", () => {
     expect(message?.sentence).toBe("outlive");
   });
 });
+
+describe("firstSentence markdown, markers and abbreviations", () => {
+  it("strips bold and inline-code wrappers", () => {
+    expect(firstSentence("**outlive**：比……存在得更久。例：")).toBe("outlive：比……存在得更久");
+    expect(firstSentence("`outlive`：比……存在得更久。")).toBe("outlive：比……存在得更久");
+  });
+
+  it("strips numbered list markers", () => {
+    expect(firstSentence("1. 意思是比……存在得更久。例：")).toBe("意思是比……存在得更久");
+  });
+
+  it("strips leading POS labels, bare and parenthesized", () => {
+    expect(firstSentence("v. 比……存在得更久。")).toBe("比……存在得更久");
+    expect(firstSentence("(adj.) 持久的。")).toBe("持久的");
+  });
+
+  it("does not split on inline abbreviations", () => {
+    expect(firstSentence("e.g. 比如小工具。")).toBe("e.g. 比如小工具");
+    expect(firstSentence("表示举例（e.g. 苹果）。下一句。")).toBe("表示举例（e.g. 苹果）");
+  });
+
+  it("does not split decimals", () => {
+    expect(firstSentence("Version 3.5 works. Next.")).toBe("Version 3.5 works");
+  });
+
+  it("preserves snake_case while stripping italic underscores", () => {
+    expect(firstSentence("Use snake_case_here in this line. Next.")).toBe(
+      "Use snake_case_here in this line",
+    );
+    expect(firstSentence("_softly_ does it. Next.")).toBe("softly does it");
+  });
+
+  it("returns empty for marker-only input", () => {
+    expect(firstSentence("1. ")).toBe("");
+    expect(firstSentence("v. ")).toBe("");
+  });
+});
+
+describe("autoClaimRequest language gating", () => {
+  const base = {
+    quote: "outlive",
+    termLang: "en",
+    answer: "比……存在得更久。",
+    paragraph: "Small tools often outlive their larger competitors.",
+    pageUrl: "https://example.com/a",
+    glossLang: "zh-CN",
+  };
+
+  it("rejects a term whose language is the answer language", () => {
+    expect(autoClaimRequest({ ...base, termLang: "zh", glossLang: "zh-CN" })).toBeNull();
+    expect(autoClaimRequest({ ...base, termLang: "en-US", glossLang: "en" })).toBeNull();
+  });
+
+  it("rejects a language outside the configured learning languages", () => {
+    expect(
+      autoClaimRequest({ ...base, quote: "生きる", termLang: "ja", learningLangs: ["en"] }),
+    ).toBeNull();
+  });
+
+  it("accepts a matching language prefix", () => {
+    const message = autoClaimRequest({
+      ...base,
+      quote: "sobrevivir",
+      termLang: "es-MX",
+      learningLangs: ["en", "es"],
+    });
+    expect(message?.termLang).toBe("es-MX");
+    expect(message?.surface).toBe("sobrevivir");
+  });
+});

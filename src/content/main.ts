@@ -97,6 +97,7 @@ let targetLang = DEFAULT_TARGET_LANG;
 let minParagraphLength = DEFAULT_SETTINGS.minParagraphLength;
 let contentOnly = DEFAULT_SETTINGS.contentOnly;
 let learningLangs: string[] = [...DEFAULT_SETTINGS.learningLangs];
+let glossaryEnabled = DEFAULT_SETTINGS.glossaryEnabled;
 let effectSettings: EffectSettings = DEFAULT_SETTINGS.mascot;
 let registry = new ParagraphRegistry();
 const gloss = createGlossController(document, {
@@ -456,6 +457,7 @@ async function collectAndObserve(generation: number): Promise<void> {
   minParagraphLength = prefs.minParagraphLength;
   contentOnly = prefs.contentOnly;
   learningLangs = prefs.learningLangs;
+  glossaryEnabled = prefs.glossaryEnabled;
   effectSettings = prefs.mascot;
 
   const nodes = await collectParagraphs(body, {
@@ -484,7 +486,13 @@ async function collectAndObserve(generation: number): Promise<void> {
     );
   }
 
-  registerScannedNodes(nodes.slice(0, MAX_PARAGRAPHS));
+  const kept = nodes.slice(0, MAX_PARAGRAPHS);
+  if (kept.length === 0) {
+    setActiveBannerText("当前页面无需翻译");
+    return;
+  }
+  setActiveBannerText("翻译已开启");
+  registerScannedNodes(kept);
 }
 
 function startVisibilityObserver(): void {
@@ -513,6 +521,8 @@ function stopVisibilityObserver(): void {
 function registerScannedNodes(nodes: ParagraphNode[]): void {
   for (const node of nodes) registry.add(node);
   if (nodes.length === 0) return;
+  // New content makes the "nothing to translate" verdict stale.
+  if (activeBannerText() === "当前页面无需翻译") setActiveBannerText("翻译已开启");
   startVisibilityObserver();
 
   // One piece root can own several paragraph ids; observing it once reports
@@ -1193,16 +1203,30 @@ function showActiveBanner(): void {
 
 /**
  * Make the hover affordance discoverable: "no annotations this time" is
- * otherwise indistinguishable from a broken feature.
+ * otherwise indistinguishable from a broken feature. When annotations are
+ * disabled (or no learning language is configured) the copy stays plain: a
+ * claim about hover cards would be false.
  */
 function updateActiveBannerHint(): void {
-  const text = activeBanner?.querySelector(".ilmt-active-text");
-  if (!text) return;
+  if (!glossaryEnabled || learningLangs.length === 0) {
+    setActiveBannerText("翻译已开启");
+    return;
+  }
   const count = gloss.count();
-  text.textContent =
+  setActiveBannerText(
     count > 0
       ? `翻译已开启 · ${count} 个词可悬停`
-      : "翻译已开启 · 本次没有可悬停的注释";
+      : "翻译已开启 · 本次没有可悬停的注释",
+  );
+}
+
+function activeBannerText(): string | null {
+  return activeBanner?.querySelector(".ilmt-active-text")?.textContent ?? null;
+}
+
+function setActiveBannerText(copy: string): void {
+  const text = activeBanner?.querySelector(".ilmt-active-text");
+  if (text) text.textContent = copy;
 }
 
 function removeActiveBanner(): void {
@@ -1323,6 +1347,7 @@ interface CollectPrefs {
   minParagraphLength: number;
   contentOnly: boolean;
   learningLangs: string[];
+  glossaryEnabled: boolean;
   mascot: EffectSettings;
 }
 
@@ -1337,6 +1362,7 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
       minParagraphLength: s.minParagraphLength,
       contentOnly: s.contentOnly,
       learningLangs: s.learningLangs,
+      glossaryEnabled: s.glossaryEnabled !== false,
       mascot: s.mascot,
     };
   } catch {
@@ -1346,6 +1372,7 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
       minParagraphLength: DEFAULT_SETTINGS.minParagraphLength,
       contentOnly: DEFAULT_SETTINGS.contentOnly,
       learningLangs: [...DEFAULT_SETTINGS.learningLangs],
+      glossaryEnabled: DEFAULT_SETTINGS.glossaryEnabled,
       mascot: DEFAULT_SETTINGS.mascot,
     };
   }

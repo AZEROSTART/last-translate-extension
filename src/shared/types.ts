@@ -360,8 +360,20 @@ export interface LearnWordResponse {
   ok: true;
   /** false = the word was already in the store. */
   created: boolean;
+  /** Stable card id (`termLang:surface`); lets the panel undo the claim. */
+  id?: string;
   dueAt: number | null;
   nextDueLabel: string;
+}
+
+/** Side panel → background: remove one claimed word (inline undo). */
+export interface DeleteWordMessage {
+  type: "delete-word";
+  id: string;
+}
+
+export interface DeleteWordResponse {
+  ok: boolean;
 }
 
 /** Side panel → background: record one self-assessment. */

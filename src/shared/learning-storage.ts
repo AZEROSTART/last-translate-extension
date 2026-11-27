@@ -465,6 +465,27 @@ export function undoReviewAnswer(
   return { state: nextState, word };
 }
 
+export interface DeleteResult {
+  state: LearningState;
+  deleted: boolean;
+}
+
+/**
+ * Remove one card by id. An unknown id is a no-op that keeps the same state
+ * reference, so a stale undo cannot rewrite (or corrupt) the store.
+ */
+export function deleteWord(state: LearningState, id: string, now: number): DeleteResult {
+  if (!state.words.some((word) => word.id === id)) return { state, deleted: false };
+  return {
+    state: {
+      ...state,
+      words: state.words.filter((word) => word.id !== id),
+      updatedAt: now,
+    },
+    deleted: true,
+  };
+}
+
 export async function getLearning(): Promise<LearningState> {
   const stored = (await chrome.storage.local.get(LEARNING_KEY))[LEARNING_KEY];
   return parseLearningState(stored);

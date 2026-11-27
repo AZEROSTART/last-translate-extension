@@ -736,3 +736,70 @@ it("removes loading placeholders on restore", async () => {
   expect(document.querySelectorAll(".ilmt-tr")).toHaveLength(0);
   expect(document.querySelector("p")!.hasAttribute("data-ilmt-p")).toBe(false);
 });
+
+// --- truthful active banner (v7) ---
+
+it("says the page needs no translation and restores the plain banner when content appears", async () => {
+  await chrome.storage.local.clear();
+  document.body.innerHTML = `<p>abc</p>`;
+
+  const { runContentMain } = await import("../../src/content/main");
+  const { sent, connect } = captureConnectPort();
+  (globalThis as any).chrome.runtime.connect = connect;
+  runContentMain();
+  await (globalThis as any).__ilmtMain.translatePage();
+
+  expect(document.querySelector(".ilmt-active-text")?.textContent).toBe("当前页面无需翻译");
+
+  document.body.insertAdjacentHTML("beforeend", `<p>This is a long enough paragraph.</p>`);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+
+  expect(document.querySelector(".ilmt-active-text")?.textContent).toBe("翻译已开启");
+  expect(sent.some((message) => message.type === "translate")).toBe(true);
+});
+
+it("keeps the banner plain when glossary annotations are disabled", async () => {
+  await chrome.storage.local.clear();
+  await chrome.storage.local.set({
+    settings: { glossaryEnabled: false, minParagraphLength: 10, contentOnly: false },
+  });
+  document.body.innerHTML = `<p>Hello world from the page.</p>`;
+
+  const { deliver, request } = await startTranslating();
+  const id = request.items[0].id;
+  deliver({
+    type: "result",
+    requestId: request.requestId,
+    items: [{ id, text: "译文", glossary: [{ surface: "Hello", meaning: "你好" }] }],
+  });
+
+  expect(document.querySelector(".ilmt-active-text")?.textContent).toBe("翻译已开启");
+});
+
+it("keeps the banner plain when no learning language is configured", async () => {
+  // `normalizeLearningLangs` never returns an empty list, so this state can
+  // only be injected at the settings boundary.
+  vi.doMock("../../src/shared/storage", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../../src/shared/storage")>();
+    return {
+      ...original,
+      getSettings: async () => ({ ...original.DEFAULT_SETTINGS, learningLangs: [] }),
+    };
+  });
+  try {
+    document.body.innerHTML = `<p>Hello world from the page.</p>`;
+
+    const { deliver, request } = await startTranslating();
+    const id = request.items[0].id;
+    deliver({
+      type: "result",
+      requestId: request.requestId,
+      items: [{ id, text: "译文", glossary: [{ surface: "Hello", meaning: "你好" }] }],
+    });
+
+    expect(document.querySelector(".ilmt-active-text")?.textContent).toBe("翻译已开启");
+  } finally {
+    vi.doUnmock("../../src/shared/storage");
+    vi.resetModules();
+  }
+});

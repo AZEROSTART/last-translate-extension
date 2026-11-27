@@ -209,6 +209,46 @@ body {
   opacity: 0.6;
 }
 
+/* Inline "已收录 … 撤销" pill under an auto-claimed answer. */
+.msg-claim-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 6px;
+  background: var(--ilmt-surface-row);
+  color: var(--ilmt-muted);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.msg-claim-pill-text {
+  min-width: 0;
+  color: var(--ilmt-text);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.msg-claim-pill-undo {
+  appearance: none;
+  flex: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ilmt-accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.msg-claim-pill-undo:disabled {
+  color: var(--ilmt-muted);
+  cursor: default;
+}
+
 /* Inline error / interruption notice with a resend action. */
 .error-block {
   display: flex;

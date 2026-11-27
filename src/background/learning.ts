@@ -1,11 +1,14 @@
 import {
   applyReviewAnswer,
+  deleteWord,
   getLearning,
   mergeLearnedWord,
   undoReviewAnswer,
 } from "../shared/learning-storage";
 import { formatDueLabel } from "../shared/srs";
 import type {
+  DeleteWordMessage,
+  DeleteWordResponse,
   LearnWordMessage,
   LearnWordResponse,
   MnemonicMessage,
@@ -20,6 +23,7 @@ import { refreshBadge } from "./badge";
 
 const LEARNING_TYPES = new Set([
   "learn-word",
+  "delete-word",
   "review-answer",
   "review-undo",
   "get-learning",
@@ -50,11 +54,26 @@ export async function handleLearningMessage(message: unknown): Promise<unknown> 
       const response: LearnWordResponse = {
         ok: true,
         created: merged.created,
+        id: merged.word.id,
         dueAt: merged.word.dueAt,
         nextDueLabel: formatDueLabel(merged.word.dueAt, now),
       };
       void refreshBadge();
       return response;
+    }
+    case "delete-word": {
+      const input = msg as DeleteWordMessage;
+      if (typeof input.id !== "string" || input.id.length === 0) {
+        return { ok: false } satisfies DeleteWordResponse;
+      }
+      const now = Date.now();
+      const result = await runLearningUpdate((state) => {
+        const next = deleteWord(state, input.id, now);
+        return { state: next.state, result: next };
+      });
+      if (!result.deleted) return { ok: false } satisfies DeleteWordResponse;
+      void refreshBadge();
+      return { ok: true } satisfies DeleteWordResponse;
     }
     case "review-answer": {
       const input = msg as ReviewAnswerMessage;

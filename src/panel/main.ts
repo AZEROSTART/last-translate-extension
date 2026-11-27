@@ -24,7 +24,10 @@ import type {
   ChatClientToBackground,
   ChatContext,
   ChatMessage,
+  DeleteWordMessage,
+  DeleteWordResponse,
   ErrorCode,
+  LearnWordResponse,
   OpenOptionsMessage,
   RecentTranslationsMessage,
   SelectionContext,
@@ -969,14 +972,17 @@ function handleFinish(message: Extract<ChatBackgroundToClient, { type: "finish" 
   if (message.requestId !== currentRequestId) return;
   currentRequestId = null;
   streaming = false;
+  // Anchor the inline claim pill to the answer that just finished, not to
+  // whatever message happens to be last when the claim round-trip returns.
+  const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
   assistantEl = null;
   persistHistory();
   setInputEnabled(true);
-  void autoClaimExplanation();
+  void autoClaimExplanation(targetMsgEl);
 }
 
 /** After an "explain" answer, quietly claim short words/phrases. */
-async function autoClaimExplanation(): Promise<void> {
+async function autoClaimExplanation(targetMsgEl: HTMLElement | null): Promise<void> {
   const request = lastRequest;
   const current = session;
   if (!request?.explain || !request.quote || !current || !panelSettings) return;
@@ -992,15 +998,78 @@ async function autoClaimExplanation(): Promise<void> {
     pageUrl: current.pageUrl,
     pageTitle: current.pageTitle,
     glossLang: panelSettings.targetLang,
+    learningLangs: panelSettings.learningLangs,
   });
   if (!message) return;
 
+  const sessionId = current.id;
   try {
-    await chrome.runtime.sendMessage(message);
+    const response = (await chrome.runtime.sendMessage(message)) as LearnWordResponse | undefined;
+    // The answer may have been replaced (new send, new session, retry) while
+    // the claim was in flight; an undo pill on the wrong bubble is worse than
+    // showing none.
+    if (
+      !response?.ok ||
+      !response.created ||
+      typeof response.id !== "string" ||
+      !response.id ||
+      !targetMsgEl?.isConnected ||
+      session?.id !== sessionId ||
+      lastRequest !== request ||
+      streaming
+    ) {
+      return;
+    }
+    appendClaimPill(targetMsgEl, message.surface, response.id);
   } catch {
     // Auto-claim is a convenience; never interrupt the conversation.
     console.debug("auto-claim failed");
   }
+}
+
+/** Inline "已收录 … 撤销" chip on the assistant turn that caused the claim. */
+function appendClaimPill(msgEl: HTMLElement, surface: string, id: string): void {
+  const pill = document.createElement("div");
+  pill.className = "msg-claim-pill";
+  pill.setAttribute("role", "status");
+
+  const text = document.createElement("span");
+  text.className = "msg-claim-pill-text";
+  text.textContent = `已收录「${surface}」`;
+
+  const undo = document.createElement("button");
+  undo.type = "button";
+  undo.className = "msg-claim-pill-undo";
+  undo.textContent = "撤销";
+
+  let undoing = false;
+  undo.addEventListener("click", () => {
+    if (undoing) return;
+    undoing = true;
+    undo.disabled = true;
+    void (async () => {
+      try {
+        const response = (await chrome.runtime.sendMessage({
+          type: "delete-word",
+          id,
+        } satisfies DeleteWordMessage)) as DeleteWordResponse | undefined;
+        if (response?.ok) {
+          text.textContent = "已撤回收录";
+          undo.remove();
+          return;
+        }
+        text.textContent = "撤销失败";
+      } catch {
+        text.textContent = "撤销失败";
+      }
+      // Failure is retryable: release the lock and re-enable the button.
+      undoing = false;
+      undo.disabled = false;
+    })();
+  });
+
+  pill.append(text, undo);
+  msgEl.appendChild(pill);
 }
 
 function handleError(message: Extract<ChatBackgroundToClient, { type: "error" }>): void {

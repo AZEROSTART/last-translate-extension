@@ -1226,3 +1226,173 @@ it("switches from Review to Chat and prefills a follow-up quote", async () => {
   expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("后来选中的文字");
   expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
 });
+
+// --- inline auto-claim pill and undo (v7) ---
+
+function deleteWordCalls(chrome: { runtime: { sendMessage: unknown } }): any[] {
+  return (chrome.runtime.sendMessage as any).mock.calls
+    .map((call: unknown[]) => call[0] as { type?: string })
+    .filter((message: { type?: string }) => message?.type === "delete-word");
+}
+
+function stubLearnWord(
+  chrome: { runtime: { sendMessage: unknown } },
+  response: unknown,
+): void {
+  (chrome.runtime.sendMessage as any).mockImplementation(async (message: any) => {
+    if (message?.type === "learn-word") return response;
+    return undefined;
+  });
+}
+
+async function deliverExplainAnswer(
+  sent: unknown[],
+  messageListeners: Listener[],
+): Promise<void> {
+  const chat = sent.find((m) => (m as { type?: string }).type === "chat") as {
+    requestId: string;
+  };
+  messageListeners[0]({
+    type: "delta",
+    requestId: chat.requestId,
+    text: "比……存在得更久。例：Small tools outlive their larger competitors.",
+  });
+  messageListeners[0]({ type: "finish", requestId: chat.requestId });
+  await flush();
+}
+
+it("renders an inline claim pill after an explain answer is auto-claimed", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  stubLearnWord(chrome, {
+    ok: true,
+    created: true,
+    id: "en:outlive",
+    dueAt: 1,
+    nextDueLabel: "10 分钟后",
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  const pill = document.querySelector(".msg-claim-pill") as HTMLElement;
+  expect(pill).not.toBeNull();
+  expect(pill.getAttribute("role")).toBe("status");
+  expect(pill.querySelector(".msg-claim-pill-text")?.textContent).toBe("已收录「outlive」");
+  expect(pill.querySelector(".msg-claim-pill-undo")?.textContent).toBe("撤销");
+  expect(pill.closest(".msg--assistant")).not.toBeNull();
+});
+
+it("undoes an inline claim from the pill", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  (chrome.runtime.sendMessage as any).mockImplementation(async (message: any) => {
+    if (message?.type === "learn-word") {
+      return { ok: true, created: true, id: "en:outlive", dueAt: 1, nextDueLabel: "" };
+    }
+    if (message?.type === "delete-word") return { ok: true };
+    return undefined;
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  (document.querySelector(".msg-claim-pill-undo") as HTMLButtonElement).click();
+  await flush();
+
+  expect(deleteWordCalls(chrome)).toEqual([{ type: "delete-word", id: "en:outlive" }]);
+  expect(document.querySelector(".msg-claim-pill-text")?.textContent).toBe("已撤回收录");
+  expect(document.querySelector(".msg-claim-pill-undo")).toBeNull();
+});
+
+it("keeps the undo button retryable when deletion fails or rejects", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  let deletes = 0;
+  (chrome.runtime.sendMessage as any).mockImplementation(async (message: any) => {
+    if (message?.type === "learn-word") {
+      return { ok: true, created: true, id: "en:outlive", dueAt: 1, nextDueLabel: "" };
+    }
+    if (message?.type === "delete-word") {
+      deletes += 1;
+      if (deletes === 1) return { ok: false };
+      throw new Error("offline");
+    }
+    return undefined;
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  const undo = document.querySelector(".msg-claim-pill-undo") as HTMLButtonElement;
+  undo.click();
+  await flush();
+  expect(document.querySelector(".msg-claim-pill-text")?.textContent).toBe("撤销失败");
+  expect(undo.disabled).toBe(false);
+
+  undo.click();
+  await flush();
+  expect(document.querySelector(".msg-claim-pill-text")?.textContent).toBe("撤销失败");
+  expect(undo.disabled).toBe(false);
+  expect(document.querySelector(".msg-claim-pill-undo")).not.toBeNull();
+});
+
+it("does not render a pill when the word already existed", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  stubLearnWord(chrome, {
+    ok: true,
+    created: false,
+    id: "en:outlive",
+    dueAt: 1,
+    nextDueLabel: "10 分钟后",
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  expect(learnWordCalls(chrome)).toHaveLength(1);
+  expect(document.querySelector(".msg-claim-pill")).toBeNull();
+});
+
+it("does not render a pill when the conversation changed while the claim was in flight", async () => {
+  const { chrome, sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  let release!: (value: unknown) => void;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  (chrome.runtime.sendMessage as any).mockImplementation(async (message: any) => {
+    if (message?.type === "learn-word") return gate;
+    return undefined;
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  // Start a new turn before the claim round-trip lands.
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "新的问题";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  release({ ok: true, created: true, id: "en:outlive", dueAt: 1, nextDueLabel: "" });
+  await flush();
+
+  expect(document.querySelector(".msg-claim-pill")).toBeNull();
+});
+
+it("skips claiming when the term language matches the answer language", async () => {
+  const { chrome, sent, messageListeners } = installChrome({
+    pendingQuote: { ...explainQuote, termLang: "zh-CN" },
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  expect(learnWordCalls(chrome)).toHaveLength(0);
+});
+
+it("skips claiming a language that is not a learning target", async () => {
+  const { chrome, sent, messageListeners } = installChrome({
+    pendingQuote: { ...explainQuote, text: "生きる", termLang: "ja" },
+  });
+  await boot();
+  await flush();
+  await deliverExplainAnswer(sent, messageListeners);
+
+  expect(learnWordCalls(chrome)).toHaveLength(0);
+});

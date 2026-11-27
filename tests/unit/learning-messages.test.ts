@@ -137,3 +137,33 @@ describe("handleLearningMessage", () => {
     expect(await handleLearningMessage(null)).toBeNull();
   });
 });
+
+describe("inline claim undo", () => {
+  it("returns the card id from learn-word", async () => {
+    const response = (await handleLearningMessage(learn)) as { id?: string };
+    expect(response.id).toBe("en:outlive");
+  });
+
+  it("treats delete-word as a learning message", () => {
+    expect(isLearningMessageType("delete-word")).toBe(true);
+  });
+
+  it("deletes a stored word through delete-word", async () => {
+    await handleLearningMessage(learn);
+
+    expect(await handleLearningMessage({ type: "delete-word", id: "en:outlive" })).toEqual({
+      ok: true,
+    });
+    expect((await getLearning()).words).toHaveLength(0);
+  });
+
+  it("returns ok:false for an unknown or empty delete id", async () => {
+    await handleLearningMessage(learn);
+
+    expect(await handleLearningMessage({ type: "delete-word", id: "en:missing" })).toEqual({
+      ok: false,
+    });
+    expect(await handleLearningMessage({ type: "delete-word", id: "" })).toEqual({ ok: false });
+    expect((await getLearning()).words).toHaveLength(1);
+  });
+});
