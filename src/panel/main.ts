@@ -12,7 +12,8 @@
  * than blocking the conversation.
  */
 
-import { appendMessage, buildChatContext, createSession } from "./session";
+import { appendMessage, buildChatContext, buildChatHistory, createSession } from "./session";
+import { renderMarkdown } from "./markdown";
 import { autoClaimRequest } from "../shared/auto-claim";
 import { mountReview, type ReviewView } from "./review";
 import { getSettings, saveSettings } from "../shared/storage";
@@ -125,6 +126,7 @@ let providerModel: HTMLElement;
 let thinkingToggle: HTMLLabelElement;
 let thinkingInput: HTMLInputElement;
 let providerSettingsBtn: HTMLButtonElement;
+let providerNewSession: HTMLButtonElement;
 let assistantEl: HTMLElement | null = null;
 
 // --- view switching (chat | review) ---
@@ -302,7 +304,20 @@ function buildDom(): void {
   providerSettingsBtn.textContent = "设置";
   providerSettingsBtn.hidden = true;
   providerSettingsBtn.addEventListener("click", handleOpenOptions);
-  providerBar.append(providerSelect, providerModel, thinkingToggle, providerSettingsBtn);
+
+  providerNewSession = document.createElement("button");
+  providerNewSession.type = "button";
+  providerNewSession.className = "provider-new-session";
+  providerNewSession.textContent = "新会话";
+  providerNewSession.addEventListener("click", handleManualNewSession);
+
+  providerBar.append(
+    providerSelect,
+    providerModel,
+    thinkingToggle,
+    providerSettingsBtn,
+    providerNewSession,
+  );
   chatView.appendChild(providerBar);
 
   msgList = document.createElement("div");
@@ -383,16 +398,40 @@ function injectStyles(): void {
 function renderAll(): void {
   msgList.replaceChildren();
   assistantEl = null;
-  if (!session) return;
-  for (const message of session.messages) {
-    const el = renderMessage(message);
+  if (!session || session.messages.length === 0) {
+    renderChatEmpty();
+    updateNewSessionButton();
+    return;
+  }
+
+  const lastIndex = session.messages.length - 1;
+  session.messages.forEach((message, index) => {
+    const isStreaming = streaming && index === lastIndex && message.role === "assistant";
+    const el = renderMessage(message, { isStreaming });
     msgList.appendChild(el);
     if (message.role === "assistant") assistantEl = el.querySelector(".msg-body");
-  }
+  });
+  updateNewSessionButton();
   msgList.scrollTop = msgList.scrollHeight;
 }
 
-function renderMessage(message: SessionMessage): HTMLElement {
+function renderChatEmpty(): void {
+  const empty = document.createElement("div");
+  empty.className = "chat-empty";
+  const primary = document.createElement("p");
+  primary.className = "chat-empty-primary";
+  primary.textContent = "选中文字点「解释」或按 ⌥Q，也可以直接提问";
+  const secondary = document.createElement("p");
+  secondary.className = "chat-empty-secondary";
+  secondary.textContent = "当前页面的标题与已译段落会自动作为上下文";
+  empty.append(primary, secondary);
+  msgList.appendChild(empty);
+}
+
+function renderMessage(
+  message: SessionMessage,
+  options: { isStreaming?: boolean } = {},
+): HTMLElement {
   const el = document.createElement("div");
   el.className = `msg msg--${message.role}`;
   if (message.quote) {
@@ -403,9 +442,69 @@ function renderMessage(message: SessionMessage): HTMLElement {
   }
   const body = document.createElement("div");
   body.className = "msg-body";
-  body.textContent = message.content;
+  if (message.role === "assistant") {
+    body.replaceChildren(renderMarkdown(message.content));
+  } else {
+    body.textContent = message.content;
+  }
   el.appendChild(body);
+
+  if (message.role === "assistant" && !options.isStreaming) {
+    ensureCopyButton(el, message.content);
+  }
   return el;
+}
+
+/** Add the copy affordance once, with a transient success/failure label. */
+function ensureCopyButton(msgEl: HTMLElement, rawContent: string): void {
+  if (rawContent.trim().length === 0) return;
+  if (msgEl.querySelector(".msg-copy")) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "msg-copy";
+  button.textContent = "复制";
+
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+  const flash = (label: string): void => {
+    if (resetTimer !== null) clearTimeout(resetTimer);
+    button.textContent = label;
+    resetTimer = setTimeout(() => {
+      resetTimer = null;
+      button.textContent = "复制";
+    }, 1500);
+  };
+
+  button.addEventListener("click", () => {
+    if (resetTimer !== null) {
+      clearTimeout(resetTimer);
+      resetTimer = null;
+    }
+    try {
+      const clipboard = navigator.clipboard;
+      if (!clipboard || typeof clipboard.writeText !== "function") {
+        flash("复制失败");
+        return;
+      }
+      const result = clipboard.writeText(rawContent);
+      if (result && typeof result.then === "function") {
+        void result.then(
+          () => flash("已复制"),
+          () => flash("复制失败"),
+        );
+      } else {
+        flash("已复制");
+      }
+    } catch {
+      flash("复制失败");
+    }
+  });
+
+  msgEl.appendChild(button);
+}
+
+function updateNewSessionButton(): void {
+  providerNewSession.disabled = streaming || !session || session.messages.length === 0;
 }
 
 // --- provider switcher (spec §8.9) ---
@@ -738,6 +837,22 @@ function handleNewSession(): void {
   updateBanner();
 }
 
+/** Toolbar "新会话": persist the old conversation and start a blank one. */
+function handleManualNewSession(): void {
+  if (!session || streaming) return;
+  persistHistory();
+  const tab = activeTab;
+  const url = tab?.url ?? session.pageUrl;
+  const title = tab?.title ?? session.pageTitle;
+  const tabId = tab?.id ?? session.tabId;
+  session = createSession(url, title, tabId);
+  lastRequest = null;
+  clearQuoteChip();
+  removeError();
+  renderAll();
+  updateBanner();
+}
+
 // --- send / stream / abort ---
 
 function handleSend(): void {
@@ -787,7 +902,7 @@ async function sendRequest(options: SendRequestOptions): Promise<void> {
   // title/URL/paragraphs. The conversation itself is preserved.
   const recentParagraphs = isContextStale() ? [] : await fetchRecentParagraphs(session.tabId);
 
-  const messages: ChatMessage[] = session.messages.map((m) => ({ role: m.role, content: m.content }));
+  const messages: ChatMessage[] = buildChatHistory(session.messages);
   const context: ChatContext = isContextStale()
     ? { pageUrl: "", title: "", quotes: quote ? [quote] : [], recentParagraphs: [] }
     : buildChatContext(session, quote ? [quote] : [], recentParagraphs, selectionContext);
@@ -856,9 +971,12 @@ function handleStop(): void {
   if (!requestId) return;
   currentRequestId = null;
   streaming = false;
+  const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
+  const rawContent = session?.messages.at(-1)?.content ?? "";
   assistantEl = null;
   send({ type: "abort", requestId });
   persistHistory();
+  if (targetMsgEl) ensureCopyButton(targetMsgEl, rawContent);
   showError("已中断，重新发送", "重新发送");
   setInputEnabled(true);
 }
@@ -894,6 +1012,7 @@ function setInputEnabled(enabled: boolean): void {
   input.disabled = !enabled;
   sendBtn.hidden = !enabled;
   stopBtn.hidden = enabled;
+  updateNewSessionButton();
   updateBanner();
 }
 
@@ -965,7 +1084,8 @@ function handleDelta(message: Extract<ChatBackgroundToClient, { type: "delta" }>
   if (!last || last.role !== "assistant") return;
   const content = last.content + message.text;
   session = replaceLastMessage(session, content);
-  if (assistantEl) assistantEl.textContent = content;
+  // Rendered synchronously as Markdown so streamed bold/code appears at once.
+  if (assistantEl) assistantEl.replaceChildren(renderMarkdown(content));
 }
 
 function handleFinish(message: Extract<ChatBackgroundToClient, { type: "finish" }>): void {
@@ -975,8 +1095,12 @@ function handleFinish(message: Extract<ChatBackgroundToClient, { type: "finish" 
   // Anchor the inline claim pill to the answer that just finished, not to
   // whatever message happens to be last when the claim round-trip returns.
   const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
+  const rawContent = session?.messages.at(-1)?.content ?? "";
   assistantEl = null;
   persistHistory();
+  // Append the copy button directly (never rebuild the list mid-turn) so the
+  // v7 claim pill lands beneath it.
+  if (targetMsgEl) ensureCopyButton(targetMsgEl, rawContent);
   setInputEnabled(true);
   void autoClaimExplanation(targetMsgEl);
 }
@@ -1076,8 +1200,11 @@ function handleError(message: Extract<ChatBackgroundToClient, { type: "error" }>
   if (message.requestId !== currentRequestId) return;
   currentRequestId = null;
   streaming = false;
+  const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
+  const rawContent = session?.messages.at(-1)?.content ?? "";
   assistantEl = null;
   persistHistory();
+  if (targetMsgEl) ensureCopyButton(targetMsgEl, rawContent);
   // The provider's raw message is English and can leak internals; show only
   // the normalized Chinese copy (the dispatch layer already logs failures).
   showError(CHINESE_ERRORS[message.code] ?? CHINESE_ERRORS.unknown, "重新发送");
@@ -1089,8 +1216,11 @@ function handleDisconnect(): void {
   if (!streaming) return;
   streaming = false;
   currentRequestId = null;
+  const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
+  const rawContent = session?.messages.at(-1)?.content ?? "";
   assistantEl = null;
   persistHistory();
+  if (targetMsgEl) ensureCopyButton(targetMsgEl, rawContent);
   showError("已中断，重新发送", "重新发送");
   setInputEnabled(true);
 }
@@ -1099,7 +1229,10 @@ function handleConnectionError(): void {
   if (!streaming) return;
   streaming = false;
   currentRequestId = null;
+  const targetMsgEl = (assistantEl?.closest(".msg") as HTMLElement | null) ?? null;
+  const rawContent = session?.messages.at(-1)?.content ?? "";
   assistantEl = null;
+  if (targetMsgEl) ensureCopyButton(targetMsgEl, rawContent);
   showError("连接失败", "重新发送");
   setInputEnabled(true);
 }

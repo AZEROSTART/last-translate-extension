@@ -1396,3 +1396,245 @@ it("skips claiming a language that is not a learning target", async () => {
 
   expect(learnWordCalls(chrome)).toHaveLength(0);
 });
+
+// --- rich chat experience: empty state, markdown, copy, new session (v9) ---
+
+it("shows a calm empty state before the first turn and removes it on send", async () => {
+  installChrome();
+  await boot();
+
+  const empty = document.querySelector(".chat-empty");
+  expect(empty).not.toBeNull();
+  expect(document.querySelector(".chat-empty-primary")?.textContent).toContain("⌥Q");
+  expect(document.querySelector(".chat-empty-secondary")?.textContent).toContain(
+    "当前页面的标题与已译段落会自动作为上下文",
+  );
+  expect(document.querySelectorAll(".msg")).toHaveLength(0);
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "你好";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  expect(document.querySelector(".chat-empty")).toBeNull();
+  expect(document.querySelectorAll(".msg").length).toBeGreaterThan(0);
+});
+
+it("streams assistant Markdown while keeping user messages plain text", async () => {
+  const { sent, messageListeners } = installChrome();
+  await boot();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "<b>user</b> **not bold**";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const userBody = document.querySelector(".msg--user .msg-body")!;
+  expect(userBody.textContent).toBe("<b>user</b> **not bold**");
+  expect(userBody.querySelector("strong")).toBeNull();
+  expect(userBody.querySelector("b")).toBeNull();
+
+  const chat = sent.find((message) => (message as { type?: string }).type === "chat") as {
+    requestId: string;
+  };
+  messageListeners[0]({
+    type: "delta",
+    requestId: chat.requestId,
+    text: "# 标题\n\n- 一\n- 二\n\n**重点** 与 `code`",
+  });
+  await flush();
+
+  const body = document.querySelector(".msg--assistant .msg-body")!;
+  expect(body.querySelector(".md-heading")?.textContent).toBe("标题");
+  expect(body.querySelectorAll(".md-list li")).toHaveLength(2);
+  expect(body.querySelector("strong")?.textContent).toBe("重点");
+  expect(body.querySelector("code.md-code")?.textContent).toBe("code");
+});
+
+it("preserves an earlier turn's quote in later requests without duplicating the latest", async () => {
+  const { sent, messageListeners } = installChrome({ pendingQuote: explainQuote });
+  await boot();
+  await flush();
+
+  const first = sent.find((message) => (message as { type?: string }).type === "chat") as {
+    requestId: string;
+  };
+  messageListeners[0]({
+    type: "delta",
+    requestId: first.requestId,
+    text: "比……存在得更久。",
+  });
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+  await flush();
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "再举一例";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+
+  const chats = sent.filter((message) => (message as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string }>;
+  }>;
+  expect(chats).toHaveLength(2);
+  expect(chats[1].messages[0]).toEqual({
+    role: "user",
+    content: "引用：「outlive」\n这是什么意思？",
+  });
+  expect(chats[1].messages.at(-1)).toEqual({ role: "user", content: "再举一例" });
+});
+
+it("adds a copy button only after the stream finishes and copies raw Markdown", async () => {
+  const { sent, messageListeners } = installChrome();
+  await boot();
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+
+  try {
+    const input = document.querySelector("textarea") as HTMLTextAreaElement;
+    input.value = "问题";
+    (document.querySelector(".composer-send") as HTMLButtonElement).click();
+    await flush();
+
+    const chat = sent.find((message) => (message as { type?: string }).type === "chat") as {
+      requestId: string;
+    };
+    messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "**重点**" });
+    await flush();
+    expect(document.querySelector(".msg-copy")).toBeNull();
+
+    messageListeners[0]({ type: "finish", requestId: chat.requestId });
+    await flush();
+
+    const copy = document.querySelector(".msg-copy") as HTMLButtonElement;
+    expect(copy).not.toBeNull();
+    expect(copy.parentElement?.classList.contains("msg--assistant")).toBe(true);
+    expect(copy.textContent).toBe("复制");
+
+    vi.useFakeTimers();
+    copy.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeText).toHaveBeenCalledWith("**重点**");
+    expect(copy.textContent).toBe("已复制");
+    vi.advanceTimersByTime(1500);
+    expect(copy.textContent).toBe("复制");
+  } finally {
+    vi.useRealTimers();
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+  }
+});
+
+it("shows 复制失败 when the clipboard rejects", async () => {
+  const { sent, messageListeners } = installChrome();
+  await boot();
+  const writeText = vi.fn(async () => {
+    throw new Error("denied");
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+
+  try {
+    const input = document.querySelector("textarea") as HTMLTextAreaElement;
+    input.value = "问题";
+    (document.querySelector(".composer-send") as HTMLButtonElement).click();
+    await flush();
+
+    const chat = sent.find((message) => (message as { type?: string }).type === "chat") as {
+      requestId: string;
+    };
+    messageListeners[0]({ type: "delta", requestId: chat.requestId, text: "答案" });
+    messageListeners[0]({ type: "finish", requestId: chat.requestId });
+    await flush();
+
+    const copy = document.querySelector(".msg-copy") as HTMLButtonElement;
+    copy.click();
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith("答案");
+    expect(copy.textContent).toBe("复制失败");
+  } finally {
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+  }
+});
+
+it("renders Markdown and a copy button from stored history", async () => {
+  installChrome({
+    history: [
+      {
+        id: "s_hist",
+        tabId: 1,
+        pageUrl: "https://a.test/x",
+        pageTitle: "A",
+        createdAt: 1,
+        messages: [{ role: "assistant", content: "**旧** 答案", ts: 2 }],
+      },
+    ],
+  });
+  await boot();
+
+  expect(document.querySelector(".msg--assistant .msg-body strong")?.textContent).toBe("旧");
+  expect(document.querySelector(".msg-copy")).not.toBeNull();
+  expect(document.querySelector(".chat-empty")).toBeNull();
+});
+
+it("starts a manual new session, persisting the old one and clearing chrome", async () => {
+  const { storage, sent, messageListeners } = installChrome();
+  await boot();
+
+  const button = document.querySelector(".provider-new-session") as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+
+  const input = document.querySelector("textarea") as HTMLTextAreaElement;
+  input.value = "第一问";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+  expect(button.disabled).toBe(true); // streaming
+
+  const first = sent.find((message) => (message as { type?: string }).type === "chat") as {
+    requestId: string;
+  };
+  messageListeners[0]({ type: "finish", requestId: first.requestId });
+  await flush();
+  expect(button.disabled).toBe(false);
+  const oldId = (globalThis as any).__ilmtPanel.session.id as string;
+
+  // A follow-up quote chip and an inline error must both disappear.
+  input.value = "第二问";
+  (document.querySelector(".composer-send") as HTMLButtonElement).click();
+  await flush();
+  const second = sent.filter((message) => (message as { type?: string }).type === "chat").at(
+    -1,
+  ) as { requestId: string };
+  messageListeners[0]({
+    type: "error",
+    requestId: second.requestId,
+    code: "network",
+    message: "down",
+    retryable: true,
+  });
+  await flush();
+  expect(document.querySelectorAll(".error-block")).toHaveLength(1);
+
+  await storage.set({
+    "chat.pendingQuote": { text: "后加引用", mode: "follow-up", tabId: 1, ts: 3 },
+  });
+  await flush();
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(false);
+
+  button.click();
+  await flush();
+
+  const next = (globalThis as any).__ilmtPanel.session as { id: string; messages: unknown[] };
+  expect(next.id).not.toBe(oldId);
+  expect(next.messages).toHaveLength(0);
+  expect(document.querySelector(".chat-empty")).not.toBeNull();
+  expect((document.querySelector(".quote-chip") as HTMLElement).hidden).toBe(true);
+  expect(document.querySelectorAll(".error-block")).toHaveLength(0);
+
+  const history = storage._store.get("chat.history") as Array<{ id: string }>;
+  expect(history.some((entry) => entry.id === oldId)).toBe(true);
+});

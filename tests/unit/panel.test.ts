@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { createSession, appendMessage, buildChatContext } from "../../src/panel/session";
+import {
+  createSession,
+  appendMessage,
+  buildChatContext,
+  buildChatHistory,
+} from "../../src/panel/session";
+import type { SessionMessage } from "../../src/shared/types";
 
 describe("panel session", () => {
   it("pins the session to the page where it started", () => {
@@ -64,5 +70,43 @@ describe("panel session", () => {
 
     expect(buildChatContext(s, [], [], selectionContext).selectionContext).toEqual(selectionContext);
     expect(buildChatContext(s, [], []).selectionContext).toBeUndefined();
+  });
+});
+
+describe("buildChatHistory", () => {
+  const messages: SessionMessage[] = [
+    { role: "user", content: "解释这个", quote: "outlive", ts: 1 },
+    { role: "assistant", content: "比……存在得更久", ts: 2 },
+    { role: "user", content: "再举一例", quote: "tools", ts: 3 },
+  ];
+
+  it("leaves a single-turn quote unchanged", () => {
+    const single: SessionMessage[] = [
+      { role: "user", content: "这是什么意思？", quote: "outlive", ts: 1 },
+    ];
+    expect(buildChatHistory(single)).toEqual([
+      { role: "user", content: "这是什么意思？" },
+    ]);
+  });
+
+  it("inlines earlier quotes but leaves the latest turn and assistants unchanged", () => {
+    expect(buildChatHistory(messages)).toEqual([
+      { role: "user", content: "引用：「outlive」\n解释这个" },
+      { role: "assistant", content: "比……存在得更久" },
+      { role: "user", content: "再举一例" },
+    ]);
+  });
+
+  it("leaves earlier user turns without a quote untouched", () => {
+    const unquoted: SessionMessage[] = [
+      { role: "user", content: "第一问", ts: 1 },
+      { role: "assistant", content: "答", ts: 2 },
+      { role: "user", content: "第二问", ts: 3 },
+    ];
+    expect(buildChatHistory(unquoted)).toEqual([
+      { role: "user", content: "第一问" },
+      { role: "assistant", content: "答" },
+      { role: "user", content: "第二问" },
+    ]);
   });
 });

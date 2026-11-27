@@ -4,7 +4,13 @@
  * stays trivially testable. `main.ts` owns rendering and the port wiring.
  */
 
-import type { ChatContext, SelectionContext, Session, SessionMessage } from "../shared/types";
+import type {
+  ChatContext,
+  ChatMessage,
+  SelectionContext,
+  Session,
+  SessionMessage,
+} from "../shared/types";
 
 /** Messages kept per session; the oldest are dropped past this (spec §9). */
 const MAX_MESSAGES = 50;
@@ -48,4 +54,27 @@ export function buildChatContext(
     recentParagraphs: recentParagraphs.slice(-MAX_RECENT_PARAGRAPHS),
     ...(selectionContext ? { selectionContext } : {}),
   };
+}
+
+/**
+ * Provider-facing history. Earlier quoted user turns carry their quote inline
+ * so the conversation stays intelligible; the latest user turn is left alone
+ * because its quote already travels in `context.quotes`.
+ */
+export function buildChatHistory(messages: SessionMessage[]): ChatMessage[] {
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+
+  return messages.map((message, index) => ({
+    role: message.role,
+    content:
+      message.role === "user" && index < lastUserIndex && message.quote
+        ? `引用：「${message.quote}」\n${message.content}`
+        : message.content,
+  }));
 }
