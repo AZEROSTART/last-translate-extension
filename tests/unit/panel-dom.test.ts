@@ -9,13 +9,13 @@ import { it, expect, vi, beforeEach, afterEach } from "vitest";
 
 type Listener = (...args: any[]) => void;
 
-function makeStorage() {
+function makeStorage(areaName: "local" | "session" = "local", sharedListeners?: Listener[]) {
   const store = new Map<string, unknown>();
   const clone = <T,>(value: T): T => structuredClone(value);
-  const changeListeners: Listener[] = [];
+  const changeListeners: Listener[] = sharedListeners ?? [];
 
   const emit = (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>): void => {
-    for (const listener of changeListeners) listener(changes, "local");
+    for (const listener of changeListeners) listener(changes, areaName);
   };
 
   const get = (keys?: string | string[] | Record<string, unknown> | null): Promise<Record<string, unknown>> => {
@@ -62,6 +62,8 @@ interface ChromeOpts {
   pendingQuote?: unknown;
   history?: unknown;
   settings?: unknown;
+  /** Seeds `storage.session.reviewPending`, the popup's review routing flag. */
+  reviewPending?: unknown;
   /** `null` makes `tabs.query` return no active tab. */
   tab?: { id: number; url: string; title: string } | null;
   /** `null` makes `tabs.get` reject, as if the quote's tab was closed. */
@@ -69,10 +71,15 @@ interface ChromeOpts {
 }
 
 function installChrome(opts: ChromeOpts = {}) {
-  const storage = makeStorage();
+  // Chrome dispatches one `storage.onChanged` for every area; both areas share
+  // the listener list and tag events with their own area name.
+  const changeListeners: Listener[] = [];
+  const storage = makeStorage("local", changeListeners);
+  const session = makeStorage("session", changeListeners);
   if (opts.pendingQuote !== undefined) storage._store.set("chat.pendingQuote", opts.pendingQuote);
   if (opts.history !== undefined) storage._store.set("chat.history", opts.history);
   if (opts.settings !== undefined) storage._store.set("settings", opts.settings);
+  if (opts.reviewPending !== undefined) session._store.set("reviewPending", opts.reviewPending);
 
   const sent: unknown[] = [];
   const messageListeners: Listener[] = [];
@@ -93,7 +100,7 @@ function installChrome(opts: ChromeOpts = {}) {
       connect: vi.fn(() => port),
       sendMessage: vi.fn(async () => undefined),
     },
-    storage: { local: storage, onChanged: storage.onChanged },
+    storage: { local: storage, session, onChanged: storage.onChanged },
     tabs: {
       query: vi.fn(async () =>
         opts.tab === null
@@ -113,7 +120,17 @@ function installChrome(opts: ChromeOpts = {}) {
   };
   (globalThis as any).chrome = chrome;
 
-  return { chrome, storage, port, sent, messageListeners, disconnectListeners, activatedListeners, updatedListeners };
+  return {
+    chrome,
+    storage,
+    session,
+    port,
+    sent,
+    messageListeners,
+    disconnectListeners,
+    activatedListeners,
+    updatedListeners,
+  };
 }
 
 const flush = async (): Promise<void> => {
@@ -1103,4 +1120,109 @@ it("claims again when an explain request is retried", async () => {
   const claims = learnWordCalls(chrome);
   expect(claims).toHaveLength(1);
   expect(claims[0]).toMatchObject({ type: "learn-word", surface: "outlive", meaning: "比……存在得更久" });
+});
+
+// --- review routing and quote auto-switch (v6) ---
+
+function reviewPanel(): HTMLElement {
+  return document.querySelector(".panel-view--review") as HTMLElement;
+}
+
+function chatPanel(): HTMLElement {
+  return document.querySelector(".panel-view--chat") as HTMLElement;
+}
+
+function openReviewTab(): void {
+  (document.querySelector('.panel-tab[data-view="review"]') as HTMLButtonElement).click();
+}
+
+it("switches to Review and clears reviewPending when the popup asks while Chat is open", async () => {
+  const { session } = installChrome();
+  await boot();
+  expect(chatPanel().hidden).toBe(false);
+  expect(reviewPanel().hidden).toBe(true);
+
+  await session.set({ reviewPending: true });
+  await flush();
+
+  expect(chatPanel().hidden).toBe(true);
+  expect(reviewPanel().hidden).toBe(false);
+  expect(session._store.has("reviewPending")).toBe(false);
+});
+
+it("opens directly on Review when reviewPending exists at startup", async () => {
+  const { session } = installChrome({ reviewPending: true });
+  await boot();
+  await flush();
+
+  expect(reviewPanel().hidden).toBe(false);
+  expect(chatPanel().hidden).toBe(true);
+  expect(session._store.has("reviewPending")).toBe(false);
+});
+
+it("consumes reviewPending before a quote so both flags land on Chat with the quote applied", async () => {
+  const { storage, session, sent } = installChrome({
+    reviewPending: true,
+    pendingQuote: {
+      text: "选中的文字",
+      mode: "explain",
+      tabId: 1,
+      ts: 1,
+      context: { paragraph: "选中的文字所在的段落。", preceding: [] },
+    },
+  });
+  await boot();
+  await flush();
+
+  expect(session._store.has("reviewPending")).toBe(false);
+  expect(storage._store.has("chat.pendingQuote")).toBe(false);
+  expect(reviewPanel().hidden).toBe(true);
+  expect(chatPanel().hidden).toBe(false);
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(1);
+  expect(chats[0].context.quotes).toEqual(["选中的文字"]);
+});
+
+it("switches from Review to Chat and auto-sends an explain quote", async () => {
+  const { storage, sent } = installChrome();
+  await boot();
+  openReviewTab();
+  expect(reviewPanel().hidden).toBe(false);
+
+  await storage.set({
+    "chat.pendingQuote": { text: "后来选中的文字", mode: "explain", tabId: 1, ts: 2 },
+  });
+  await flush();
+
+  expect(reviewPanel().hidden).toBe(true);
+  expect(chatPanel().hidden).toBe(false);
+  const chats = sent.filter((m) => (m as { type?: string }).type === "chat") as Array<{
+    messages: Array<{ role: string; content: string }>;
+    context: { quotes: string[] };
+  }>;
+  expect(chats).toHaveLength(1);
+  expect(chats[0].messages).toEqual([{ role: "user", content: "这是什么意思？" }]);
+  expect(chats[0].context.quotes).toEqual(["后来选中的文字"]);
+});
+
+it("switches from Review to Chat and prefills a follow-up quote", async () => {
+  const { storage, sent } = installChrome();
+  await boot();
+  openReviewTab();
+  expect(reviewPanel().hidden).toBe(false);
+
+  await storage.set({
+    "chat.pendingQuote": { text: "后来选中的文字", mode: "follow-up", tabId: 1, ts: 2 },
+  });
+  await flush();
+
+  expect(reviewPanel().hidden).toBe(true);
+  expect(chatPanel().hidden).toBe(false);
+  const chip = document.querySelector(".quote-chip") as HTMLElement;
+  expect(chip.hidden).toBe(false);
+  expect(chip.textContent).toContain("后来选中的文字");
+  expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("后来选中的文字");
+  expect(sent.some((m) => (m as { type?: string }).type === "chat")).toBe(false);
 });

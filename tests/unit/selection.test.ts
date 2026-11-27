@@ -131,3 +131,96 @@ it("shows the bubble immediately for the guard's post-load hook", () => {
   expect(document.querySelectorAll(".ilmt-bubble")).toHaveLength(1);
   expect(document.querySelector(".ilmt-bubble-explain")).not.toBeNull();
 });
+
+describe("viewport clamping and inner scroll (v6)", () => {
+  interface Metrics {
+    selectionTop: number;
+    selectionHeight: number;
+    bubbleHeight: number;
+    viewportHeight: number;
+  }
+
+  function stubMetrics(opts: Metrics): void {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: opts.viewportHeight });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: () =>
+        ({
+          left: 100,
+          top: opts.selectionTop,
+          right: 200,
+          bottom: opts.selectionTop + opts.selectionHeight,
+          width: 100,
+          height: opts.selectionHeight,
+          x: 100,
+          y: opts.selectionTop,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    });
+    Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: function (this: HTMLElement) {
+        const height = this.classList.contains("ilmt-bubble") ? opts.bubbleHeight : 0;
+        return {
+          left: 0,
+          top: 0,
+          right: 120,
+          bottom: height,
+          width: 120,
+          height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      },
+    });
+  }
+
+  afterEach(() => {
+    delete (Range.prototype as unknown as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+    delete (HTMLElement.prototype as unknown as { getBoundingClientRect?: unknown })
+      .getBoundingClientRect;
+    delete (window as unknown as { innerHeight?: number }).innerHeight;
+    delete (window as unknown as { innerWidth?: number }).innerWidth;
+  });
+
+  it("clamps a tall bubble inside the viewport", () => {
+    stubMetrics({ selectionTop: 180, selectionHeight: 16, bubbleHeight: 400, viewportHeight: 600 });
+    document.body.innerHTML = `<p>Hello world</p>`;
+    select(document.querySelector("p")!);
+    mouseup();
+
+    const bubble = document.querySelector<HTMLElement>(".ilmt-bubble")!;
+    const top = parseFloat(bubble.style.top);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(top).toBeLessThanOrEqual(600 - 400 - 8);
+  });
+
+  it("never gives a near-top selection a negative top with a tall bubble", () => {
+    stubMetrics({ selectionTop: 0, selectionHeight: 16, bubbleHeight: 700, viewportHeight: 600 });
+    document.body.innerHTML = `<p>Hello world</p>`;
+    select(document.querySelector("p")!);
+    mouseup();
+
+    const bubble = document.querySelector<HTMLElement>(".ilmt-bubble")!;
+    const top = parseFloat(bubble.style.top);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(top).toBe(8);
+  });
+
+  it("dismisses on a non-bubbling scroll from an inner overflow container", () => {
+    document.body.innerHTML =
+      `<div id="scroller" style="overflow:auto;max-height:100px"><p>Hello world</p></div>`;
+    select(document.querySelector("p")!);
+    mouseup();
+    expect(document.querySelector(".ilmt-bubble")).not.toBeNull();
+
+    // Scroll does not bubble, so only a capture-phase listener sees this.
+    document
+      .getElementById("scroller")!
+      .dispatchEvent(new Event("scroll", { bubbles: false }));
+
+    expect(document.querySelector(".ilmt-bubble")).toBeNull();
+  });
+});

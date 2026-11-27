@@ -508,7 +508,11 @@ export function createGlossController(
     scheduleHitTest();
   }
 
-  function onScroll(): void {
+  function onScroll(event: Event): void {
+    // A tall card owns its own scrollbar; scrolling its content must not count
+    // as leaving the word.
+    const target = event.target;
+    if (card && target instanceof Node && card.contains(target)) return;
     hideCard();
   }
 

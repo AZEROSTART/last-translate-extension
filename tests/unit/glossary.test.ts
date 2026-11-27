@@ -595,3 +595,32 @@ describe("claim effect", () => {
     expect(card.textContent).not.toContain("sobrevivir");
   });
 });
+
+describe("card inner scrolling (v6)", () => {
+  it("keeps the card open when the card itself or a child inside it scrolls", () => {
+    const card = openCard();
+
+    card.dispatchEvent(new Event("scroll", { bubbles: true }));
+    expect(document.querySelector("[role=tooltip]")).toBeTruthy();
+
+    const child = card.querySelector(".ilmt-gloss-word")!;
+    child.dispatchEvent(new Event("scroll", { bubbles: true }));
+    expect(document.querySelector("[role=tooltip]")).toBeTruthy();
+  });
+
+  it("still hides the card on an outside-element scroll", () => {
+    openCard();
+
+    document.body.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+
+  it("still hides the card on a window scroll", () => {
+    openCard();
+
+    window.dispatchEvent(new Event("scroll"));
+
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+});

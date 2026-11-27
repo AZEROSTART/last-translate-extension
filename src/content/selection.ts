@@ -54,7 +54,7 @@ export function initSelectionBubble(opts: SelectionBubbleOptions): void {
   document.addEventListener("mouseup", scheduleSelectionCheck);
   document.addEventListener("mousedown", handleMouseDown);
   document.addEventListener("keydown", handleKeyDown);
-  window.addEventListener("scroll", dismiss, { passive: true });
+  window.addEventListener("scroll", dismiss, { passive: true, capture: true });
 }
 
 /**
@@ -174,10 +174,16 @@ function positionBubble(el: HTMLDivElement, rect: SelectionRect): void {
   const width = finiteOrZero(box.width);
   const height = finiteOrZero(box.height);
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
 
   const left = clamp(rect.left, EDGE_MARGIN_PX, viewportWidth - width - EDGE_MARGIN_PX);
-  const above = rect.top >= FLIP_ABOVE_TOP_PX;
-  const top = above ? rect.top - height - EDGE_MARGIN_PX : rect.top + rect.height + EDGE_MARGIN_PX;
+  // Flip above only when there is genuinely room for the whole bubble there;
+  // a tall bubble near the top would otherwise get a negative `top`.
+  const above = rect.top >= Math.max(FLIP_ABOVE_TOP_PX, height + EDGE_MARGIN_PX * 2);
+  const rawTop = above
+    ? rect.top - height - EDGE_MARGIN_PX
+    : rect.top + rect.height + EDGE_MARGIN_PX;
+  const top = clamp(rawTop, EDGE_MARGIN_PX, viewportHeight - height - EDGE_MARGIN_PX);
 
   el.dataset.position = above ? "above" : "below";
   el.style.left = `${left}px`;

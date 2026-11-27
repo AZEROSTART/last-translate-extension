@@ -173,7 +173,9 @@ async function start(): Promise<void> {
   connectPort();
   wireTabs();
   wireStorage();
-  void consumePendingReview();
+  // Consume the popup's review request before the quote: if both exist, the
+  // explicit quote is the more specific intent and must land on Chat.
+  await consumePendingReview();
   applyPendingQuote(quote);
   resolveReady();
 }
@@ -189,6 +191,16 @@ async function consumePendingReview(): Promise<void> {
     showView("review");
   } catch {
     // No session storage or a firewall on it: chat is a safe default.
+  }
+}
+
+/** Best-effort clear of a consumed review request; never throws into a listener. */
+function clearPendingReview(): void {
+  try {
+    const removal = chrome.storage.session?.remove("reviewPending");
+    if (removal && typeof removal.catch === "function") void removal.catch(() => {});
+  } catch {
+    // Session storage is unavailable in this host.
   }
 }
 
@@ -560,6 +572,9 @@ async function readPendingQuote(): Promise<PendingQuote | null> {
  */
 function applyPendingQuote(quote: PendingQuote | null): void {
   if (!quote) return;
+  // A selection-driven quote always belongs to the conversation, even when the
+  // user was looking at the review tab a moment ago.
+  showView("chat");
 
   const canAutoSend =
     !!session &&
@@ -596,6 +611,16 @@ function applyPendingQuote(quote: PendingQuote | null): void {
 
 function wireStorage(): void {
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    // The popup routes to Review through session storage; consume the flag and
+    // switch immediately, without waiting for a panel reload.
+    if (areaName === "session") {
+      if (changes.reviewPending?.newValue) {
+        clearPendingReview();
+        showView("review");
+      }
+      return;
+    }
+
     if (areaName !== "local") return;
 
     const pending = changes[PENDING_QUOTE_KEY];

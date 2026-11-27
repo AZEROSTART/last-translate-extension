@@ -171,18 +171,81 @@ export function setPeerTranslation(root: Element | null): void {
   }
 }
 
+/** Paragraph ids a source root owns (`data-ilmt-p="p_1 p_2"`). */
+function peerIdsOf(root: Element): string[] {
+  return (root.getAttribute("data-ilmt-p") ?? "").split(/\s+/).filter(Boolean);
+}
+
+function elementFromTarget(target: EventTarget | null): Element | null {
+  if (target instanceof Element) return target;
+  if (target instanceof Node) return target.parentElement;
+  return null;
+}
+
+/**
+ * Find the paragraph root that owns a translation span. A nested translation
+ * sits inside its `[data-ilmt-p]` ancestor, but a row-flex one is inserted after
+ * the row as a sibling, so `closest()` alone misses the hover target there.
+ */
+function findPeerOwner(tr: Element): Element | null {
+  const id = tr.getAttribute("data-ilmt-for");
+  if (!id) return null;
+
+  // 1. Nested translation: the nearest marked ancestor owns it.
+  const ancestor = tr.closest("[data-ilmt-p]");
+  if (ancestor && peerIdsOf(ancestor).includes(id)) return ancestor;
+
+  // 2. Row-flex: the row root is the first non-translation previous sibling,
+  // possibly behind the row's other translation spans.
+  let sibling = tr.previousElementSibling;
+  while (sibling && sibling.classList.contains("ilmt-tr")) {
+    if (peerIdsOf(sibling).includes(id)) return sibling;
+    sibling = sibling.previousElementSibling;
+  }
+  if (sibling && peerIdsOf(sibling).includes(id)) return sibling;
+
+  // 3. Registry: survives DOM order changes the sibling walk cannot follow.
+  const record = registry.get(id);
+  const root = record?.el.deref();
+  if (root && root.isConnected && peerIdsOf(root).includes(id)) return root;
+
+  // 4. Document fallback: e.g. tests or a re-rendered row before re-registration.
+  const doc = tr.ownerDocument ?? document;
+  for (const candidate of doc.querySelectorAll("[data-ilmt-p]")) {
+    if (peerIdsOf(candidate).includes(id)) return candidate;
+  }
+  return null;
+}
+
+/** Resolve the source root for a hover target: translation span or paragraph. */
+function resolvePeerRoot(target: EventTarget | null): Element | null {
+  const element = elementFromTarget(target);
+  if (!element) return null;
+  const tr = element.closest(".ilmt-tr[data-ilmt-for]");
+  if (tr) return findPeerOwner(tr);
+  return element.closest("[data-ilmt-p]");
+}
+
+/**
+ * Whether the pointer is still on `root` or on one of its translation spans —
+ * the row-flex case where the translation is a sibling, not a descendant.
+ */
+function isWithinPeer(root: Element, target: EventTarget | null): boolean {
+  const element = elementFromTarget(target);
+  if (!element) return false;
+  if (root.contains(element)) return true;
+
+  const tr = element.closest(".ilmt-tr[data-ilmt-for]");
+  const id = tr?.getAttribute("data-ilmt-for");
+  if (!tr || !id) return false;
+  return peerIdsOf(root).includes(id);
+}
+
 function handlePeerOver(event: PointerEvent): void {
   if (event.pointerType === "touch") return;
   const selection = document.getSelection?.();
   if (selection && !selection.isCollapsed) return;
-  const target = event.target;
-  const element =
-    target instanceof Element
-      ? target
-      : target instanceof Node
-        ? target.parentElement
-        : null;
-  const root = element?.closest("[data-ilmt-p]") ?? null;
+  const root = resolvePeerRoot(event.target);
   if (!root || root === peerRoot) return;
   peerRoot = root;
   setPeerTranslation(root);
@@ -190,8 +253,7 @@ function handlePeerOver(event: PointerEvent): void {
 
 function handlePeerOut(event: PointerEvent): void {
   if (!peerRoot) return;
-  const related = event.relatedTarget;
-  if (related instanceof Node && peerRoot.contains(related)) return;
+  if (isWithinPeer(peerRoot, event.relatedTarget)) return;
   peerRoot = null;
   setPeerTranslation(null);
 }
