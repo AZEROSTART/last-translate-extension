@@ -792,6 +792,26 @@ describe("settings refresh fixes", () => {
     expect((document.querySelector(".pf-name-field") as HTMLElement).hidden).toBe(true);
     expect(document.activeElement).toBe(document.querySelector(".pf-apiKey"));
   });
+
+  it("saves the interface theme and applies it without losing quantum", async () => {
+    await seed();
+    await boot();
+    const select = document.querySelector<HTMLSelectElement>(".global-theme")!;
+    expect(select.value).toBe("system");
+
+    select.value = "dark";
+    select.dispatchEvent(new Event("change"));
+    await vi.waitFor(async () => {
+      expect((await getSettings()).theme).toBe("dark");
+    });
+    expect(document.documentElement.dataset.themeMode).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("quantum");
+
+    select.value = "light";
+    select.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(document.documentElement.dataset.themeMode).toBe("light"));
+    expect(document.documentElement.dataset.theme).toBe("quantum");
+  });
 });
 
 describe("translation style and learning settings", () => {

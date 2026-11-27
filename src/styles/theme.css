@@ -13,6 +13,8 @@
   --ilmt-input: rgba(4, 14, 14, 0.8);
   --ilmt-danger: #fb7185;
   --ilmt-success: #5eead4;
+  --ilmt-on-accent: #04100f;
+  --ilmt-on-danger: #1b0509;
   --ilmt-glow: 0 0 18px rgba(45, 212, 191, 0.35);
   --ilmt-radius: 10px;
   --ilmt-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -41,9 +43,29 @@
   color: var(--ilmt-text);
 }
 
+/* Light teal paper, still on the same quantum theme marker. */
+:root[data-theme="quantum"][data-theme-mode="light"] {
+  color-scheme: light;
+  --ilmt-bg: #f4f8f7;
+  --ilmt-panel: #ffffff;
+  --ilmt-panel-2: #edf5f3;
+  --ilmt-accent: #0f766e;
+  --ilmt-accent-2: #0d9488;
+  --ilmt-text: #132a27;
+  --ilmt-muted: #4b6965;
+  --ilmt-border: #c5dad6;
+  --ilmt-border-soft: #d9e8e5;
+  --ilmt-input: #ffffff;
+  --ilmt-surface-row: rgba(15, 118, 110, 0.06);
+  --ilmt-danger: #be123c;
+  --ilmt-success: #15803d;
+  --ilmt-on-accent: #ffffff;
+  --ilmt-on-danger: #ffffff;
+}
+
 :root[data-theme="quantum"] ::selection {
   background: var(--ilmt-accent);
-  color: #04100f;
+  color: var(--ilmt-on-accent);
 }
 
 @media (prefers-reduced-motion: reduce) {

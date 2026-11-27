@@ -1993,3 +1993,43 @@ describe("source origin and context switching", () => {
     view.destroy();
   });
 });
+
+describe("review scene theme", () => {
+  it("mounts the claim effect with the document's resolved theme mode", async () => {
+    const previous = document.documentElement.dataset.themeMode;
+    const themes: Array<string | undefined> = [];
+    const effect = {
+      id: "fake",
+      label: "假",
+      summary: "",
+      reserve: { above: 0, below: 0 },
+      mount: (ctx: { theme?: string }) => {
+        themes.push(ctx.theme);
+        return { setState: () => {}, play: () => {}, destroy: () => {} };
+      },
+    } as unknown as ClaimEffect;
+    const mnemonic = vi.fn().mockResolvedValue({
+      ok: true as const,
+      mnemonic: { caption: "猫把词抱进怀里", lang: "zh", at: NOW },
+    });
+
+    try {
+      document.documentElement.dataset.themeMode = "light";
+      const light = mount([word(1)], { effect: () => effect, mnemonic });
+      await light.view.refresh();
+      pick(light.root, "again");
+      expect(themes.at(-1)).toBe("light");
+      light.view.destroy();
+
+      document.documentElement.dataset.themeMode = "dark";
+      const dark = mount([word(1)], { effect: () => effect, mnemonic });
+      await dark.view.refresh();
+      pick(dark.root, "again");
+      expect(themes.at(-1)).toBe("dark");
+      dark.view.destroy();
+    } finally {
+      if (previous === undefined) delete document.documentElement.dataset.themeMode;
+      else document.documentElement.dataset.themeMode = previous;
+    }
+  });
+});

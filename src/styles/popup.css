@@ -4,7 +4,8 @@
   box-sizing: border-box;
 }
 
-:root[data-theme="quantum"] {
+:root[data-theme="quantum"],
+:root[data-theme="quantum"][data-theme-mode="light"] {
   color-scheme: light;
 
   /* Warm paper + vermillion + ink: the illustration's palette, reused by the
@@ -50,6 +51,41 @@
     radial-gradient(120% 55% at 100% 0%, rgba(224, 166, 100, 0.22), transparent 62%),
     radial-gradient(90% 60% at 0% 100%, rgba(191, 74, 51, 0.1), transparent 68%),
     linear-gradient(180deg, #f8eedc, #f2e4cd 58%, #ecdcbf);
+}
+
+/* Warm ink: the same parchment surface, lit from the other side. */
+:root[data-theme="quantum"][data-theme-mode="dark"] {
+  color-scheme: dark;
+  --ilmt-bg: #171311;
+  --ilmt-panel: #211b18;
+  --ilmt-panel-2: #28211d;
+  --ilmt-glass: rgba(33, 27, 24, 0.95);
+  --ilmt-accent: #e06b52;
+  --ilmt-accent-2: #e8a05f;
+  --ilmt-text: #f3e9dc;
+  --ilmt-muted: #b5a392;
+  --ilmt-border: #3a3029;
+  --ilmt-border-soft: #2e2621;
+  --ilmt-input: #14100e;
+  --ilmt-danger: #f27469;
+  --ilmt-success: #82c278;
+  --ilmt-surface: #211b18;
+  --ilmt-surface-open: #2a221e;
+  --ilmt-surface-row: rgba(255, 255, 255, 0.05);
+  --ilmt-rim: rgba(255, 255, 255, 0.08);
+  --ilmt-sheet-shadow:
+    inset 0 1px 0 var(--ilmt-rim),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 10px 24px -20px rgba(0, 0, 0, 0.75);
+  --ilmt-sheet-shadow-open:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 14px 30px -22px rgba(0, 0, 0, 0.8);
+  --ilmt-popup-wallpaper:
+    radial-gradient(circle at 1px 1px, rgba(243, 233, 220, 0.05) 1px, transparent 0) 0 0 / 20px 20px,
+    radial-gradient(120% 55% at 100% 0%, rgba(224, 107, 82, 0.16), transparent 62%),
+    radial-gradient(90% 60% at 0% 100%, rgba(232, 160, 95, 0.08), transparent 68%),
+    linear-gradient(180deg, #1c1714, #171311 58%, #120f0d);
 }
 
 html,
@@ -438,4 +474,57 @@ button:focus-visible {
 .popup-review-entry:hover {
   background: linear-gradient(180deg, #f3d6a8, #eac489);
   border-color: rgba(191, 74, 51, 0.45);
+}
+
+/* Dark-paper corrections for the few surfaces that carry a literal light ink. */
+:root[data-theme="quantum"][data-theme-mode="dark"] button {
+  border-color: var(--ilmt-border-soft);
+  background: var(--ilmt-panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] button:hover:not(:disabled) {
+  border-color: rgba(224, 107, 82, 0.45);
+  background: var(--ilmt-panel-2);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .popup-title {
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .popup-hero {
+  background-color: #241d19;
+  border-color: var(--ilmt-border);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .popup-translate-btn[data-active="1"] {
+  border-color: rgba(224, 107, 82, 0.5);
+  background: linear-gradient(180deg, #2c231f, #241d19);
+  color: var(--ilmt-text);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"]
+  .popup-translate-btn[data-active="1"]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #352a24, #2a221e);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .popup-review-entry {
+  border-color: rgba(224, 107, 82, 0.4);
+  background: linear-gradient(180deg, #2c231f, #241d19);
+  color: var(--ilmt-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .popup-review-entry:hover {
+  border-color: rgba(224, 107, 82, 0.6);
+  background: linear-gradient(180deg, #352a24, #2a221e);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"]
+  .popup-translate-btn:not([hidden])
+  ~ .popup-open-sidepanel:hover:not(:disabled) {
+  border-color: rgba(224, 107, 82, 0.45);
+  background: var(--ilmt-panel-2);
+  color: var(--ilmt-text);
 }

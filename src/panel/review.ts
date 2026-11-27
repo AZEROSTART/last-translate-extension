@@ -36,6 +36,7 @@ import type {
   WordContext,
 } from "../shared/types";
 import { exportFilename, exportLearningCsv, exportLearningJson } from "../shared/learning-export";
+import { systemPrefersDark } from "../shared/theme";
 import { createLibraryView, type LibraryController } from "./library";
 import { getEffect, getEffects } from "../content/effects";
 import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
@@ -1122,11 +1123,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   }
 
   function currentTheme(): "light" | "dark" {
-    try {
-      return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    } catch {
-      return "light";
-    }
+    const mode = document.documentElement.dataset.themeMode;
+    if (mode === "light" || mode === "dark") return mode;
+    return systemPrefersDark(window) ? "dark" : "light";
   }
 
   async function load(): Promise<void> {

@@ -20,6 +20,7 @@ import { getSettings, saveSettings } from "../shared/storage";
 import { getLearning } from "../shared/learning-storage";
 import { dueCount } from "../shared/srs";
 import { SELECTION_CONTEXT_LIMITS } from "../shared/selection-context-limits";
+import { applyDocumentTheme, watchSystemTheme } from "../shared/theme";
 import type {
   ChatBackgroundToClient,
   ChatClientToBackground,
@@ -158,10 +159,14 @@ export function runPanel(): Promise<void> {
 
 async function start(): Promise<void> {
   document.documentElement.dataset.theme = "quantum";
+  applyDocumentTheme(document, "system");
   buildDom();
   injectStyles();
   void refreshDueReviews();
   await loadPanelSettings();
+  watchSystemTheme(window, () => {
+    applyDocumentTheme(document, panelSettings?.theme ?? "system");
+  });
   sessions = await loadSessions();
   const quote = await readPendingQuote();
   await refreshActiveTab();
@@ -515,6 +520,7 @@ async function loadPanelSettings(): Promise<void> {
   } catch {
     panelSettings = null;
   }
+  applyDocumentTheme(document, panelSettings?.theme ?? "system");
   renderProviderBar();
 }
 
@@ -570,6 +576,7 @@ async function refreshSettingsFromStorage(): Promise<void> {
   } catch {
     return;
   }
+  applyDocumentTheme(document, panelSettings.theme);
   renderProviderBar();
 }
 

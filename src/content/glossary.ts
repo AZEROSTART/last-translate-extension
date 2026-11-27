@@ -12,6 +12,7 @@ import type {
   LearningState,
 } from "../shared/types";
 import { getLearning, parseLearningState, wordId } from "../shared/learning-storage";
+import { detectPageTheme, type ThemePreference } from "../shared/theme";
 import { findSurfaceRange } from "./glossary-range";
 import { getEffect, getEffects, pickEffect } from "./effects";
 import type { ClaimEffect, ClaimHandle, ClaimResult } from "./effects/types";
@@ -125,6 +126,8 @@ export interface GlossControllerDeps {
   getEffectSettings?: () => EffectSettings | undefined;
   /** Current translation language, used as the card's answer language. */
   getGlossLang?: () => string;
+  /** Theme preference; the card reads it each time it opens. */
+  getTheme?: () => ThemePreference;
   /** Stored vocabulary for the "known" pose; defaults to `getLearning`. */
   loadLearning?: () => Promise<LearningState>;
   /** "问侧栏": hand a hovered term to the side panel. */
@@ -419,6 +422,8 @@ export function createGlossController(
     const element = doc.createElement("div");
     element.className = "ilmt-gloss-card";
     element.setAttribute("role", "tooltip");
+    const resolvedTheme = detectPageTheme(doc, deps.getTheme?.() ?? "system");
+    element.dataset.theme = resolvedTheme;
 
     const word = doc.createElement("div");
     word.className = "ilmt-gloss-word";
@@ -512,8 +517,7 @@ export function createGlossController(
       doc,
       surface,
       root: host,
-      // `.ilmt-card` has one light palette today; see the note below.
-      theme: "light",
+      theme: resolvedTheme,
       animations: animationsAllowed(),
       claim,
       announce: (text) => {

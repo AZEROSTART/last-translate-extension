@@ -5,11 +5,36 @@ import {
   makeNumberControl,
   readNumberOr,
 } from "../components";
+import type { ThemePreference } from "../../shared/theme";
 import type { SectionHandle, SettingsContext } from "./types";
 
 export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
   const element = el("div", "settings-section-content advanced-section");
   const settings = ctx.getSettings();
+
+  const themeField = el("label", "field");
+  themeField.appendChild(el("span", "field-label", "界面主题"));
+  const themeSelect = el("select", "global-theme");
+  for (const [value, label] of [
+    ["system", "跟随系统"],
+    ["light", "浅色"],
+    ["dark", "深色"],
+  ] as Array<[ThemePreference, string]>) {
+    const option = el("option");
+    option.value = value;
+    option.textContent = label;
+    themeSelect.appendChild(option);
+  }
+  themeSelect.value = settings.theme;
+  themeSelect.addEventListener("change", () => {
+    const previous = ctx.getSettings().theme;
+    const theme = themeSelect.value as ThemePreference;
+    void ctx.savePatch({ theme }).catch(() => {
+      themeSelect.value = previous;
+    });
+  });
+  themeField.appendChild(themeSelect);
+  element.appendChild(themeField);
 
   const numericGrid = el("div", "field-grid");
   const concurrency = makeNumberControl(
@@ -66,6 +91,7 @@ export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
           concurrency: nextConcurrency,
           maxRPS: nextMaxRPS,
           temperature: nextTemperature,
+          theme: themeSelect.value as ThemePreference,
         });
         saved.textContent = "已保存";
       } catch {
@@ -91,6 +117,7 @@ export function createAdvancedSection(ctx: SettingsContext): SectionHandle {
       concurrency.input.value = String(next.concurrency);
       maxRPS.input.value = String(next.maxRPS);
       temperature.input.value = String(next.temperature);
+      themeSelect.value = next.theme;
     },
   };
 }

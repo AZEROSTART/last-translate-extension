@@ -36,6 +36,7 @@ import { createGlossController } from "./glossary";
 import { initSelectionBubble, showSelectionBubble } from "./selection";
 import { buildSelectionContext } from "./selection-context";
 import { DEFAULT_SETTINGS, getSettings } from "../shared/storage";
+import { normalizeThemePreference, type ThemePreference } from "../shared/theme";
 import type {
   BackgroundToClient,
   ClientToBackground,
@@ -99,10 +100,12 @@ let contentOnly = DEFAULT_SETTINGS.contentOnly;
 let learningLangs: string[] = [...DEFAULT_SETTINGS.learningLangs];
 let glossaryEnabled = DEFAULT_SETTINGS.glossaryEnabled;
 let effectSettings: EffectSettings = DEFAULT_SETTINGS.mascot;
+let themePref: ThemePreference = DEFAULT_SETTINGS.theme;
 let registry = new ParagraphRegistry();
 const gloss = createGlossController(document, {
   getEffectSettings: () => effectSettings,
   getGlossLang: () => targetLang,
+  getTheme: () => themePref,
   onAsk: (surface, range) => sendOpenChat(surface, "follow-up", range),
 });
 let portClient: TranslatePortClient | null = null;
@@ -311,10 +314,45 @@ export function runContentMain(): void {
   });
 }
 
+let themeStorageListener:
+  | ((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void)
+  | null = null;
+
+/** Keep the hover card's page-theme detection live while translation is on. */
+function startThemeListener(): void {
+  if (themeStorageListener) return;
+  const listener = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ): void => {
+    if (areaName !== "local" || !changes.settings || !active) return;
+    const next = (changes.settings.newValue as { theme?: unknown } | undefined)?.theme;
+    themePref = normalizeThemePreference(next);
+  };
+  themeStorageListener = listener;
+  try {
+    chrome.storage?.onChanged?.addListener?.(listener);
+  } catch {
+    themeStorageListener = null;
+  }
+}
+
+function stopThemeListener(): void {
+  const listener = themeStorageListener;
+  themeStorageListener = null;
+  if (!listener) return;
+  try {
+    chrome.storage?.onChanged?.removeListener?.(listener);
+  } catch {
+    // A dead context cannot unsubscribe; nothing else to clean here.
+  }
+}
+
 async function translatePage(): Promise<void> {
   if (active) return;
   active = true;
   scanGeneration += 1;
+  startThemeListener();
 
   try {
     gloss.start();
@@ -460,6 +498,7 @@ async function collectAndObserve(generation: number): Promise<void> {
   learningLangs = prefs.learningLangs;
   glossaryEnabled = prefs.glossaryEnabled;
   effectSettings = prefs.mascot;
+  themePref = prefs.theme;
 
   const nodes = await collectParagraphs(body, {
     targetLang,
@@ -641,6 +680,7 @@ function viewportRank(record: ParagraphRecord): number {
 
 function restore(): void {
   active = false;
+  stopThemeListener();
   // Invalidate any async scan and drop a queued follow-up: after restore a
   // cancelled scan must not mark or queue paragraphs.
   scanGeneration += 1;
@@ -1350,6 +1390,7 @@ interface CollectPrefs {
   learningLangs: string[];
   glossaryEnabled: boolean;
   mascot: EffectSettings;
+  theme: ThemePreference;
 }
 
 async function readCollectPrefs(): Promise<CollectPrefs> {
@@ -1365,6 +1406,7 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
       learningLangs: s.learningLangs,
       glossaryEnabled: s.glossaryEnabled !== false,
       mascot: s.mascot,
+      theme: s.theme,
     };
   } catch {
     // Missing or unreadable storage: keep the documented defaults.
@@ -1375,6 +1417,7 @@ async function readCollectPrefs(): Promise<CollectPrefs> {
       learningLangs: [...DEFAULT_SETTINGS.learningLangs],
       glossaryEnabled: DEFAULT_SETTINGS.glossaryEnabled,
       mascot: DEFAULT_SETTINGS.mascot,
+      theme: DEFAULT_SETTINGS.theme,
     };
   }
 }

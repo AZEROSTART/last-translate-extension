@@ -6,6 +6,7 @@ import type {
   TranslationPreference,
 } from "./types";
 import { normalizeProviderKind } from "./providers";
+import { normalizeThemePreference } from "./theme";
 
 const SETTINGS_KEY = "settings";
 
@@ -193,6 +194,9 @@ export async function getSettings(): Promise<Settings> {
   merged.mascot = normalizeEffectSettings((stored as { mascot?: unknown } | undefined)?.mascot);
   merged.siteRules = normalizeSiteRules(
     (stored as { siteRules?: unknown } | undefined)?.siteRules,
+  );
+  merged.theme = normalizeThemePreference(
+    (stored as { theme?: unknown } | undefined)?.theme,
   );
   if (typeof merged.reviewAnswerLang !== "string") merged.reviewAnswerLang = "";
 

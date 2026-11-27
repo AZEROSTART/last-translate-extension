@@ -266,6 +266,27 @@
   outline-offset: 1px;
 }
 
+/* Dark pages get the same measurements with a color-only ink palette. */
+.ilmt-gloss-card[data-theme="dark"] {
+  background: #1c2128;
+  color: #e6edf3;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.ilmt-gloss-card[data-theme="dark"] .ilmt-gloss-pos {
+  color: #8b949e;
+}
+
+.ilmt-gloss-card[data-theme="dark"] .ilmt-gloss-ask {
+  color: #adbac7;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ilmt-gloss-card[data-theme="dark"] .ilmt-gloss-ask:hover {
+  color: #e6edf3;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 .ilmt-gloss-meaning {
   margin-top: 4px;
 }

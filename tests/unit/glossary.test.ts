@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGlossController, type GlossControllerDeps } from "../../src/content/glossary";
 import { getEffect } from "../../src/content/effects";
+import type { ClaimEffect } from "../../src/content/effects/types";
 import type { GlossaryNote, LearningState, LearningWord } from "../../src/shared/types";
 
 function stubHighlights(): Map<string, unknown> {
@@ -66,6 +67,7 @@ function stubViewport(height: number, width = 1024): void {
 beforeEach(() => {
   vi.useFakeTimers();
   document.body.innerHTML = "";
+  document.body.removeAttribute("style");
 });
 
 afterEach(() => {
@@ -857,5 +859,66 @@ describe("cross-page known words and the ask bridge (v8)", () => {
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 1, clientY: 28 }));
     await vi.advanceTimersByTimeAsync(200);
     expect(document.querySelector("[role=tooltip]")).toBeNull();
+  });
+});
+
+describe("page-aware card theme", () => {
+  function showThemed(
+    getTheme: () => "system" | "light" | "dark",
+    background: string,
+  ): { card: HTMLElement; mount: ReturnType<typeof vi.fn> } {
+    stubFrame();
+    stubHighlights();
+    document.body.style.backgroundColor = background;
+    document.body.innerHTML = `<p>Small tools often outlive their makers.</p>`;
+    const text = document.querySelector("p")!.firstChild!;
+    const mount = vi.fn(() => ({
+      setState: () => {},
+      play: () => {},
+      destroy: () => {},
+    }));
+    const effect = {
+      id: "fake",
+      label: "假",
+      summary: "",
+      reserve: { above: 0, below: 0 },
+      mount,
+    } as unknown as ClaimEffect;
+    const controller = createGlossController(document, {
+      resolveEffect: () => effect,
+      getTheme,
+    });
+    controller.start();
+    controller.setParagraph("p_1", [text], [
+      { surface: "outlive", meaning: "比……存在得更久" },
+    ]);
+    stubRangeRect();
+    stubCaret(text, 20);
+    document.dispatchEvent(
+      new MouseEvent("pointermove", { clientX: 30, clientY: 28, bubbles: true }),
+    );
+    vi.advanceTimersByTime(150);
+    return {
+      card: document.querySelector("[role=tooltip]") as HTMLElement,
+      mount,
+    };
+  }
+
+  it("uses an explicit dark preference even on light paper", () => {
+    const { card, mount } = showThemed(() => "dark", "rgb(255, 255, 255)");
+    expect(card.dataset.theme).toBe("dark");
+    expect(mount.mock.calls[0][0]).toMatchObject({ theme: "dark" });
+  });
+
+  it("detects a dark page under the system preference", () => {
+    const { card, mount } = showThemed(() => "system", "rgb(17, 19, 24)");
+    expect(card.dataset.theme).toBe("dark");
+    expect(mount.mock.calls[0][0]).toMatchObject({ theme: "dark" });
+  });
+
+  it("keeps the light card on a light page", () => {
+    const { card, mount } = showThemed(() => "system", "rgb(250, 250, 250)");
+    expect(card.dataset.theme).toBe("light");
+    expect(mount.mock.calls[0][0]).toMatchObject({ theme: "light" });
   });
 });

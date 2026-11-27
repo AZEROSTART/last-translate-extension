@@ -5,6 +5,7 @@
  */
 
 import { getSettings, saveSettings } from "../shared/storage";
+import { applyDocumentTheme } from "../shared/theme";
 import type { Settings } from "../shared/types";
 import { el } from "./components";
 import { mountProviderManager, type ProviderManagerHandle } from "./provider-manager";
@@ -122,6 +123,7 @@ function mount(
     const next: Settings = { ...settings, ...patch };
     await saveSettings(next);
     settings = await getSettings();
+    applyDocumentTheme(document, settings.theme);
     for (const handle of handles) handle.update(settings);
     updateSummaries();
   }

@@ -8,6 +8,11 @@ import type { Settings } from "../shared/types";
 import { getLearning } from "../shared/learning-storage";
 import { dueCount } from "../shared/srs";
 import { createSettingsView, type SettingsViewHandle } from "../settings/settings-view";
+import {
+  applyDocumentTheme,
+  normalizeThemePreference,
+  watchSystemTheme,
+} from "../shared/theme";
 import themeCss from "../styles/theme.css?inline";
 import popupCss from "../styles/popup.css?inline";
 import settingsCss from "../styles/settings.css?inline";
@@ -78,9 +83,27 @@ async function start(): Promise<void> {
     mode,
     currentHost: extractHttpHost(activeTab?.url),
   });
+  applyDocumentTheme(document, view?.settings?.theme ?? "system");
+  listenForThemeChanges();
+  watchSystemTheme(window, () => {
+    applyDocumentTheme(document, view?.settings?.theme ?? "system");
+  });
   void refreshReviewEntry();
   void noteHostHealth(activeTab);
   resolveReady();
+}
+
+/** Settings save in any context updates this popup's paper immediately. */
+function listenForThemeChanges(): void {
+  try {
+    chrome.storage?.onChanged?.addListener((changes, areaName) => {
+      if (areaName !== "local" || !changes.settings) return;
+      const stored = changes.settings.newValue as { theme?: unknown } | undefined;
+      applyDocumentTheme(document, normalizeThemePreference(stored?.theme));
+    });
+  } catch {
+    // Older hosts without storage events keep the theme applied at startup.
+  }
 }
 
 async function queryActiveTab(): Promise<{ id?: number; url?: string } | undefined> {

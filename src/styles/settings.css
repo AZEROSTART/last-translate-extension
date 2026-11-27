@@ -835,3 +835,39 @@ details[data-section="maintenance"] .settings-summary-title::before {
   font-size: 12px;
   text-align: center;
 }
+
+/* --- dark paper --- */
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .settings-section {
+  border-color: var(--ilmt-border-soft);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 44%),
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.035) 1px, transparent 0);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .settings-model-summary {
+  border-color: var(--ilmt-border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .provider-card,
+:root[data-theme="quantum"][data-theme-mode="dark"] .provider-form {
+  border-color: var(--ilmt-border-soft);
+  background: var(--ilmt-panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .field-group {
+  border-color: var(--ilmt-border-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .effect-settings .effect-preview {
+  border-color: var(--ilmt-border);
+  background: var(--ilmt-panel-2);
+}
+
+:root[data-theme="quantum"][data-theme-mode="dark"] .settings-read-error {
+  border-color: rgba(242, 116, 105, 0.3);
+  background: #2a1b1a;
+}
