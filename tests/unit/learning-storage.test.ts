@@ -10,8 +10,12 @@ import {
   localDay,
   mergeLearnedWord,
   parseLearningState,
+  primaryMeaning,
+  resetWord,
+  safeHttpUrl,
   saveLearning,
   undoReviewAnswer,
+  updateWordMeaning,
   wordId,
 } from "../../src/shared/learning-storage";
 import type { LearnWordMessage, LearningState, LearningWord } from "../../src/shared/types";
@@ -380,6 +384,155 @@ describe("storage", () => {
 
     await chrome.storage.local.set({ learning: { words: "broken" } });
     expect((await getLearning()).words).toEqual([]);
+  });
+});
+
+describe("primaryMeaning and URL helpers", () => {
+  it("prefers the requested language, then the word's own, then the first gloss", () => {
+    const entry = makeWord(1, {
+      glossLang: "ja",
+      glosses: [
+        { lang: "zh", meaning: "中文义", source: "translation", at: NOW },
+        { lang: "ja", meaning: "日语义", source: "translation", at: NOW },
+      ],
+    });
+    expect(primaryMeaning(entry, "zh")).toBe("中文义");
+    expect(primaryMeaning(entry, "fr")).toBe("日语义");
+    expect(primaryMeaning({ ...entry, glossLang: "de" })).toBe("中文义");
+    expect(primaryMeaning({ ...entry, glosses: [] })).toBe("");
+  });
+
+  it("accepts only absolute http(s) URLs", () => {
+    expect(safeHttpUrl(" https://example.test/a ")).toBe("https://example.test/a");
+    expect(safeHttpUrl("javascript:alert(1)")).toBeNull();
+    expect(safeHttpUrl("/relative")).toBeNull();
+  });
+});
+
+describe("updateWordMeaning", () => {
+  it("trims the edit and updates the preferred gloss in place", () => {
+    const state: LearningState = { ...emptyLearningState(), words: [makeWord(1, {
+      glosses: [
+        { lang: "zh", meaning: "旧义", source: "translation", at: NOW },
+        { lang: "es", meaning: "sobrevivir", source: "translation", at: NOW },
+      ],
+    })] };
+    const result = updateWordMeaning(
+      state,
+      { id: "en:word1", meaning: "  新义  ", glossLang: "zh" },
+      NOW + 50,
+    );
+
+    expect(result.word?.glosses).toEqual([
+      { lang: "zh", meaning: "新义", source: "translation", at: NOW },
+      { lang: "es", meaning: "sobrevivir", source: "translation", at: NOW },
+    ]);
+    expect(result.word?.updatedAt).toBe(NOW + 50);
+    expect(result.state.updatedAt).toBe(NOW + 50);
+    expect(result.state.words[0]).toBe(result.word);
+  });
+
+  it("prepends a missing preferred language as a lookup gloss", () => {
+    const state = { ...emptyLearningState(), words: [makeWord(1)] };
+    const result = updateWordMeaning(
+      state,
+      { id: "en:word1", meaning: "sobrevivir", glossLang: "es" },
+      NOW + 2,
+    );
+    expect(result.word?.glosses[0]).toEqual({
+      lang: "es",
+      meaning: "sobrevivir",
+      source: "lookup",
+      at: NOW + 2,
+    });
+    expect(result.word?.glosses[1].lang).toBe("zh");
+  });
+
+  it("falls back to the word's language, then the first gloss, then a new gloss", () => {
+    const own = updateWordMeaning(
+      { ...emptyLearningState(), words: [makeWord(1)] },
+      { id: "en:word1", meaning: "自己的语言" },
+      NOW + 3,
+    );
+    expect(own.word?.glosses[0]).toMatchObject({ lang: "zh", meaning: "自己的语言" });
+
+    const first = updateWordMeaning(
+      {
+        ...emptyLearningState(),
+        words: [makeWord(1, {
+          glossLang: "de",
+          glosses: [{ lang: "es", meaning: "西语", source: "translation", at: NOW }],
+        })],
+      },
+      { id: "en:word1", meaning: "第一个" },
+      NOW + 4,
+    );
+    expect(first.word?.glosses[0]).toMatchObject({ lang: "es", meaning: "第一个" });
+
+    const fresh = updateWordMeaning(
+      { ...emptyLearningState(), words: [makeWord(1, { glosses: [] })] },
+      { id: "en:word1", meaning: "新释义" },
+      NOW + 5,
+    );
+    expect(fresh.word?.glosses).toEqual([
+      { lang: "zh", meaning: "新释义", source: "lookup", at: NOW + 5 },
+    ]);
+  });
+
+  it("rejects an empty meaning or an unknown id without touching state", () => {
+    const state = { ...emptyLearningState(), words: [makeWord(1)] };
+    expect(updateWordMeaning(state, { id: "en:word1", meaning: "   " }, NOW)).toEqual({
+      state,
+      word: null,
+    });
+    expect(updateWordMeaning(state, { id: "en:missing", meaning: "x" }, NOW)).toEqual({
+      state,
+      word: null,
+    });
+  });
+});
+
+describe("resetWord", () => {
+  it("makes a graduated word due again and keeps everything the user invested", () => {
+    const reviews = [{ at: NOW, grade: "good" as const, box: 5 }];
+    const state: LearningState = {
+      ...emptyLearningState(),
+      words: [makeWord(1, {
+        status: "mastered",
+        box: 5,
+        dueAt: null,
+        mascotId: "cat-hoard",
+        mnemonic: { caption: "猫把它抱进怀里", lang: "zh", at: NOW },
+        reviews,
+        contexts: [{ sentence: "A sentence.", pageUrl: "https://x.test", at: NOW }],
+        createdAt: NOW - 100,
+      })],
+      updatedAt: NOW,
+    };
+
+    const result = resetWord(state, "en:word1", NOW + 500);
+    const word = result.word!;
+
+    expect(word).toMatchObject({
+      id: "en:word1",
+      status: "learning",
+      box: 0,
+      dueAt: NOW + 500,
+      updatedAt: NOW + 500,
+      mascotId: "cat-hoard",
+      createdAt: NOW - 100,
+    });
+    expect(word.glosses).toEqual(state.words[0].glosses);
+    expect(word.contexts).toEqual(state.words[0].contexts);
+    expect(word.mnemonic).toEqual(state.words[0].mnemonic);
+    expect(word.reviews).toEqual(reviews);
+    expect(result.state.updatedAt).toBe(NOW + 500);
+    expect(result.state.words[0]).toBe(word);
+  });
+
+  it("leaves an unknown id alone", () => {
+    const state = { ...emptyLearningState(), words: [makeWord(1)] };
+    expect(resetWord(state, "en:missing", NOW)).toEqual({ state, word: null });
   });
 });
 

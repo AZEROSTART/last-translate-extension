@@ -376,6 +376,28 @@ export interface DeleteWordResponse {
   ok: boolean;
 }
 
+/** Side panel → background: rewrite one meaning without touching scheduling. */
+export interface UpdateWordMessage {
+  type: "update-word";
+  id: string;
+  meaning: string;
+  glossLang?: string;
+}
+
+export type UpdateWordResponse =
+  | { ok: true; word: LearningWord }
+  | { ok: false };
+
+/** Side panel → background: make a graduated word due again, keeping its history. */
+export interface ResetWordMessage {
+  type: "reset-word";
+  id: string;
+}
+
+export type ResetWordResponse =
+  | { ok: true; word: LearningWord }
+  | { ok: false };
+
 /** Side panel → background: record one self-assessment. */
 export interface ReviewAnswerMessage {
   type: "review-answer";

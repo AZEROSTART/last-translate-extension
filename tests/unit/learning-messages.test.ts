@@ -218,4 +218,57 @@ describe("inline claim undo", () => {
     expect(await handleLearningMessage({ type: "delete-word", id: "" })).toEqual({ ok: false });
     expect((await getLearning()).words).toHaveLength(1);
   });
+
+  it("updates one meaning without changing the schedule", async () => {
+    await handleLearningMessage(learn);
+    const before = (await getLearning()).words[0];
+
+    const response = (await handleLearningMessage({
+      type: "update-word",
+      id: "en:outlive",
+      meaning: "比……活得久",
+      glossLang: "zh",
+    })) as { ok: true; word: { glosses: Array<{ meaning: string }>; box: number; dueAt: number } };
+
+    expect(response.ok).toBe(true);
+    expect(response.word.glosses[0].meaning).toBe("比……活得久");
+    expect(response.word.box).toBe(before.box);
+    expect(response.word.dueAt).toBe(before.dueAt);
+    expect((await getLearning()).words[0].glosses[0].meaning).toBe("比……活得久");
+  });
+
+  it("rejects an empty or unknown update without writing", async () => {
+    await handleLearningMessage(learn);
+    expect(
+      await handleLearningMessage({ type: "update-word", id: "en:outlive", meaning: "   " }),
+    ).toEqual({ ok: false });
+    expect(
+      await handleLearningMessage({ type: "update-word", id: "en:missing", meaning: "x" }),
+    ).toEqual({ ok: false });
+    expect(
+      await handleLearningMessage({ type: "update-word", id: "", meaning: "x" }),
+    ).toEqual({ ok: false });
+  });
+
+  it("resets a word to learning and makes it due immediately", async () => {
+    await handleLearningMessage(learn);
+    await handleLearningMessage({ type: "review-answer", id: "en:outlive", grade: "good" });
+    expect((await getLearning()).words[0].box).toBe(1);
+
+    const response = (await handleLearningMessage({
+      type: "reset-word",
+      id: "en:outlive",
+    })) as { ok: true; word: { status: string; box: number; dueAt: number } };
+
+    expect(response.ok).toBe(true);
+    expect(response.word).toMatchObject({ status: "learning", box: 0 });
+    expect(response.word.dueAt).toBeGreaterThan(0);
+    expect((await getLearning()).words[0]).toMatchObject({ status: "learning", box: 0 });
+  });
+
+  it("treats update-word and reset-word as learning messages", async () => {
+    expect(isLearningMessageType("update-word")).toBe(true);
+    expect(isLearningMessageType("reset-word")).toBe(true);
+    expect(await handleLearningMessage({ type: "reset-word", id: "" })).toEqual({ ok: false });
+  });
 });

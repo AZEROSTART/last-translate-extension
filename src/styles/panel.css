@@ -1035,6 +1035,263 @@ button:focus-visible {
   color: var(--ilmt-accent);
 }
 
+/* The library is one quiet place; every control is a line, not a block. */
+.ilmt-review-library-toggle {
+  align-self: flex-start;
+  appearance: none;
+  min-height: 32px;
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--ilmt-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-review-library-toggle:hover {
+  color: var(--ilmt-text);
+}
+
+.ilmt-library {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.ilmt-library-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ilmt-library-filters,
+.ilmt-library-exports {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.ilmt-library-filter,
+.ilmt-library-export {
+  appearance: none;
+  min-height: 32px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 999px;
+  padding: 0 9px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ilmt-library-filter[aria-pressed="true"] {
+  border-color: var(--ilmt-accent);
+  color: var(--ilmt-accent);
+}
+
+.ilmt-library-export {
+  border-radius: 8px;
+}
+
+.ilmt-library-search {
+  flex: 1;
+  min-width: 130px;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ilmt-library-search::placeholder {
+  color: var(--ilmt-muted);
+}
+
+.ilmt-library-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ilmt-library-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: var(--ilmt-radius);
+  background: var(--ilmt-glass);
+}
+
+.ilmt-library-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ilmt-library-word {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ilmt-text);
+}
+
+.ilmt-library-pos {
+  color: var(--ilmt-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.ilmt-library-status {
+  margin-left: auto;
+  color: var(--ilmt-muted);
+  font-size: 11px;
+}
+
+.ilmt-library-meaning {
+  margin: 0;
+  color: var(--ilmt-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ilmt-library-meaning.is-placeholder {
+  color: var(--ilmt-muted);
+}
+
+.ilmt-library-edit-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ilmt-library-edit-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--ilmt-border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ilmt-library-save,
+.ilmt-library-cancel {
+  appearance: none;
+  min-height: 34px;
+  border: 1px solid var(--ilmt-border-soft);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--ilmt-input);
+  color: var(--ilmt-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ilmt-library-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ilmt-library-source {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.ilmt-library-source-link,
+.ilmt-library-source-label {
+  display: block;
+  overflow: hidden;
+  color: var(--ilmt-muted);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ilmt-library-source-link:hover {
+  color: var(--ilmt-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-library-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ilmt-library-edit,
+.ilmt-library-reset,
+.ilmt-library-delete,
+.ilmt-library-confirm-delete,
+.ilmt-library-cancel-delete {
+  appearance: none;
+  min-height: 30px;
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--ilmt-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ilmt-library-edit:hover,
+.ilmt-library-reset:hover,
+.ilmt-library-delete:hover,
+.ilmt-library-confirm-delete:hover,
+.ilmt-library-cancel-delete:hover {
+  color: var(--ilmt-text);
+}
+
+.ilmt-library-edit:disabled,
+.ilmt-library-reset:disabled,
+.ilmt-library-delete:disabled,
+.ilmt-library-confirm-delete:disabled,
+.ilmt-library-cancel-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ilmt-library-confirm-delete {
+  color: var(--ilmt-text);
+}
+
+.ilmt-library-error {
+  margin: 0;
+  color: var(--ilmt-muted);
+  font-size: 12px;
+}
+
+.ilmt-library-empty {
+  margin: 0;
+  padding: 24px 12px;
+  color: var(--ilmt-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 @keyframes ilmt-scene-pulse {
   0%,
   100% {

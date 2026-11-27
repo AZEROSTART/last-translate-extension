@@ -596,4 +596,62 @@ test.describe("learning loop", () => {
       await cleanup();
     }
   });
+
+  test("manages the vocabulary library inline: edit, reset and delete", async () => {
+    try {
+      const { extension: ext, page } = await openClaimCard();
+      await claim(page.locator("[role=tooltip]"));
+
+      // One graduated word is enough to exercise every library action.
+      await ext.worker.evaluate(async () => {
+        const stored = (await chrome.storage.local.get("learning")).learning as {
+          words: Array<Record<string, unknown>>;
+        };
+        Object.assign(stored.words[0], { status: "mastered", box: 5, dueAt: null });
+        await chrome.storage.local.set({ learning: stored });
+      });
+
+      const panel = await ext.context.newPage();
+      await panel.goto(`chrome-extension://${new URL(ext.worker.url()).host}/panel.html`);
+      await panel.locator('.panel-tab[data-view="review"]').click();
+
+      await expect(panel.locator(".ilmt-review-library-toggle")).toHaveText("管理词库");
+      await panel.locator(".ilmt-review-library-toggle").click();
+      const row = panel.locator(".ilmt-library-item").first();
+      await expect(row.locator(".ilmt-library-word")).toHaveText("outlive");
+      await expect(row.locator(".ilmt-library-status")).toHaveText("已毕业");
+
+      await row.locator(".ilmt-library-edit").click();
+      const input = row.locator(".ilmt-library-edit-input");
+      await input.fill("新的释义");
+      await row.locator(".ilmt-library-save").click();
+      await expect
+        .poll(async () => (await readWords(ext.worker))[0]?.glosses[0]?.meaning)
+        .toBe("新的释义");
+      await expect(row.locator(".ilmt-library-meaning")).toHaveText("新的释义");
+
+      await row.locator(".ilmt-library-reset").click();
+      await expect
+        .poll(() =>
+          ext.worker.evaluate(async () => {
+            const stored = (await chrome.storage.local.get("learning")).learning as {
+              words: Array<{ status: string; box: number; dueAt: number | null }>;
+            };
+            return stored.words[0];
+          }),
+        )
+        .toMatchObject({ status: "learning", box: 0 });
+      await expect(row.locator(".ilmt-library-reset")).toHaveCount(0);
+
+      await row.locator(".ilmt-library-delete").click();
+      await expect(panel.locator(".ilmt-library-confirm-delete")).toHaveCount(1);
+      await panel.locator(".ilmt-library-confirm-delete").click();
+
+      await expect.poll(async () => (await readWords(ext.worker)).length).toBe(0);
+      await expect(panel.locator(".ilmt-review-done-title")).toHaveText("还没有收录的词");
+      await expect(panel.locator(".ilmt-library")).toHaveCount(0);
+    } finally {
+      await cleanup();
+    }
+  });
 });

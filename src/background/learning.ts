@@ -3,7 +3,9 @@ import {
   deleteWord,
   getLearning,
   mergeLearnedWord,
+  resetWord,
   undoReviewAnswer,
+  updateWordMeaning,
 } from "../shared/learning-storage";
 import { formatDueLabel } from "../shared/srs";
 import type {
@@ -12,10 +14,14 @@ import type {
   LearnWordMessage,
   LearnWordResponse,
   MnemonicMessage,
+  ResetWordMessage,
+  ResetWordResponse,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
   ReviewUndoMessage,
   ReviewUndoResponse,
+  UpdateWordMessage,
+  UpdateWordResponse,
 } from "../shared/types";
 import { createMnemonicDeps, generateMnemonic } from "./mnemonic";
 import type { RequestQueue } from "./queue";
@@ -30,6 +36,8 @@ export interface LearningDeps {
 const LEARNING_TYPES = new Set([
   "learn-word",
   "delete-word",
+  "update-word",
+  "reset-word",
   "review-answer",
   "review-undo",
   "get-learning",
@@ -83,6 +91,39 @@ export async function handleLearningMessage(
       if (!result.deleted) return { ok: false } satisfies DeleteWordResponse;
       void refreshBadge();
       return { ok: true } satisfies DeleteWordResponse;
+    }
+    case "update-word": {
+      const input = msg as UpdateWordMessage;
+      if (
+        typeof input.id !== "string" ||
+        input.id.length === 0 ||
+        typeof input.meaning !== "string" ||
+        (input.glossLang !== undefined && typeof input.glossLang !== "string")
+      ) {
+        return { ok: false } satisfies UpdateWordResponse;
+      }
+      const now = Date.now();
+      const updated = await runLearningUpdate((state) => {
+        const next = updateWordMeaning(state, input, now);
+        return { state: next.state, result: next.word };
+      });
+      if (!updated) return { ok: false } satisfies UpdateWordResponse;
+      void refreshBadge();
+      return { ok: true, word: updated } satisfies UpdateWordResponse;
+    }
+    case "reset-word": {
+      const input = msg as ResetWordMessage;
+      if (typeof input.id !== "string" || input.id.length === 0) {
+        return { ok: false } satisfies ResetWordResponse;
+      }
+      const now = Date.now();
+      const reset = await runLearningUpdate((state) => {
+        const next = resetWord(state, input.id, now);
+        return { state: next.state, result: next.word };
+      });
+      if (!reset) return { ok: false } satisfies ResetWordResponse;
+      void refreshBadge();
+      return { ok: true, word: reset } satisfies ResetWordResponse;
     }
     case "review-answer": {
       const input = msg as ReviewAnswerMessage;

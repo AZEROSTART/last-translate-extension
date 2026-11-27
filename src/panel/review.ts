@@ -7,26 +7,44 @@
  * its own container and keeps the conversation alive while review is open.
  */
 
-import { daysSinceDay, getLearning, localDay, normalizeSurface } from "../shared/learning-storage";
+import {
+  daysSinceDay,
+  getLearning,
+  localDay,
+  normalizeSurface,
+  primaryMeaning,
+  safeHttpUrl,
+  urlHostname,
+} from "../shared/learning-storage";
 import { dueCount, formatDueLabel, isDue } from "../shared/srs";
 import type {
+  DeleteWordMessage,
+  DeleteWordResponse,
   LearningGrade,
   LearningState,
   LearningWord,
   MnemonicResponse,
+  ResetWordMessage,
+  ResetWordResponse,
   ReviewAnswerMessage,
   ReviewAnswerResponse,
   ReviewUndoFailure,
   ReviewUndoMessage,
   ReviewUndoResponse,
+  UpdateWordMessage,
+  UpdateWordResponse,
   WordContext,
 } from "../shared/types";
+import { exportFilename, exportLearningCsv, exportLearningJson } from "../shared/learning-export";
+import { createLibraryView, type LibraryController } from "./library";
 import { getEffect, getEffects } from "../content/effects";
 import type { ClaimEffect, ClaimHandle } from "../content/effects/types";
 import "../content/effects/gopher-hole";
 import "../content/effects/magnet";
 import "../content/effects/cat-hoard";
 import "../content/effects/cat-sticker";
+
+export { safeHttpUrl };
 
 const ALL = "all";
 
@@ -58,6 +76,12 @@ export interface ReviewDeps {
   effect(id?: string): ClaimEffect;
   /** Settings-level answer language; it wins over the word's own gloss. */
   defaultGlossLang(): string;
+  /** Library mutations; the panel keeps its own snapshot in step afterwards. */
+  updateWord(message: UpdateWordMessage): Promise<UpdateWordResponse>;
+  resetWord(message: ResetWordMessage): Promise<ResetWordResponse>;
+  deleteWord(message: DeleteWordMessage): Promise<DeleteWordResponse>;
+  /** Write the vocabulary to a local file; never touches the network. */
+  download(format: "csv" | "json"): void;
   now(): number;
 }
 
@@ -106,6 +130,44 @@ async function defaultUndo(message: ReviewUndoMessage): Promise<ReviewUndoRespon
   } catch {
     return { ok: false };
   }
+}
+
+async function defaultUpdateWord(message: UpdateWordMessage): Promise<UpdateWordResponse> {
+  try {
+    const response = await chrome.runtime.sendMessage(message);
+    return (response ?? { ok: false }) as UpdateWordResponse;
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function defaultResetWord(message: ResetWordMessage): Promise<ResetWordResponse> {
+  try {
+    const response = await chrome.runtime.sendMessage(message);
+    return (response ?? { ok: false }) as ResetWordResponse;
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function defaultDeleteWord(message: DeleteWordMessage): Promise<DeleteWordResponse> {
+  try {
+    const response = await chrome.runtime.sendMessage(message);
+    return (response ?? { ok: false }) as DeleteWordResponse;
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Local download through a transient object URL; no clipboard, no network. */
+function saveLocalFile(content: string, filename: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function defaultEffect(id?: string): ClaimEffect {
@@ -162,6 +224,8 @@ const TERMINAL_UNDO_REASONS: ReviewUndoFailure[] = [
 interface ReviewState {
   all: LearningState | null;
   queue: LearningWord[];
+  /** The library is a mode of the same view, never a second store. */
+  viewMode: "review" | "library";
   total: number;
   answered: number;
   /** Cards answered with 没想起来 this round; the only number worth reporting. */
@@ -187,36 +251,6 @@ async function defaultMnemonic(id: string): Promise<MnemonicResponse> {
     // The panel stays usable without a background; the scene is optional.
   }
   return { ok: false, reason: "failed" };
-}
-
-/** The preferred answer language, then the word's own, then the first gloss. */
-function primaryMeaning(word: LearningWord, preferred: string): string {
-  const primary =
-    (preferred ? word.glosses.find((gloss) => gloss.lang === preferred) : undefined) ??
-    word.glosses.find((gloss) => gloss.lang === word.glossLang) ??
-    word.glosses[0];
-  return primary?.meaning.trim() ?? "";
-}
-
-/** Keep a link only when it is a real web address; never run or open anything else. */
-export function safeHttpUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The page label that needs no path: just the host. */
-export function urlHostname(safeUrl: string): string {
-  try {
-    return new URL(safeUrl).hostname;
-  } catch {
-    return "";
-  }
 }
 
 /**
@@ -296,13 +330,29 @@ export function isInteractiveTarget(target: EventTarget | null): boolean {
 }
 
 export function mountReview(target: HTMLElement, over: ReviewOptions = {}): ReviewView {
+  const defaultGlossLang = over.defaultGlossLang ?? (() => "");
   const deps: ReviewDeps = {
     getState: over.getState ?? (() => getLearning()),
     answer: over.answer ?? defaultAnswer,
     undo: over.undo ?? defaultUndo,
     mnemonic: over.mnemonic ?? defaultMnemonic,
     effect: over.effect ?? defaultEffect,
-    defaultGlossLang: over.defaultGlossLang ?? (() => ""),
+    defaultGlossLang,
+    updateWord: over.updateWord ?? defaultUpdateWord,
+    resetWord: over.resetWord ?? defaultResetWord,
+    deleteWord: over.deleteWord ?? defaultDeleteWord,
+    download:
+      over.download ??
+      ((format) => {
+        const all = state.all;
+        if (!all) return;
+        const csv = format === "csv";
+        saveLocalFile(
+          csv ? exportLearningCsv(all.words, defaultGlossLang()) : exportLearningJson(all),
+          exportFilename(format, deps.now()),
+          csv ? "text/csv;charset=utf-8" : "application/json;charset=utf-8",
+        );
+      }),
     now: over.now ?? (() => Date.now()),
   };
 
@@ -312,6 +362,7 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   const state: ReviewState = {
     all: null,
     queue: [],
+    viewMode: "review",
     total: 0,
     answered: 0,
     missed: 0,
@@ -336,6 +387,8 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   const sceneRequests = new Set<string>();
   /** The word whose scene already performed, so re-renders do not replay it. */
   let playedFor: string | null = null;
+  /** Built on first entry and then kept: its toolbar owns the search focus. */
+  let libraryView: LibraryController | null = null;
 
   function current(): LearningWord | undefined {
     return state.queue[0];
@@ -345,38 +398,40 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
   /** Which source sentence the revealed answer is quoting; resets per card. */
   let activeContextIndex = 0;
 
-  /** The library itself, not the debt; never clickable. */
-  function renderShelf(): HTMLElement | null {
+  function shelfLabel(): string | null {
     const words = state.all?.words;
     if (!words || words.length === 0) return null;
     const mastered = words.filter((item) => item.status === "mastered").length;
-    return node(
-      "p",
-      "ilmt-review-shelf",
-      mastered > 0
-        ? `已收录 ${words.length} 个 · 已毕业 ${mastered} 个`
-        : `已收录 ${words.length} 个`,
-    );
+    return mastered > 0
+      ? `已收录 ${words.length} 个 · 已毕业 ${mastered} 个`
+      : `已收录 ${words.length} 个`;
+  }
+
+  /** The library itself, not the debt; never clickable. */
+  function renderShelf(): HTMLElement | null {
+    const label = shelfLabel();
+    return label === null ? null : node("p", "ilmt-review-shelf", label);
   }
 
   /**
    * Only when the absence is real (3+ days), the work is real (something is
    * due), and the date can be trusted. It states; it never asks for anything.
    */
-  function renderReturn(): HTMLElement | null {
+  function returnLabel(): string | null {
     const all = state.all;
     if (!all) return null;
     const now = deps.now();
     const gap = daysSinceDay(all.stats.day, now);
     if (gap === null || gap < 3) return null;
     if (dueCount(all.words, now) <= 0) return null;
-    return node(
-      "p",
-      "ilmt-review-return",
-      gap <= 13
-        ? `有 ${gap} 天没见了 · ${all.words.length} 个词都还在`
-        : `有一阵子没见了 · ${all.words.length} 个词都还在`,
-    );
+    return gap <= 13
+      ? `有 ${gap} 天没见了 · ${all.words.length} 个词都还在`
+      : `有一阵子没见了 · ${all.words.length} 个词都还在`;
+  }
+
+  function renderReturn(): HTMLElement | null {
+    const label = returnLabel();
+    return label === null ? null : node("p", "ilmt-review-return", label);
   }
 
   /** Fetch the caption once per word; success/failure both re-render. */
@@ -891,8 +946,158 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     return row;
   }
 
+  /** Keep the panel snapshot and the review queue in step after a library edit. */
+  function reconcileWord(updated: LearningWord): LearningState | null {
+    if (!state.all) return null;
+    const words = state.all.words.some((word) => word.id === updated.id)
+      ? state.all.words.map((word) => (word.id === updated.id ? updated : word))
+      : [...state.all.words, updated];
+    state.all = { ...state.all, words, updatedAt: updated.updatedAt };
+    state.queue = state.queue.map((word) => (word.id === updated.id ? updated : word));
+    state.graduated = state.graduated
+      .map((word) => (word.id === updated.id ? updated : word))
+      .filter((word) => word.status === "mastered");
+    if (state.viewMode === "library") render();
+    return state.all;
+  }
+
+  /** Drop a word from every in-memory list; an empty library returns to review. */
+  function reconcileDeleted(id: string): LearningState | null {
+    if (!state.all) return null;
+    const wasCurrent = current()?.id === id;
+    state.all = {
+      ...state.all,
+      words: state.all.words.filter((word) => word.id !== id),
+      updatedAt: deps.now(),
+    };
+    state.queue = state.queue.filter((word) => word.id !== id);
+    state.graduated = state.graduated.filter((word) => word.id !== id);
+    if (state.receipt?.id === id) state.receipt = null;
+    if (wasCurrent) {
+      pendingGrade = null;
+      draft = "";
+      activeContextIndex = 0;
+      state.phase = "prompt";
+    }
+    state.total = state.answered + state.queue.length;
+    if (state.all.words.length === 0) {
+      state.viewMode = "review";
+      state.ended = false;
+      state.answered = 0;
+      state.missed = 0;
+      state.receipt = null;
+      state.graduated = [];
+      render();
+    } else if (state.viewMode === "library") {
+      render();
+    }
+    return state.all;
+  }
+
+  function libraryOptions() {
+    return {
+      now: () => deps.now(),
+      preferredLang: () => deps.defaultGlossLang(),
+      updateWord: async (id: string, meaning: string) => {
+        const response = await deps.updateWord({ type: "update-word", id, meaning });
+        return response.ok === true ? reconcileWord(response.word) : null;
+      },
+      resetWord: async (id: string) => {
+        const response = await deps.resetWord({ type: "reset-word", id });
+        return response.ok === true ? reconcileWord(response.word) : null;
+      },
+      deleteWord: async (id: string) => {
+        const response = await deps.deleteWord({ type: "delete-word", id });
+        return response.ok === true ? reconcileDeleted(id) : null;
+      },
+      download: deps.download,
+    };
+  }
+
+  function ensureLibraryView(): LibraryController {
+    if (!libraryView) libraryView = createLibraryView(libraryOptions());
+    return libraryView;
+  }
+
+  /** The library keeps its toolbar mounted; only the shelf text changes in place. */
+  function renderLibrary(): void {
+    if (!state.all) return;
+    const label = shelfLabel();
+    let shelf = container.querySelector<HTMLElement>(".ilmt-review-shelf");
+    if (label !== null) {
+      if (!shelf) {
+        shelf = node("p", "ilmt-review-shelf", label);
+        container.insertBefore(shelf, container.firstElementChild);
+      } else {
+        shelf.textContent = label;
+      }
+    } else {
+      shelf?.remove();
+    }
+
+    const comebackLabel = returnLabel();
+    let comeback = container.querySelector<HTMLElement>(".ilmt-review-return");
+    if (comebackLabel !== null) {
+      if (!comeback) {
+        comeback = node("p", "ilmt-review-return", comebackLabel);
+        if (shelf) shelf.insertAdjacentElement("afterend", comeback);
+        else container.insertBefore(comeback, container.firstElementChild);
+      } else {
+        comeback.textContent = comebackLabel;
+      }
+    } else {
+      comeback?.remove();
+    }
+
+    let toggle = container.querySelector<HTMLButtonElement>(".ilmt-review-library-toggle");
+    if (state.all.words.length > 0) {
+      if (!toggle) {
+        toggle = node("button", "ilmt-review-library-toggle", "返回复习");
+        toggle.type = "button";
+        toggle.addEventListener("click", () => exitLibrary());
+        const after = comeback ?? shelf;
+        if (after) after.insertAdjacentElement("afterend", toggle);
+        else container.insertBefore(toggle, container.firstElementChild);
+      }
+      toggle.textContent = "返回复习";
+    } else {
+      toggle?.remove();
+    }
+
+    const view = ensureLibraryView();
+    if (view.element.parentElement !== container || container.lastElementChild !== view.element) {
+      container.appendChild(view.element);
+    }
+    view.sync(state.all);
+  }
+
+  function enterLibrary(): void {
+    if (!state.all || state.all.words.length === 0) return;
+    state.viewMode = "library";
+    state.error = null;
+    libraryView?.resetTransient();
+    container.replaceChildren();
+    renderLibrary();
+  }
+
+  function exitLibrary(): void {
+    if (state.viewMode !== "library") return;
+    state.viewMode = "review";
+    state.phase = "prompt";
+    state.ended = false;
+    state.error = null;
+    pendingGrade = null;
+    draft = "";
+    activeContextIndex = 0;
+    void refresh();
+  }
+
   function render(): void {
     if (destroyed) return;
+    if (state.viewMode === "library") {
+      renderLibrary();
+      return;
+    }
     sceneEffect?.destroy();
     sceneEffect = null;
     destroyGraduated();
@@ -901,6 +1106,12 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     if (shelf) container.appendChild(shelf);
     const comeback = renderReturn();
     if (comeback) container.appendChild(comeback);
+    if (state.all && state.all.words.length > 0) {
+      const toggle = node("button", "ilmt-review-library-toggle", "管理词库");
+      toggle.type = "button";
+      toggle.addEventListener("click", enterLibrary);
+      container.appendChild(toggle);
+    }
     // The lesson already carries its meaning; the receipt waits for the turn.
     if (state.receipt && state.phase !== "lesson") container.appendChild(renderReceipt());
     if (!current()) {
@@ -923,6 +1134,28 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
     // card is still advancing; replay it once the answer settles.
     if (state.busy) {
       pendingReload = true;
+      return;
+    }
+    if (state.viewMode === "library") {
+      // An open editor owns the row; applying a storage sync under it would
+      // throw away what the user is typing.
+      if (container.querySelector(".ilmt-library-edit-input:focus")) {
+        pendingReload = true;
+        return;
+      }
+      let next: LearningState;
+      try {
+        next = await deps.getState();
+      } catch {
+        return;
+      }
+      if (destroyed) return;
+      if (state.viewMode !== "library") {
+        pendingReload = true;
+        return;
+      }
+      state.all = next;
+      render();
       return;
     }
     // "结束" wins over any late reload until the user resumes the round.
@@ -1065,7 +1298,9 @@ export function mountReview(target: HTMLElement, over: ReviewOptions = {}): Revi
    * while the review is hidden behind the chat tab.
    */
   function onKeydown(event: KeyboardEvent): void {
-    if (destroyed || state.busy || event.defaultPrevented || event.repeat) return;
+    if (destroyed || state.viewMode === "library" || state.busy || event.defaultPrevented || event.repeat) {
+      return;
+    }
     if (!container.isConnected || Boolean(container.closest("[hidden]"))) return;
     if (event.isComposing || event.key === "Process") return;
     if (isEditableTarget(event.target)) return;

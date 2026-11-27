@@ -27,6 +27,117 @@ export function wordId(termLang: string, surface: string): string {
   return `${termLang}:${normalizeSurface(surface)}`;
 }
 
+/** The preferred answer language, then the word's own, then the first gloss. */
+export function primaryMeaning(word: LearningWord, preferred?: string): string {
+  const wanted = preferred?.trim() ?? "";
+  const primary =
+    (wanted ? word.glosses.find((gloss) => gloss.lang === wanted) : undefined) ??
+    word.glosses.find((gloss) => gloss.lang === word.glossLang) ??
+    word.glosses[0];
+  return primary?.meaning.trim() ?? "";
+}
+
+/** Keep a link only when it is a real web address; never run or open anything else. */
+export function safeHttpUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The page label that needs no path: just the host. */
+export function urlHostname(safeUrl: string): string {
+  try {
+    return new URL(safeUrl).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Rewrite one meaning without touching scheduling. `glossLang` targets a
+ * specific language; otherwise the card's own language wins, then the first
+ * gloss, and only an empty card grows a new gloss.
+ */
+export function updateWordMeaning(
+  state: LearningState,
+  input: { id: string; meaning: string; glossLang?: string },
+  now: number,
+): { state: LearningState; word: LearningWord | null } {
+  const meaning = input.meaning.trim();
+  if (!meaning) return { state, word: null };
+  const existing = state.words.find((word) => word.id === input.id);
+  if (!existing) return { state, word: null };
+
+  const preferred = input.glossLang?.trim() ?? "";
+  let glosses: WordGloss[];
+  if (preferred) {
+    glosses = existing.glosses.some((gloss) => gloss.lang === preferred)
+      ? existing.glosses.map((gloss) =>
+          gloss.lang === preferred ? { ...gloss, meaning } : gloss,
+        )
+      : [{ lang: preferred, meaning, source: "lookup", at: now }, ...existing.glosses];
+  } else {
+    const ownLang = existing.glossLang;
+    const ownGloss = existing.glosses.findIndex((gloss) => gloss.lang === ownLang);
+    if (ownGloss >= 0) {
+      glosses = existing.glosses.map((gloss, index) =>
+        index === ownGloss ? { ...gloss, meaning } : gloss,
+      );
+    } else if (existing.glosses.length > 0) {
+      glosses = existing.glosses.map((gloss, index) =>
+        index === 0 ? { ...gloss, meaning } : gloss,
+      );
+    } else {
+      glosses = [
+        { lang: ownLang || "zh-CN", meaning, source: "lookup", at: now },
+      ];
+    }
+  }
+
+  const word: LearningWord = { ...existing, glosses, updatedAt: now };
+  return {
+    state: {
+      ...state,
+      words: state.words.map((item) => (item.id === word.id ? word : item)),
+      updatedAt: now,
+    },
+    word,
+  };
+}
+
+/**
+ * Make a graduated (or scheduled) word due now again. Everything the user
+ * invested — meanings, contexts, mascot, mnemonic and review history — stays.
+ */
+export function resetWord(
+  state: LearningState,
+  id: string,
+  now: number,
+): { state: LearningState; word: LearningWord | null } {
+  const existing = state.words.find((word) => word.id === id);
+  if (!existing) return { state, word: null };
+  const word: LearningWord = {
+    ...existing,
+    status: "learning",
+    box: 0,
+    dueAt: now,
+    updatedAt: now,
+  };
+  return {
+    state: {
+      ...state,
+      words: state.words.map((item) => (item.id === word.id ? word : item)),
+      updatedAt: now,
+    },
+    word,
+  };
+}
+
 export function emptyLearningState(): LearningState {
   return {
     version: 1,
